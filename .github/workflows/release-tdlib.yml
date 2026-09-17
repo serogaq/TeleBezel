@@ -1,0 +1,56 @@
+name: Release backend-tdlib
+on:
+  push:
+    tags: ["*.*.*-tdlib"]
+permissions: {contents: read}
+concurrency: {group: release-tdlib, cancel-in-progress: false}
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs: {version: "${{ steps.release.outputs.version }}"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - id: release
+        env: {TAG: "${{ github.ref_name }}"}
+        run: echo "version=$(python3 .github/scripts/release.py backend-tdlib "$TAG")" >> "$GITHUB_OUTPUT"
+  preflight:
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, actions: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Require successful CI for the exact release commit
+        env: {GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}"}
+        run: |
+          sha=$(git rev-parse HEAD)
+          gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=100" |
+            jq -e --arg sha "$sha" '[.workflow_runs[] | select(.head_sha == $sha and .event == "push" and .head_branch == "main" and .conclusion == "success")] | length > 0'
+      - run: sudo apt-get update && sudo apt-get install -y acl
+      - run: make integration-test
+  image:
+    needs: [validate, preflight]
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    uses: ./.github/workflows/container-image.yml # zizmor: ignore[self-repository]
+    with:
+      component: backend-tdlib
+      image-name: "ghcr.io/${{ github.repository_owner }}/telebezel-backend-tdlib"
+      tag: "${{ needs.validate.outputs.version }}"
+      push: true
+  release:
+    needs: [validate, image]
+    runs-on: ubuntu-24.04
+    permissions: {contents: write}
+    steps:
+      - name: Publish immutable release record
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          GH_REPO: "${{ github.repository }}"
+          TAG: "${{ github.ref_name }}"
+          VERSION: "${{ needs.validate.outputs.version }}"
+          DIGEST: "${{ needs.image.outputs.digest }}"
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then echo 'Release already exists; refusing unsafe rerun' >&2; exit 1; fi
+          gh release create "$TAG" --verify-tag --title "backend-tdlib $VERSION" --notes "Container: ghcr.io/$GITHUB_REPOSITORY_OWNER/telebezel-backend-tdlib@$DIGEST"

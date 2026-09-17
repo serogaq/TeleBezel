@@ -1,0 +1,9 @@
+# Third-party notices
+
+- TDLib — Boost Software License 1.0.
+- Laravel, Laravel Octane, cpp-httplib, nlohmann/json, and @rebble/clay — MIT License.
+
+Other dependencies and container packages retain their respective upstream
+licenses. Their license inventory is in `docs/licenses/production-dependencies.tsv`
+and the generated image SBOMs. Original copyright notices and license terms
+remain applicable.

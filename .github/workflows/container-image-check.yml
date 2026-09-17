@@ -1,0 +1,51 @@
+name: Validate container image without publication
+on:
+  workflow_call:
+    inputs:
+      component: {required: true, type: string}
+      image-name: {required: true, type: string}
+      tag: {required: true, type: string}
+permissions: {contents: read}
+jobs:
+  native:
+    permissions: {contents: read}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, platform: linux/amd64, arch: amd64}
+          - {runner: ubuntu-24.04-arm, platform: linux/arm64, arch: arm64}
+    runs-on: "${{ matrix.runner }}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - id: version
+        env: {COMPONENT: "${{ inputs.component }}"}
+        run: |
+          [[ "$COMPONENT" == backend-api || "$COMPONENT" == backend-tdlib ]]
+          version=$(tr -d '\n' < "$COMPONENT/VERSION")
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: "./${{ inputs.component }}"
+          platforms: "${{ matrix.platform }}"
+          load: true
+          push: false
+          tags: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
+          build-args: "VERSION=${{ steps.version.outputs.value }}"
+          cache-from: "type=gha,scope=${{ inputs.component }}-${{ matrix.arch }}"
+      - name: Runtime and hardening smoke
+        env:
+          IMAGE: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
+          SCRIPT: ".github/scripts/image_smoke_${{ inputs.component }}.sh"
+        run: |
+          sudo apt-get update && sudo apt-get install -y acl
+          bash "${SCRIPT//-/_}" "$IMAGE"
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL

@@ -1,0 +1,133 @@
+name: telebezel
+
+services:
+  backend-api:
+    build:
+      context: ./backend-api
+      args: {VERSION: "${API_VERSION:-0.1.0}"}
+    image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-api:local"
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 512m
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8080}:8080"
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: "${APP_URL:-http://127.0.0.1:8080}"
+      APP_KEY_FILE: /run/secrets/laravel_app_key
+      LOG_CHANNEL: stderr
+      LOG_STDERR_STREAM: /app/storage/logs/stderr.fifo
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: "${POSTGRES_DB:-telebezel}"
+      DB_USERNAME: "${POSTGRES_USER:-telebezel}"
+      DB_PASSWORD_FILE: /run/secrets/postgres_password
+      PGCONNECT_TIMEOUT: "2"
+      PGOPTIONS: "-c statement_timeout=2000 -c lock_timeout=500"
+      CACHE_STORE: database
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: array
+      OCTANE_SERVER: frankenphp
+      TDLIB_BASE_URL: http://backend-tdlib:8081
+      TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token
+    secrets: [laravel_app_key, postgres_password, tdlib_internal_token]
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /config:size=16m,uid=10001,gid=10001,mode=0700
+      - /data:size=16m,uid=10001,gid=10001,mode=0700
+      - /app/storage:size=32m,uid=10001,gid=10001,mode=0750
+      - /app/bootstrap/cache:size=8m,uid=10001,gid=10001,mode=0750
+    networks: [api-ingress, api-db, api-tdlib]
+    depends_on:
+      postgres: {condition: service_healthy}
+      backend-tdlib: {condition: service_started}
+    healthcheck:
+      test: [CMD, php, -r, "exit(@file_get_contents('http://127.0.0.1:8080/healthz') === false ? 1 : 0);"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  backend-tdlib:
+    build:
+      context: ./backend-tdlib
+      args: {VERSION: "${TDLIB_SERVICE_VERSION:-0.1.0}"}
+    image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-tdlib:local"
+    restart: unless-stopped
+    read_only: true
+    user: "10002:10002"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 1g
+    environment:
+      TDLIB_LISTEN_ADDRESS: 0.0.0.0
+      TDLIB_LISTEN_PORT: "8081"
+      TDLIB_DATA_DIRECTORY: /var/lib/telebezel/tdlib
+      TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token
+      TDLIB_PROXY_MODE: "${TDLIB_PROXY_MODE:-direct}"
+      TDLIB_PROXY_HOST: "${TDLIB_PROXY_HOST:-}"
+      TDLIB_PROXY_PORT: "${TDLIB_PROXY_PORT:-}"
+    secrets: [tdlib_internal_token]
+    volumes:
+      - tdlib-data:/var/lib/telebezel/tdlib
+    tmpfs:
+      - /tmp:size=32m,uid=10002,gid=10002,mode=0700
+    networks: [api-tdlib, tdlib-egress]
+    healthcheck:
+      test: [CMD, /usr/local/bin/telebezel-tdlib, --healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    restart: unless-stopped
+    read_only: true
+    shm_size: 128mb
+    pids_limit: 256
+    mem_limit: 512m
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-telebezel}"
+      POSTGRES_USER: "${POSTGRES_USER:-telebezel}"
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /var/run/postgresql:size=8m,uid=999,gid=999,mode=0770
+    networks: [api-db]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+networks:
+  api-ingress: {}
+  api-db:
+    internal: true
+  api-tdlib:
+    internal: true
+  tdlib-egress: {}
+
+volumes:
+  postgres-data: {}
+  tdlib-data: {}
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  laravel_app_key:
+    file: ./secrets/laravel_app_key
+  tdlib_internal_token:
+    file: ./secrets/tdlib_internal_token

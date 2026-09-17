@@ -1,0 +1,108 @@
+name: Scheduled security
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with: {node-version: "${{ steps.toolchain.outputs.node-version }}", cache: npm, cache-dependency-path: app/package-lock.json}
+      - uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with: {php-version: "${{ steps.toolchain.outputs.php-version }}", extensions: pdo_pgsql, tools: "composer:${{ steps.toolchain.outputs.composer-version }}", coverage: none}
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with: {version: "${{ steps.toolchain.outputs.uv-version }}", enable-cache: true}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - run: python3 .github/scripts/check_toolchain_drift.py && make workflow-audit
+      - working-directory: app
+        run: npm ci && npm audit
+      - working-directory: backend-api
+        run: composer install --no-interaction && composer audit
+      - name: Report upstream source and base-image drift
+        run: python3 .github/scripts/report_upstream_drift.py
+  app:
+    uses: ./.github/workflows/app-build.yml # zizmor: ignore[self-repository]
+    with: {artifact-name: "scheduled-app-${{ github.run_id }}"}
+  api-image:
+    permissions: {contents: read}
+    uses: ./.github/workflows/container-image-check.yml # zizmor: ignore[self-repository]
+    with: {component: backend-api, image-name: telebezel-backend-api-scheduled, tag: scan}
+  tdlib-image:
+    permissions: {contents: read}
+    uses: ./.github/workflows/container-image-check.yml # zizmor: ignore[self-repository]
+    with: {component: backend-tdlib, image-name: telebezel-backend-tdlib-scheduled, tag: scan}
+  api-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with: {php-version: "${{ steps.toolchain.outputs.php-version }}", extensions: pdo_pgsql, pcntl, tools: "composer:${{ steps.toolchain.outputs.composer-version }}", coverage: none}
+      - run: make api-check
+  tdlib-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with: {version: "${{ steps.toolchain.outputs.uv-version }}", enable-cache: true}
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-tidy gperf libssl-dev ninja-build php-cli zlib1g-dev
+      - run: |
+          make tdlib-check
+          cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
+          clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/main.cpp
+          cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DTELEBEZEL_SANITIZERS=ON
+          cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir backend-tdlib/sanitizer-build --output-on-failure
+  release-tags:
+    runs-on: ubuntu-24.04
+    outputs: {matrix: "${{ steps.collect.outputs.matrix }}"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: collect
+        env: {GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}"}
+        run: |
+          matrix=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name' | python3 .github/scripts/release_scan_matrix.py)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+  release-digest-scan:
+    needs: release-tags
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, packages: read}
+    strategy:
+      matrix: {include: "${{ fromJSON(needs.release-tags.outputs.matrix) }}"}
+    steps:
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - id: digest
+        env: {IMAGE: "ghcr.io/${{ github.repository_owner }}/telebezel-${{ matrix.component }}", VERSION: "${{ matrix.version }}"}
+        run: |
+          if digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{.Manifest.Digest}}' 2>/dev/null); then
+            echo "ref=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "No published digest for $IMAGE:$VERSION" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$VERSION" != latest ]]; then exit 1; fi
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.digest.outputs.exists == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: "${{ steps.digest.outputs.ref }}"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL

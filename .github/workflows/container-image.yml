@@ -1,0 +1,215 @@
+name: Build and verify container image
+on:
+  workflow_call:
+    inputs:
+      component: {required: true, type: string}
+      image-name: {required: true, type: string}
+      tag: {required: true, type: string}
+      push: {required: true, type: boolean}
+    outputs:
+      digest:
+        description: Published multi-architecture manifest digest
+        value: "${{ jobs.promote.outputs.digest }}"
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+jobs:
+  architecture:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, platform: linux/amd64, arch: amd64}
+          - {runner: ubuntu-24.04-arm, platform: linux/arm64, arch: arm64}
+    runs-on: "${{ matrix.runner }}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - if: inputs.push
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Build local native image
+        if: ${{ ! inputs.push }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: "./${{ inputs.component }}"
+          platforms: "${{ matrix.platform }}"
+          load: true
+          push: false
+          tags: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
+          build-args: "VERSION=${{ inputs.tag }}"
+          cache-from: "type=gha,scope=${{ inputs.component }}-${{ matrix.arch }}"
+          cache-to: "type=gha,mode=max,scope=${{ inputs.component }}-${{ matrix.arch }}"
+      - name: Publish native image by digest
+        id: push
+        if: inputs.push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: "./${{ inputs.component }}"
+          platforms: "${{ matrix.platform }}"
+          outputs: "type=image,name=${{ inputs.image-name }},push-by-digest=true,name-canonical=true,push=true"
+          build-args: "VERSION=${{ inputs.tag }}"
+          provenance: mode=max
+          sbom: true
+          cache-from: "type=gha,scope=${{ inputs.component }}-${{ matrix.arch }}"
+          cache-to: "type=gha,mode=max,scope=${{ inputs.component }}-${{ matrix.arch }}"
+      - name: Load the exact published digest for verification
+        if: inputs.push
+        env:
+          IMAGE: "${{ inputs.image-name }}"
+          DIGEST: "${{ steps.push.outputs.digest }}"
+          LOCAL_TAG: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
+        run: |
+          docker pull "$IMAGE@$DIGEST"
+          docker tag "$IMAGE@$DIGEST" "$LOCAL_TAG"
+      - name: Runtime and hardening smoke
+        env:
+          IMAGE: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
+          SCRIPT: ".github/scripts/image_smoke_${{ inputs.component }}.sh"
+        run: |
+          sudo apt-get update && sudo apt-get install -y acl
+          bash "${SCRIPT//-/_}" "$IMAGE"
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Export immutable digest
+        if: inputs.push
+        env: {DIGEST: "${{ steps.push.outputs.digest }}"}
+        run: mkdir -p /tmp/digests && touch "/tmp/digests/${DIGEST#sha256:}"
+      - if: inputs.push
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: "digests-${{ inputs.component }}-${{ matrix.arch }}"
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    if: inputs.push
+    needs: architecture
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: "${{ steps.candidate.outputs.value }}"
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "digests-${{ inputs.component }}-*"
+          path: /tmp/digests
+          merge-multiple: true
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - name: Create candidate manifest without touching version or latest
+        env: {IMAGE: "${{ inputs.image-name }}", CANDIDATE: "candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.component }}"}
+        run: |
+          refs=()
+          for digest in /tmp/digests/*; do refs+=("$IMAGE@sha256:${digest##*/}"); done
+          test "${#refs[@]}" -eq 2
+          docker buildx imagetools create -t "$IMAGE:$CANDIDATE" "${refs[@]}"
+      - id: candidate
+        env: {IMAGE: "${{ inputs.image-name }}", CANDIDATE: "candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.component }}"}
+        run: |
+          digest=$(docker buildx imagetools inspect "$IMAGE:$CANDIDATE" --format '{{.Manifest.Digest}}')
+          docker buildx imagetools inspect "$IMAGE@$digest" --raw |
+            jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]'
+          echo "value=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: "${{ inputs.image-name }}"
+          subject-digest: "${{ steps.candidate.outputs.value }}"
+          push-to-registry: true
+      - name: Verify candidate attestation by immutable digest
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          IMAGE: "${{ inputs.image-name }}"
+          DIGEST: "${{ steps.candidate.outputs.value }}"
+        run: gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY"
+
+  manifest-smoke:
+    needs: manifest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, platform: linux/amd64, arch: amd64}
+          - {runner: ubuntu-24.04-arm, platform: linux/arm64, arch: arm64}
+    runs-on: "${{ matrix.runner }}"
+    permissions: {contents: read, packages: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Pull and smoke final index by candidate digest
+        env:
+          IMAGE: "${{ inputs.image-name }}"
+          DIGEST: "${{ needs.manifest.outputs.digest }}"
+          PLATFORM: "${{ matrix.platform }}"
+          ARCH: "${{ matrix.arch }}"
+          VERSION: "${{ inputs.tag }}"
+          SCRIPT: ".github/scripts/image_smoke_${{ inputs.component }}.sh"
+        run: |
+          sudo apt-get update && sudo apt-get install -y acl
+          docker pull --platform "$PLATFORM" "$IMAGE@$DIGEST"
+          test "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE@$DIGEST")" = "$VERSION"
+          docker tag "$IMAGE@$DIGEST" "$IMAGE:manifest-smoke-$ARCH"
+          bash "${SCRIPT//-/_}" "$IMAGE:manifest-smoke-$ARCH"
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: "${{ inputs.image-name }}@${{ needs.manifest.outputs.digest }}"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+  promote:
+    needs: [manifest, manifest-smoke]
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, packages: write}
+    outputs: {digest: "${{ steps.tags.outputs.value }}"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - id: tags
+        env:
+          IMAGE: "${{ inputs.image-name }}"
+          VERSION: "${{ inputs.tag }}"
+          DIGEST: "${{ needs.manifest.outputs.digest }}"
+          COMPONENT: "${{ inputs.component }}"
+          GH_TOKEN: "${{ github.token }}"
+          GH_REPO: "${{ github.repository }}"
+        run: |
+          git fetch --tags origin
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          suffix=api; [[ "$COMPONENT" == backend-tdlib ]] && suffix=tdlib
+          test "$(python3 .github/scripts/release.py "$COMPONENT" "$VERSION-$suffix")" = "$VERSION"
+          if gh release view "$VERSION-$suffix" >/dev/null 2>&1; then echo 'Release already exists; refusing tag rerun' >&2; exit 1; fi
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then echo 'Version image tag already exists; manual reconciliation required' >&2; exit 1; fi
+          if docker pull --platform linux/amd64 "$IMAGE:latest" >/dev/null 2>&1; then
+            latest_version=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE:latest")
+            python3 - "$VERSION" "$latest_version" <<'PY'
+          import re, sys
+          pattern = r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
+          if not re.fullmatch(pattern, sys.argv[2]) or tuple(map(int, sys.argv[1].split('.'))) <= tuple(map(int, sys.argv[2].split('.'))):
+              raise SystemExit('latest registry version is not lower than this candidate')
+          PY
+          fi
+          # A version tag is written only after candidate attestation and both
+          # native final-manifest smokes. If latest fails, the verified version
+          # remains and operators reconcile latest explicitly; never roll back
+          # by rebuilding or overwrite an existing version tag on rerun.
+          docker buildx imagetools create -t "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{.Manifest.Digest}}')" = "$DIGEST"
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE@$DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')" = "$DIGEST"
+          echo "value=$DIGEST" >> "$GITHUB_OUTPUT"

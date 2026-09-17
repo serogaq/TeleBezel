@@ -1,0 +1,15 @@
+.env
+.env.*
+.git
+*.sqlite
+*.sqlite3
+*.db
+telebezel_test*
+database/*.sqlite*
+bootstrap/cache/*.php
+storage/framework/cache/**
+storage/framework/sessions/**
+storage/framework/views/**
+storage/logs/*
+vendor
+tests

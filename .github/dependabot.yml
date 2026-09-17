@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+  - package-ecosystem: npm
+    directory: /app
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+  - package-ecosystem: composer
+    directory: /backend-api
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+  - package-ecosystem: docker
+    directory: /backend-api
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+  - package-ecosystem: docker
+    directory: /backend-tdlib
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}

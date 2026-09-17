@@ -1,0 +1,49 @@
+name: Build Pebble app
+on:
+  workflow_call:
+    inputs:
+      artifact-name: {required: true, type: string}
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "${{ steps.toolchain.outputs.node-version }}"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: {python-version: "${{ steps.toolchain.outputs.python-version }}"}
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with: {version: "${{ steps.toolchain.outputs.uv-version }}", enable-cache: true}
+      - name: Install the pinned Pebble SDK
+        env:
+          TOOL: "${{ steps.toolchain.outputs.pebble-tool-version }}"
+          SDK: "${{ steps.toolchain.outputs.pebble-sdk-version }}"
+          PYTHON: "${{ steps.toolchain.outputs.python-version }}"
+        run: |
+          uv tool install --python "$PYTHON" "pebble-tool==$TOOL"
+          pebble sdk install "$SDK"
+      - name: Test, build, and validate
+        run: |
+          cd app
+          npm ci
+          npm test
+          pebble build
+          cd ..
+          python3 .github/scripts/validate_pbw.py app/build/app.pbw
+          (cd app/build && sha256sum app.pbw > app.pbw.sha256)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: "${{ inputs.artifact-name }}"
+          path: |
+            app/build/app.pbw
+            app/build/app.pbw.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,2 @@
+'use strict';
+module.exports = [{files: ['src/pkjs/**/*.js', 'tests/**/*.js', 'scripts/**/*.js'], languageOptions: {ecmaVersion: 5, sourceType: 'commonjs', globals: {__dirname: 'readonly', process: 'readonly', console: 'readonly', localStorage: 'readonly', navigator: 'readonly', Pebble: 'readonly', XMLHttpRequest: 'readonly'}}, rules: {eqeqeq: 'error', 'no-undef': 'error', 'no-unused-vars': ['error', {argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_'}], semi: ['error', 'always']}}];

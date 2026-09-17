@@ -1,0 +1,110 @@
+name: Release Pebble app
+on:
+  push:
+    tags: ["*.*.*-app"]
+permissions: {contents: read}
+concurrency: {group: release-app, cancel-in-progress: false}
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs: {version: "${{ steps.release.outputs.version }}"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - id: release
+        env: {TAG: "${{ github.ref_name }}"}
+        run: |
+          version=$(python3 .github/scripts/release.py app "$TAG")
+          python3 -c 'import sys; assert tuple(map(int,sys.argv[1].split("."))) >= (1,0,0), "app releases begin at 1.0.0"' "$version"
+          test -s app/store/description.txt
+          compgen -G 'app/store/screenshots/*.png' >/dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+  preflight:
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, actions: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Require successful CI for the exact release commit
+        env: {GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}"}
+        run: |
+          sha=$(git rev-parse HEAD)
+          gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=100" |
+            jq -e --arg sha "$sha" '[.workflow_runs[] | select(.head_sha == $sha and .event == "push" and .head_branch == "main" and .conclusion == "success")] | length > 0'
+  build:
+    needs: [validate, preflight]
+    uses: ./.github/workflows/app-build.yml # zizmor: ignore[self-repository]
+    with: {artifact-name: "app-release-${{ needs.validate.outputs.version }}"}
+  github-draft:
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions: {contents: write, id-token: write, attestations: write}
+    outputs: {created: "${{ steps.create.outputs.created }}"}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: {name: "app-release-${{ needs.validate.outputs.version }}", path: dist}
+      - name: Verify exact downloaded PBW bytes
+        run: (cd dist && sha256sum --check app.pbw.sha256)
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-path: dist/app.pbw}
+      - name: Create immutable release draft
+        id: create
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", GH_REPO: "${{ github.repository }}", TAG: "${{ github.ref_name }}", VERSION: "${{ needs.validate.outputs.version }}"}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then echo 'Release already exists; refusing unsafe rerun' >&2; exit 1; fi
+          gh release create "$TAG" dist/app.pbw dist/app.pbw.sha256 --verify-tag --draft --title "TeleBezel $VERSION" --notes "TeleBezel Pebble app $VERSION"
+          echo 'created=true' >> "$GITHUB_OUTPUT"
+  repebble-draft:
+    needs: [validate, build, github-draft]
+    runs-on: ubuntu-24.04
+    environment: repebble-production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: {name: "app-release-${{ needs.validate.outputs.version }}", path: app/build}
+      - name: Verify exact downloaded PBW bytes
+        run: |
+          (cd app/build && sha256sum --check app.pbw.sha256)
+          python3 .github/scripts/validate_pbw.py app/build/app.pbw
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with: {node-version: "${{ steps.toolchain.outputs.node-version }}", package-manager-cache: false}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: {python-version: "${{ steps.toolchain.outputs.python-version }}"}
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with: {version: "${{ steps.toolchain.outputs.uv-version }}", enable-cache: false}
+      - name: Exchange the RePebble Firebase refresh token
+        env:
+          FIREBASE_API_KEY: "${{ vars.PEBBLE_FIREBASE_API_KEY }}"
+          FIREBASE_REFRESH_TOKEN: "${{ secrets.PEBBLE_FIREBASE_REFRESH_TOKEN }}"
+        run: |
+          test -n "$FIREBASE_API_KEY" && test -n "$FIREBASE_REFRESH_TOKEN"
+          response=$(curl --fail-with-body --silent --show-error --request POST --header 'Content-Type: application/x-www-form-urlencoded' --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$FIREBASE_REFRESH_TOKEN" "https://securetoken.googleapis.com/v1/token?key=$FIREBASE_API_KEY")
+          id_token=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id_token"])' <<<"$response")
+          echo "::add-mask::$id_token"
+          echo "PEBBLE_FIREBASE_ID_TOKEN=$id_token" >> "$GITHUB_ENV"
+      - name: Stage an invisible RePebble draft
+        env:
+          VERSION: "${{ needs.validate.outputs.version }}"
+          TOOL: "${{ steps.toolchain.outputs.pebble-tool-version }}"
+          PYTHON: "${{ steps.toolchain.outputs.python-version }}"
+          TELEBEZEL_RELEASE_VERSION: "${{ needs.validate.outputs.version }}"
+        run: |
+          TELEBEZEL_EXPECTED_PBW_SHA256=$(sha256sum app/build/app.pbw | cut -d' ' -f1)
+          export TELEBEZEL_EXPECTED_PBW_SHA256
+          uv run --python "$PYTHON" --with "pebble-tool==$TOOL" python .github/scripts/repebble_draft.py --api-base https://appstore-api.repebble.com --non-interactive --no-gif-all-platforms --name TeleBezel --version "$VERSION" --description "$(cat app/store/description.txt)" --source "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --category communication --release-notes "TeleBezel $VERSION" --screenshots "$GITHUB_WORKSPACE"/app/store/screenshots/*.png
+  finalize:
+    if: always()
+    needs: [github-draft, repebble-draft]
+    runs-on: ubuntu-24.04
+    permissions: {contents: write}
+    steps:
+      - env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", GH_REPO: "${{ github.repository }}", TAG: "${{ github.ref_name }}", CREATED: "${{ needs.github-draft.outputs.created }}", DRAFT: "${{ needs.github-draft.result }}", REPEBBLE: "${{ needs.repebble-draft.result }}"}
+        run: |
+          if [[ "$CREATED" == true && "$DRAFT" == success && "$REPEBBLE" == success ]]; then gh release edit "$TAG" --draft=false; exit 0; fi
+          if [[ "$CREATED" == true ]]; then gh release delete "$TAG" --yes; fi
+          exit 1

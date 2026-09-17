@@ -1,0 +1,20 @@
+'use strict';
+var assert = require('assert');
+var protocol = require('../src/pkjs/lib/protocol.generated');
+var settings = require('../src/pkjs/lib/settings');
+var apiFactory = require('../src/pkjs/lib/api');
+var memory = {};
+var storage = {getItem: function(key) { return memory[key] || null; }, setItem: function(key, value) { memory[key] = value; }};
+assert.strictEqual(settings.validate({}).missing, true);
+assert.strictEqual(settings.validate({address: 'https://bad:443', token: 'x'}).ok, false);
+assert.strictEqual(settings.validate({address: 'localhost:8080', ssl: false, token: 'tb_x'}).ok, true);
+settings.save(storage, {address: 'localhost:8080', ssl: false, token: 'tb_secret'});
+function FakeXhr() { this.headers = {}; this.readyState = 0; }
+FakeXhr.prototype.open = function(method, url) { this.method = method; this.url = url; };
+FakeXhr.prototype.setRequestHeader = function(name, value) { this.headers[name] = value; };
+FakeXhr.prototype.send = function() { this.status = 200; this.responseText = '{"data":{"status":"ready"}}'; this.readyState = 4; this.onreadystatechange(); this.onerror(); };
+var calls = 0;
+apiFactory.create(FakeXhr, settings, protocol).checkStatus(settings.load(storage), function(result) { calls++; assert.strictEqual(result.code, protocol.result.ok); });
+assert.strictEqual(calls, 1);
+require('./runtime_test');
+process.stdout.write('PKJS tests passed\n');

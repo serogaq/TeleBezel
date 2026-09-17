@@ -1,0 +1,204 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      app: "${{ steps.paths.outputs.app }}"
+      api: "${{ steps.paths.outputs.api }}"
+      tdlib: "${{ steps.paths.outputs.tdlib }}"
+      integration: "${{ steps.paths.outputs.integration }}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - id: paths
+        env:
+          BASE_SHA: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}"
+          HEAD_SHA: "${{ github.sha }}"
+          EVENT_NAME: "${{ github.event_name }}"
+        run: |
+          if [[ "$EVENT_NAME" == push || "$EVENT_NAME" == merge_group || -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            python3 .github/scripts/detect_changes.py ALL "$HEAD_SHA"
+          else
+            python3 .github/scripts/detect_changes.py "$BASE_SHA" "$HEAD_SHA"
+          fi
+
+  workflow-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with: {version: "${{ steps.toolchain.outputs.uv-version }}", enable-cache: true}
+      - run: make workflow-audit
+
+  app:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    uses: ./.github/workflows/app-build.yml # zizmor: ignore[self-repository]
+    with: {artifact-name: "app-ci-${{ github.run_id }}"}
+
+  api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      APP_ENV: testing
+      APP_KEY: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_DATABASE: telebezel_test
+      DB_USERNAME: telebezel
+      DB_PASSWORD: telebezel_test
+      DB_URL: ""
+      PGCONNECT_TIMEOUT: "2"
+      PGOPTIONS: "-c statement_timeout=2000 -c lock_timeout=500"
+    services:
+      postgres:
+        image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+        env:
+          POSTGRES_DB: telebezel_test
+          POSTGRES_USER: telebezel
+          POSTGRES_PASSWORD: telebezel_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U telebezel -d telebezel_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: "${{ steps.toolchain.outputs.php-version }}"
+          extensions: pdo_pgsql, pcntl
+          tools: "composer:${{ steps.toolchain.outputs.composer-version }}"
+          coverage: none
+      - name: Install and check API
+        working-directory: backend-api
+        run: |
+          composer install --no-interaction --prefer-dist
+          composer validate --strict
+          php artisan migrate:fresh --force
+          composer check
+
+  tdlib:
+    needs: changes
+    if: needs.changes.outputs.tdlib == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: {python-version: "${{ steps.toolchain.outputs.python-version }}"}
+      - name: Install build prerequisites
+        env:
+          CMAKE_VERSION: "${{ steps.toolchain.outputs.cmake-version }}"
+          CLANG_FORMAT_VERSION: "${{ steps.toolchain.outputs.clang-format-version }}"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gperf libssl-dev ninja-build php-cli zlib1g-dev clang
+          python -m pip install "cmake==$CMAKE_VERSION" "clang-format==$CLANG_FORMAT_VERSION"
+      - name: Build and test the native adapter
+        env:
+          CC: "${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }}"
+          CXX: "${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}"
+        run: |
+          mapfile -t sources < <(find backend-tdlib/include backend-tdlib/src backend-tdlib/tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print)
+          clang-format --dry-run --Werror "${sources[@]}"
+          cmake -S backend-tdlib -B backend-tdlib/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON
+          cmake --build backend-tdlib/build --target telebezel-tdlib telebezel-tdlib-tests --parallel 2
+          ctest --test-dir backend-tdlib/build --output-on-failure
+
+  tdlib-analysis:
+    needs: changes
+    if: needs.changes.outputs.tdlib == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-tidy cmake gperf libssl-dev ninja-build php-cli zlib1g-dev
+      - name: Analyze only adapter source files
+        run: |
+          cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
+          clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/main.cpp
+      - name: Run sanitizer-instrumented adapter tests
+        run: |
+          cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZERS=ON
+          cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir backend-tdlib/sanitizer-build --output-on-failure
+
+  api-image:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    permissions: {contents: read}
+    uses: ./.github/workflows/container-image-check.yml # zizmor: ignore[self-repository]
+    with:
+      component: backend-api
+      image-name: telebezel-backend-api-ci
+      tag: "ci-${{ github.run_id }}"
+
+  tdlib-image:
+    needs: changes
+    if: needs.changes.outputs.tdlib == 'true'
+    permissions: {contents: read}
+    uses: ./.github/workflows/container-image-check.yml # zizmor: ignore[self-repository]
+    with:
+      component: backend-tdlib
+      image-name: telebezel-backend-tdlib-ci
+      tag: "ci-${{ github.run_id }}"
+
+  integration:
+    needs: [changes, api, tdlib]
+    if: ${{ always() && needs.changes.outputs.integration == 'true' && (needs.api.result == 'success' || needs.api.result == 'skipped') && (needs.tdlib.result == 'success' || needs.tdlib.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - run: sudo apt-get update && sudo apt-get install -y acl
+      - run: make integration-test
+
+  ci-gate:
+    if: always()
+    needs: [changes, workflow-audit, app, api, tdlib, tdlib-analysis, api-image, tdlib-image, integration]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Require every applicable check
+        env:
+          CHANGES: "${{ needs.changes.result }}"
+          AUDIT: "${{ needs.workflow-audit.result }}"
+          APP: "${{ needs.app.result }}"
+          API: "${{ needs.api.result }}"
+          TDLIB: "${{ needs.tdlib.result }}"
+          TDLIB_ANALYSIS: "${{ needs.tdlib-analysis.result }}"
+          API_IMAGE: "${{ needs.api-image.result }}"
+          TDLIB_IMAGE: "${{ needs.tdlib-image.result }}"
+          INTEGRATION: "${{ needs.integration.result }}"
+          EXPECT_APP: "${{ needs.changes.outputs.app }}"
+          EXPECT_API: "${{ needs.changes.outputs.api }}"
+          EXPECT_TDLIB: "${{ needs.changes.outputs.tdlib }}"
+          EXPECT_INTEGRATION: "${{ needs.changes.outputs.integration }}"
+        run: python3 .github/scripts/ci_gate.py

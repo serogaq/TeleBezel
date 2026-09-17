@@ -1,0 +1,5 @@
+services:
+  backend-api:
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: debug
