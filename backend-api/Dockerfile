@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.11
-FROM composer:2.10.3@sha256:d8f6343d3fae98107426bc49163ccad46ef85aabd4a27d80a74401fab4aba332 AS composer-bin
+FROM composer:2.10.3@sha256:aaeab4b6b031e0a88efb907f0f26b563532a644fc2f4ea0d000ecf8658f7a2b8 AS composer-bin
 FROM dunglas/frankenphp:1.12.7-php8.5-bookworm@sha256:519536270a58121c28f63bdb97f9a330b2e53922029792631cf50fe953ecd8d0 AS build
 COPY --from=composer-bin /usr/bin/composer /usr/local/bin/composer
 RUN install-php-extensions pdo_pgsql pcntl zip
