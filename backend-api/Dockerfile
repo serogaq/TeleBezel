@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.11
 FROM composer:2.10.3@sha256:d8f6343d3fae98107426bc49163ccad46ef85aabd4a27d80a74401fab4aba332 AS composer-bin
-FROM dunglas/frankenphp:1.12.7-php8.5-bookworm@sha256:519536270a58121c28f63bdb97f9a330b2e53922029792631cf50fe953ecd8d0 AS build
+FROM dunglas/frankenphp:1.12.7-php8.5-bookworm@sha256:7380f2c24ef9d86ad496dbc285ba66e212365c864db2797f3e7269afad100dbb AS build
 COPY --from=composer-bin /usr/bin/composer /usr/local/bin/composer
 RUN install-php-extensions pdo_pgsql pcntl zip
 WORKDIR /app
@@ -9,7 +9,7 @@ RUN composer install --no-dev --no-interaction --no-progress --prefer-dist --no-
 COPY . .
 RUN composer dump-autoload --no-dev --classmap-authoritative --no-interaction
 
-FROM dunglas/frankenphp:1.12.7-php8.5-bookworm@sha256:519536270a58121c28f63bdb97f9a330b2e53922029792631cf50fe953ecd8d0 AS runtime
+FROM dunglas/frankenphp:1.12.7-php8.5-bookworm@sha256:7380f2c24ef9d86ad496dbc285ba66e212365c864db2797f3e7269afad100dbb AS runtime
 ARG VERSION=0.1.0
 LABEL org.opencontainers.image.source="https://github.com/serogaq/TeleBezel" \
       org.opencontainers.image.title="TeleBezel backend-api" \
