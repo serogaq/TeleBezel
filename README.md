@@ -13,7 +13,10 @@ Pebble C app ⇄ PebbleKit JS ⇄ backend-api ⇄ backend-tdlib ⇄ TDLib
 
 ## Quick start
 
-Requirements are pinned in `toolchain.env`. Start Docker Desktop, then run:
+Local toolchain versions are pinned in `toolchain.env`; application dependencies
+and container images are pinned in their lockfiles, Dockerfiles, and Compose.
+CI tests the versions in those manifests, including Dependabot updates. Start
+Docker Desktop, then run:
 
 ```sh
 make secrets-init

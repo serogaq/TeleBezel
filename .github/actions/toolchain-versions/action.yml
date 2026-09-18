@@ -1,5 +1,5 @@
 name: Read TeleBezel toolchain versions
-description: Parse the repository's strict toolchain.env file
+description: Read toolchain.env and the pinned Composer image in backend-api/Dockerfile
 outputs:
   php-version: {value: "${{ steps.read.outputs.php-version }}"}
   composer-version: {value: "${{ steps.read.outputs.composer-version }}"}
@@ -18,7 +18,7 @@ runs:
       run: |
         set -euo pipefail
         declare -A requested=(
-          [PHP_VERSION]=php-version [COMPOSER_VERSION]=composer-version
+          [PHP_VERSION]=php-version
           [NODE_VERSION]=node-version [PYTHON_VERSION]=python-version
           [UV_VERSION]=uv-version [PEBBLE_TOOL_VERSION]=pebble-tool-version
           [PEBBLE_SDK_VERSION]=pebble-sdk-version [CMAKE_VERSION]=cmake-version
@@ -28,3 +28,5 @@ runs:
           if [[ -n "${requested[$key]:-}" ]]; then printf '%s=%s\n' "${requested[$key]}" "$value" >> "$GITHUB_OUTPUT"; unset 'requested[$key]'; fi
         done < toolchain.env
         if (( ${#requested[@]} )); then printf 'missing toolchain keys: %s\n' "${!requested[*]}" >&2; exit 1; fi
+        composer_version=$(python3 .github/scripts/current_dependencies.py composer-version)
+        printf 'composer-version=%s\n' "$composer_version" >> "$GITHUB_OUTPUT"

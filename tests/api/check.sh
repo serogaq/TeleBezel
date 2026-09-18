@@ -6,7 +6,7 @@ php_bin="${PHP_BIN:-php}"
 composer_bin="${COMPOSER_BIN:-composer}"
 container="telebezel-api-test-${RANDOM}-${RANDOM}"
 database="telebezel_disposable_${RANDOM}_${RANDOM}"
-image="postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
+image=$(python3 "$root/.github/scripts/current_dependencies.py" postgres-image)
 trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
 
 docker run -d --name "$container" \

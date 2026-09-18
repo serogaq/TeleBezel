@@ -56,26 +56,6 @@ jobs:
     env:
       APP_ENV: testing
       APP_KEY: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-      DB_CONNECTION: pgsql
-      DB_HOST: 127.0.0.1
-      DB_PORT: "5432"
-      DB_DATABASE: telebezel_test
-      DB_USERNAME: telebezel
-      DB_PASSWORD: telebezel_test
-      DB_URL: ""
-      PGCONNECT_TIMEOUT: "2"
-      PGOPTIONS: "-c statement_timeout=2000 -c lock_timeout=500"
-    services:
-      postgres:
-        image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
-        env:
-          POSTGRES_DB: telebezel_test
-          POSTGRES_USER: telebezel
-          POSTGRES_PASSWORD: telebezel_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U telebezel -d telebezel_test"
-          --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
@@ -87,13 +67,8 @@ jobs:
           extensions: pdo_pgsql, pcntl
           tools: "composer:${{ steps.toolchain.outputs.composer-version }}"
           coverage: none
-      - name: Install and check API
-        working-directory: backend-api
-        run: |
-          composer install --no-interaction --prefer-dist
-          composer validate --strict
-          php artisan migrate:fresh --force
-          composer check
+      - name: Check API against the pinned PostgreSQL image
+        run: make api-check
 
   tdlib:
     needs: changes
