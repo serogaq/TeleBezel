@@ -24,6 +24,7 @@ LABEL org.opencontainers.image.source="https://github.com/serogaq/TeleBezel" \
       org.opencontainers.image.title="TeleBezel backend-tdlib" \
       org.opencontainers.image.version="${VERSION}"
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates libssl3t64 libstdc++6 zlib1g \
     && groupadd --gid 10002 telebezel \
     && useradd --uid 10002 --gid 10002 --no-create-home --home-dir /var/lib/telebezel --shell /usr/sbin/nologin telebezel \

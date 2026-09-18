@@ -62,6 +62,7 @@ jobs:
       - run: |
           make tdlib-check
           cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
+          cmake --build backend-tdlib/analysis-build --target tdapi --parallel 2
           clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/main.cpp
           cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DTELEBEZEL_SANITIZERS=ON
           cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests --parallel 2
