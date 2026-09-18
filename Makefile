@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 include toolchain.env
+COMPOSER_VERSION := $(shell python3 .github/scripts/current_dependencies.py composer-version)
 
 PHP_BIN ?= $(shell if [ -x /opt/homebrew/opt/php/bin/php ]; then echo /opt/homebrew/opt/php/bin/php; else command -v php; fi)
 COMPOSER_BIN ?= $(shell command -v composer)
