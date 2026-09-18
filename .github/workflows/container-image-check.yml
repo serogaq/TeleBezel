@@ -19,28 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - id: buildx
+      - if: inputs.component == 'backend-api'
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
       - if: inputs.component == 'backend-tdlib'
-        id: tdlib-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: "${{ runner.temp }}/tdlib-ccache"
-          key: "tdlib-ccache-${{ matrix.arch }}-${{ hashFiles('backend-tdlib/cmake/dependencies.lock.cmake', 'backend-tdlib/Dockerfile') }}"
-          restore-keys: "tdlib-ccache-${{ matrix.arch }}-"
-      - if: inputs.component == 'backend-tdlib'
-        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
-        with:
-          builder: "${{ steps.buildx.outputs.name }}"
-          cache-map: |
-            {
-              "${{ runner.temp }}/tdlib-ccache": {
-                "target": "/var/cache/ccache",
-                "id": "telebezel-tdlib-ccache-${{ matrix.arch }}"
-              }
-            }
-          skip-extraction: "${{ steps.tdlib-cache.outputs.cache-hit }}"
-          utility-image: ghcr.io/containerd/busybox:latest@sha256:52f73a0a43a16cf37cd0720c90887ce972fe60ee06a687ee71fb93a7ca601df7
+        uses: ./.github/actions/tdlib-image-cache # zizmor: ignore[self-repository]
+        with: {arch: "${{ matrix.arch }}"}
       - id: version
         env: {COMPONENT: "${{ inputs.component }}"}
         run: |

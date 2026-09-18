@@ -17,8 +17,15 @@ bash tests/secrets/provision_file.sh "$work_dir/tdlib_internal_token" 10001 1000
 bash tests/secrets/provision_file.sh "$work_dir/laravel_app_key" 10001
 "${compose[@]}" config --format json | python3 tests/integration/assert_compose.py
 curl_bounded() { curl --connect-timeout 2 --max-time 12 "$@"; }
-"${compose[@]}" build backend-api backend-tdlib
-"${compose[@]}" up -d postgres backend-tdlib
+up_args=()
+if [[ "${TELEBEZEL_INTEGRATION_PREBUILT:-0}" == 1 ]]; then
+  owner=${GHCR_OWNER:-serogaq}
+  docker image inspect "ghcr.io/$owner/telebezel-backend-api:local" "ghcr.io/$owner/telebezel-backend-tdlib:local" >/dev/null
+  up_args=(--no-build)
+else
+  "${compose[@]}" build backend-api backend-tdlib
+fi
+"${compose[@]}" up "${up_args[@]}" -d postgres backend-tdlib
 "${compose[@]}" run --rm -e PGOPTIONS='-c statement_timeout=30000 -c lock_timeout=5000' backend-api php artisan telebezel:migrate-locked
 issue_output=$("${compose[@]}" run --rm backend-api php artisan telebezel:api-client-issue integration)
 token=$(printf '%s\n' "$issue_output" | awk '/^tb_[A-Za-z0-9_-]+$/ {print; exit}')
@@ -28,7 +35,7 @@ test -n "$client_id"
 issue_output_b=$("${compose[@]}" run --rm backend-api php artisan telebezel:api-client-issue integration-second)
 token_b=$(printf '%s\n' "$issue_output_b" | awk '/^tb_[A-Za-z0-9_-]+$/ {print; exit}')
 test -n "$token_b"
-"${compose[@]}" up -d backend-api
+"${compose[@]}" up "${up_args[@]}" -d backend-api
 ready=false
 for _ in {1..60}; do
   if curl_bounded -fsS "http://127.0.0.1:$API_PORT/healthz" >/dev/null; then ready=true; break; fi
@@ -78,7 +85,7 @@ assert all(event["context"].get("request_id") for event in events)
 assert all("authorization" not in event["context"] and "token" not in event["context"] for event in events)
 '
 "${compose[@]}" exec -T backend-tdlib touch /var/lib/telebezel/tdlib/stage0-volume-sentinel
-"${compose[@]}" up -d --force-recreate postgres backend-tdlib backend-api
+"${compose[@]}" up "${up_args[@]}" -d --force-recreate postgres backend-tdlib backend-api
 test "$("${compose[@]}" exec -T backend-tdlib sh -c 'test -f /var/lib/telebezel/tdlib/stage0-volume-sentinel && echo yes')" = yes
 ready=false
 for _ in {1..30}; do

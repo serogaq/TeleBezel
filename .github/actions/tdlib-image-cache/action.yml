@@ -1,0 +1,29 @@
+name: Prepare TDLib image build cache
+description: Share the architecture-specific BuildKit ccache mount across workflow runs
+inputs:
+  arch:
+    description: Native runner architecture (amd64 or arm64)
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: buildx
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+    - id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: "${{ runner.temp }}/tdlib-ccache"
+        key: "tdlib-ccache-${{ inputs.arch }}-${{ hashFiles('backend-tdlib/CMakeLists.txt', 'backend-tdlib/Dockerfile', 'backend-tdlib/cmake/**', 'backend-tdlib/include/**', 'backend-tdlib/src/**', 'backend-tdlib/tests/**', 'toolchain.env') }}"
+        restore-keys: "tdlib-ccache-${{ inputs.arch }}-"
+    - uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+      with:
+        builder: "${{ steps.buildx.outputs.name }}"
+        cache-map: |
+          {
+            "${{ runner.temp }}/tdlib-ccache": {
+              "target": "/var/cache/ccache",
+              "id": "telebezel-tdlib-ccache-${{ inputs.arch }}"
+            }
+          }
+        skip-extraction: "${{ steps.cache.outputs.cache-hit }}"
+        utility-image: ghcr.io/containerd/busybox:latest@sha256:52f73a0a43a16cf37cd0720c90887ce972fe60ee06a687ee71fb93a7ca601df7

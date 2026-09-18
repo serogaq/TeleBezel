@@ -88,7 +88,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
-          key: "tdlib-native-${{ matrix.compiler }}-${{ hashFiles('backend-tdlib/cmake/dependencies.lock.cmake', '.github/workflows/ci.yml') }}"
+          key: "tdlib-native-${{ matrix.compiler }}-${{ hashFiles('backend-tdlib/CMakeLists.txt', 'backend-tdlib/cmake/**', 'backend-tdlib/include/**', 'backend-tdlib/src/**', 'backend-tdlib/tests/**', 'toolchain.env') }}"
           restore-keys: "tdlib-native-${{ matrix.compiler }}-"
       - name: Install build prerequisites
         env:
@@ -120,19 +120,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          key: "tdlib-analysis-gcc-${{ hashFiles('backend-tdlib/CMakeLists.txt', 'backend-tdlib/cmake/**', 'backend-tdlib/include/**', 'backend-tdlib/src/**', 'backend-tdlib/tests/**', 'toolchain.env') }}"
+          restore-keys: "tdlib-analysis-gcc-"
       - run: |
           sudo apt-get update
-          sudo apt-get install -y clang clang-tidy cmake gperf libssl-dev ninja-build php-cli zlib1g-dev
+          sudo apt-get install -y ccache clang clang-tidy cmake gperf libssl-dev ninja-build php-cli zlib1g-dev
       - name: Analyze only adapter source files
         run: |
-          cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
+          ccache --zero-stats
+          cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
           cmake --build backend-tdlib/analysis-build --target tdapi --parallel 2
           clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/main.cpp
       - name: Run sanitizer-instrumented adapter tests
         run: |
-          cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZERS=ON
+          cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZERS=ON
           cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests --parallel 2
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir backend-tdlib/sanitizer-build --output-on-failure
+          ccache --show-stats
 
   api-image:
     needs: changes
@@ -155,14 +162,18 @@ jobs:
       tag: "ci-${{ github.run_id }}"
 
   integration:
-    needs: [changes, api, tdlib]
-    if: ${{ always() && needs.changes.outputs.integration == 'true' && (needs.api.result == 'success' || needs.api.result == 'skipped') && (needs.tdlib.result == 'success' || needs.tdlib.result == 'skipped') }}
+    needs: [changes, api, tdlib, api-image, tdlib-image]
+    if: ${{ always() && needs.changes.outputs.integration == 'true' && (needs.api.result == 'success' || needs.api.result == 'skipped') && (needs.tdlib.result == 'success' || needs.tdlib.result == 'skipped') && (needs.api-image.result == 'success' || needs.api-image.result == 'skipped') && (needs.tdlib-image.result == 'success' || needs.tdlib-image.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
+      - uses: ./.github/actions/integration-images # zizmor: ignore[self-repository]
       - run: sudo apt-get update && sudo apt-get install -y acl
       - run: make integration-test
+        env:
+          GHCR_OWNER: "${{ github.repository_owner }}"
+          TELEBEZEL_INTEGRATION_PREBUILT: "1"
 
   ci-gate:
     if: always()
