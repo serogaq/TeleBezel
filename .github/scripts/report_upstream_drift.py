@@ -23,7 +23,8 @@ for name, url in (
 
 for path, pattern in (
     ("backend-api/Dockerfile", r"^FROM (composer:[^@\s]+)@(sha256:[a-f0-9]{64})"),
-    ("backend-api/Dockerfile", r"^FROM (dunglas/frankenphp:[^@\s]+)@(sha256:[a-f0-9]{64})"),
+    ("backend-api/Dockerfile", r"^FROM (dunglas/frankenphp:[0-9.]+-builder-php8\.5-bookworm)@(sha256:[a-f0-9]{64})"),
+    ("backend-api/Dockerfile", r"^FROM (dunglas/frankenphp:[0-9.]+-php8\.5-bookworm)@(sha256:[a-f0-9]{64})"),
     ("backend-tdlib/Dockerfile", r"^FROM (debian:[^@\s]+)@(sha256:[a-f0-9]{64})"),
     ("compose.yaml", r"^    image: (postgres:[^@\s]+)@(sha256:[a-f0-9]{64})"),
 ):

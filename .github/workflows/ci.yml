@@ -110,24 +110,33 @@ jobs:
         uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "${{ steps.toolchain.outputs.python-version }}"}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          key: "tdlib-native-${{ matrix.compiler }}-${{ hashFiles('backend-tdlib/cmake/dependencies.lock.cmake', '.github/workflows/ci.yml') }}"
+          restore-keys: "tdlib-native-${{ matrix.compiler }}-"
       - name: Install build prerequisites
         env:
           CMAKE_VERSION: "${{ steps.toolchain.outputs.cmake-version }}"
           CLANG_FORMAT_VERSION: "${{ steps.toolchain.outputs.clang-format-version }}"
         run: |
           sudo apt-get update
-          sudo apt-get install -y gperf libssl-dev ninja-build php-cli zlib1g-dev clang
+          sudo apt-get install -y ccache gperf libssl-dev ninja-build php-cli zlib1g-dev clang
           python -m pip install "cmake==$CMAKE_VERSION" "clang-format==$CLANG_FORMAT_VERSION"
       - name: Build and test the native adapter
         env:
           CC: "${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }}"
           CXX: "${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}"
+          CCACHE_COMPRESS: "1"
+          CCACHE_MAXSIZE: 1500M
         run: |
           mapfile -t sources < <(find backend-tdlib/include backend-tdlib/src backend-tdlib/tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print)
           clang-format --dry-run --Werror "${sources[@]}"
-          cmake -S backend-tdlib -B backend-tdlib/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON
+          ccache --zero-stats
+          cmake -S backend-tdlib -B backend-tdlib/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_BUILD_TESTS=ON
           cmake --build backend-tdlib/build --target telebezel-tdlib telebezel-tdlib-tests --parallel 2
           ctest --test-dir backend-tdlib/build --output-on-failure
+          ccache --show-stats
 
   tdlib-analysis:
     needs: changes
@@ -142,6 +151,7 @@ jobs:
       - name: Analyze only adapter source files
         run: |
           cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
+          cmake --build backend-tdlib/analysis-build --target tdapi --parallel 2
           clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/main.cpp
       - name: Run sanitizer-instrumented adapter tests
         run: |

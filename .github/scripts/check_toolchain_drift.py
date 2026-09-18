@@ -24,11 +24,17 @@ require("backend-tdlib/cmake/Dependencies.cmake", r'set\(CMAKE_CXX_STANDARD ([0-
 require("backend-api/Dockerfile", r'^FROM composer:([0-9.]+)@sha256:', pins["COMPOSER_VERSION"])
 require("backend-api/Dockerfile", r'^FROM composer:[0-9.]+@(sha256:[a-f0-9]{64})', pins["COMPOSER_IMAGE_DIGEST"])
 require("backend-api/Dockerfile", r'^FROM dunglas/frankenphp:([0-9.]+)-php8\.5-bookworm@sha256:', pins["FRANKENPHP_VERSION"])
-frankenphp_digests = re.findall(r'^FROM dunglas/frankenphp:[^@\s]+@(sha256:[a-f0-9]{64})', (root / "backend-api/Dockerfile").read_text(), re.MULTILINE)
+require("backend-api/Dockerfile", r'^FROM dunglas/frankenphp:([0-9.]+)-builder-php8\.5-bookworm@sha256:', pins["FRANKENPHP_VERSION"])
+require("backend-api/Dockerfile", r'^FROM dunglas/frankenphp:[0-9.]+-builder-php8\.5-bookworm@(sha256:[a-f0-9]{64})', pins["FRANKENPHP_BUILDER_IMAGE_DIGEST"])
+for module, pin in (("github.com/getkin/kin-openapi", "FRANKENPHP_KIN_OPENAPI_VERSION"),
+                    ("golang.org/x/crypto", "FRANKENPHP_X_CRYPTO_VERSION"),
+                    ("google.golang.org/grpc", "FRANKENPHP_GRPC_VERSION")):
+    require("backend-api/Dockerfile", rf'^RUN go get .*{re.escape(module)}@v([0-9.]+)', pins[pin])
+frankenphp_digests = re.findall(r'^FROM dunglas/frankenphp:[0-9.]+-php8\.5-bookworm@(sha256:[a-f0-9]{64})', (root / "backend-api/Dockerfile").read_text(), re.MULTILINE)
 for digest in frankenphp_digests:
     if digest != pins["FRANKENPHP_IMAGE_DIGEST"]:
         raise SystemExit("toolchain drift: FrankenPHP base digest")
-if len(frankenphp_digests) != 2 or len(re.findall(r'^FROM dunglas/frankenphp:', (root / "backend-api/Dockerfile").read_text(), re.MULTILINE)) != 2:
+if len(frankenphp_digests) != 2 or len(re.findall(r'^FROM dunglas/frankenphp:', (root / "backend-api/Dockerfile").read_text(), re.MULTILINE)) != 3:
     raise SystemExit("toolchain drift: unexpected FrankenPHP stages")
 debian_digests = re.findall(r'^FROM debian:[^@\s]+@(sha256:[a-f0-9]{64})', (root / "backend-tdlib/Dockerfile").read_text(), re.MULTILINE)
 for digest in debian_digests:
