@@ -1,0 +1,32 @@
+name: Build cached integration images
+description: Load both backend images for Compose using the image layer and TDLib object caches
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/tdlib-image-cache # zizmor: ignore[self-repository]
+      with: {arch: amd64}
+    - id: versions
+      shell: bash
+      run: |
+        echo "api=$(tr -d '\n' < backend-api/VERSION)" >> "$GITHUB_OUTPUT"
+        echo "tdlib=$(tr -d '\n' < backend-tdlib/VERSION)" >> "$GITHUB_OUTPUT"
+    - name: Load backend-api image
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: ./backend-api
+        platforms: linux/amd64
+        load: true
+        tags: "ghcr.io/${{ github.repository_owner }}/telebezel-backend-api:local"
+        build-args: "VERSION=${{ steps.versions.outputs.api }}"
+        cache-from: type=gha,scope=backend-api-amd64
+        cache-to: type=gha,mode=max,scope=backend-api-amd64,ignore-error=true
+    - name: Load backend-tdlib image
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: ./backend-tdlib
+        platforms: linux/amd64
+        load: true
+        tags: "ghcr.io/${{ github.repository_owner }}/telebezel-backend-tdlib:local"
+        build-args: "VERSION=${{ steps.versions.outputs.tdlib }}"
+        cache-from: type=gha,scope=backend-tdlib-amd64
+        cache-to: type=gha,mode=max,scope=backend-tdlib-amd64,ignore-error=true

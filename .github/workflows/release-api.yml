@@ -28,8 +28,12 @@ jobs:
           sha=$(git rev-parse HEAD)
           gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=100" |
             jq -e --arg sha "$sha" '[.workflow_runs[] | select(.head_sha == $sha and .event == "push" and .head_branch == "main" and .conclusion == "success")] | length > 0'
+      - uses: ./.github/actions/integration-images # zizmor: ignore[self-repository]
       - run: sudo apt-get update && sudo apt-get install -y acl
       - run: make integration-test
+        env:
+          GHCR_OWNER: "${{ github.repository_owner }}"
+          TELEBEZEL_INTEGRATION_PREBUILT: "1"
   image:
     needs: [validate, preflight]
     permissions: {contents: read, packages: write, id-token: write, attestations: write}

@@ -16,6 +16,7 @@ QEMU_FLAGS ?=
 LOG_FLAGS ?=
 GHCR_OWNER ?= serogaq
 TDLIB_BUILD_DIR ?= backend-tdlib/build
+TDLIB_CMAKE_ARGS ?=
 CMAKE_GENERATOR_ARGS ?= $(if $(wildcard $(TDLIB_BUILD_DIR)/CMakeCache.txt),,-G Ninja)
 
 .PHONY: help toolchain-check app-build app-check app-qemu app-install api-check tdlib-check workflow-audit compose-config compose-build secrets-init secrets-provision db-migrate api-client-issue integration-test image-smoke check clean
@@ -65,7 +66,7 @@ api-check: ## Validate, format-check, analyze, and test backend-api
 
 tdlib-check: ## Configure, build, and test backend-tdlib
 	$(CLANG_FORMAT_BIN) --dry-run --Werror $$(find backend-tdlib/include backend-tdlib/src backend-tdlib/tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print)
-	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON
+	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON $(TDLIB_CMAKE_ARGS)
 	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target telebezel-tdlib telebezel-tdlib-tests --parallel 2
 	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target test
 

@@ -27,7 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - if: inputs.component == 'backend-api'
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - if: inputs.component == 'backend-tdlib'
+        uses: ./.github/actions/tdlib-image-cache # zizmor: ignore[self-repository]
+        with: {arch: "${{ matrix.arch }}"}
       - if: inputs.push
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
@@ -42,7 +46,7 @@ jobs:
           tags: "${{ inputs.image-name }}:smoke-${{ matrix.arch }}"
           build-args: "VERSION=${{ inputs.tag }}"
           cache-from: "type=gha,scope=${{ inputs.component }}-${{ matrix.arch }}"
-          cache-to: "type=gha,mode=max,scope=${{ inputs.component }}-${{ matrix.arch }}"
+          cache-to: "type=gha,mode=max,scope=${{ inputs.component }}-${{ matrix.arch }},ignore-error=true"
       - name: Publish native image by digest
         id: push
         if: inputs.push
@@ -55,7 +59,7 @@ jobs:
           provenance: mode=max
           sbom: true
           cache-from: "type=gha,scope=${{ inputs.component }}-${{ matrix.arch }}"
-          cache-to: "type=gha,mode=max,scope=${{ inputs.component }}-${{ matrix.arch }}"
+          cache-to: "type=gha,mode=max,scope=${{ inputs.component }}-${{ matrix.arch }},ignore-error=true"
       - name: Load the exact published digest for verification
         if: inputs.push
         env:
