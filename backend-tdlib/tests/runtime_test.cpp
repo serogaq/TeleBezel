@@ -53,6 +53,8 @@ public:
       push({client, 0,
             td_api::make_object<td_api::updateAuthorizationState>(
                 td_api::make_object<td_api::authorizationStateWaitPhoneNumber>())});
+    } else if ((type == td_api::close::ID || type == td_api::destroy::ID) && suppress_close_updates_.load()) {
+      // Tests release the storage owner explicitly with authorizationStateClosed.
     } else if (type == td_api::close::ID || type == td_api::destroy::ID || type == td_api::logOut::ID) {
       push({client, 0,
             td_api::make_object<td_api::updateAuthorizationState>(
@@ -67,6 +69,7 @@ public:
     return sent_;
   }
   void set_fail_add_proxy(bool value) { fail_add_proxy_.store(value); }
+  void set_suppress_close_updates(bool value) { suppress_close_updates_.store(value); }
   telebezel::TransportResponse receive(double timeout) override {
     std::unique_lock lock(mutex_);
     condition_.wait_for(lock, std::chrono::duration<double>(timeout), [this] { return !responses_.empty(); });
@@ -89,6 +92,7 @@ private:
   std::queue<telebezel::TransportResponse> responses_;
   std::vector<std::pair<std::int32_t, std::int32_t>> sent_;
   std::atomic<bool> fail_add_proxy_{false};
+  std::atomic<bool> suppress_close_updates_{false};
 };
 
 template <class Predicate> void wait_until(Predicate predicate) {
@@ -117,7 +121,7 @@ int main() {
   config.master_key_file = master.string();
   config.telegram_api_id = 12345;
   config.telegram_api_hash = "test-api-hash";
-  telebezel::Registry registry(config.data_directory);
+  telebezel::Registry registry(config.data_directory, config.master_key_file);
   registry.open();
   auto fake = std::make_unique<FakeTransport>();
   auto *transport = fake.get();
@@ -126,6 +130,9 @@ int main() {
   const std::string first = "00112233-4455-4677-8899-aabbccddeeff";
   const std::string second = "10112233-4455-4677-8899-aabbccddeeff";
   const std::string third = "40112233-4455-4677-8899-aabbccddeeff";
+  const std::string interrupted_logout = "50112233-4455-4677-8899-aabbccddeeff";
+  const std::string interrupted_remove = "60112233-4455-4677-8899-aabbccddeeff";
+  const std::string missing_proxy = "70112233-4455-4677-8899-aabbccddeeff";
   const std::string generation = "11112233-4455-4677-8899-aabbccddeeff";
   const auto command = [&generation](const std::string &uuid) {
     return nlohmann::json{
@@ -251,13 +258,28 @@ int main() {
                                           {"port", 8080},
                                           {"http_only", true}};
   transport->set_fail_add_proxy(true);
+  transport->set_suppress_close_updates(true);
   const auto sent_before_failure = transport->sent().size();
-  require(runtime.reconcile(third, failing_proxy).value("code", "") == "configuration.invalid");
+  auto failed_reconcile = std::async(std::launch::async, [&] { return runtime.reconcile(third, failing_proxy); });
+  std::int32_t closing_client = 0;
+  wait_until([&] {
+    const auto requests = transport->sent();
+    const auto close = std::find_if(requests.begin() + static_cast<std::ptrdiff_t>(sent_before_failure), requests.end(),
+                                    [](const auto &item) { return item.second == td_api::close::ID; });
+    if (close == requests.end())
+      return false;
+    closing_client = close->first;
+    return true;
+  });
+  require(runtime.reconcile(third, failing_proxy).value("code", "") == "operation.conflict");
+  transport->emit_state(closing_client, td_api::make_object<td_api::authorizationStateClosed>());
+  require(failed_reconcile.get().value("code", "") == "configuration.invalid");
   const auto failed_activation = transport->sent();
   require(std::count_if(failed_activation.begin() + static_cast<std::ptrdiff_t>(sent_before_failure),
                         failed_activation.end(),
                         [](const auto &item) { return item.second == td_api::setNetworkType::ID; }) == 1);
   transport->set_fail_add_proxy(false);
+  transport->set_suppress_close_updates(false);
   require(runtime.reconcile(third, failing_proxy).value("runtime_available", false));
   auto remove = command(first);
   remove["revision"] = 2;
@@ -273,6 +295,63 @@ int main() {
     rejected_tombstone = std::string(error.what()) == "account.gone";
   }
   require(rejected_tombstone);
+  runtime.stop();
+
+  registry.ensure_account_directories(interrupted_logout);
+  telebezel::AccountManifest logout_manifest{1,
+                                             interrupted_logout,
+                                             generation,
+                                             false,
+                                             1,
+                                             1,
+                                             "logout_pending",
+                                             "81112233-4455-4677-8899-aabbccddeeff",
+                                             false,
+                                             nullptr,
+                                             "",
+                                             "intent"};
+  registry.write(
+      logout_manifest,
+      nlohmann::json{{"id", "51112233-4455-4677-8899-aabbccddeeff"}, {"mode", "direct"}, {"http_only", false}});
+  registry.ensure_account_directories(interrupted_remove);
+  telebezel::AccountManifest remove_manifest{1,          interrupted_remove,
+                                             generation, false,
+                                             1,          1,
+                                             "removing", "91112233-4455-4677-8899-aabbccddeeff",
+                                             false,      nullptr,
+                                             "",         "closing"};
+  registry.write(
+      remove_manifest,
+      nlohmann::json{{"id", "51112233-4455-4677-8899-aabbccddeeff"}, {"mode", "direct"}, {"http_only", false}});
+
+  runtime.start();
+  auto resumed_logout = command(interrupted_logout);
+  resumed_logout["lifecycle"] = "logout_pending";
+  resumed_logout["operation_id"] = logout_manifest.operation_id;
+  resumed_logout["logout_operation_id"] = logout_manifest.operation_id;
+  const auto before_resumed_logout = transport->sent();
+  const auto logout_requests_before = std::count_if(before_resumed_logout.begin(), before_resumed_logout.end(),
+                                                    [](const auto &item) { return item.second == td_api::logOut::ID; });
+  require(!runtime.logout(interrupted_logout, resumed_logout).value("completed", false));
+  wait_until([&] { return runtime.snapshot(interrupted_logout).value("authorization_state", "") == "closed"; });
+  const auto after_resumed_logout = transport->sent();
+  require(std::count_if(after_resumed_logout.begin(), after_resumed_logout.end(), [](const auto &item) {
+            return item.second == td_api::logOut::ID;
+          }) == logout_requests_before + 1);
+  require(runtime.logout(interrupted_logout, resumed_logout).value("completed", false));
+
+  auto resumed_remove = command(interrupted_remove);
+  resumed_remove["lifecycle"] = "removing";
+  resumed_remove["operation_id"] = remove_manifest.operation_id;
+  require(runtime.remove(interrupted_remove, resumed_remove).value("completed", false));
+  require(registry.read(interrupted_remove)->tombstone);
+
+  auto id_only = command(missing_proxy);
+  id_only["proxy"] = nlohmann::json{{"id", "a1112233-4455-4677-8899-aabbccddeeff"}};
+  require(runtime.reconcile(missing_proxy, id_only).value("code", "") == "configuration.missing");
+  id_only["proxy"] =
+      nlohmann::json{{"id", "a1112233-4455-4677-8899-aabbccddeeff"}, {"mode", "direct"}, {"http_only", false}};
+  require(runtime.reconcile(missing_proxy, id_only).value("runtime_available", false));
   runtime.stop();
   std::filesystem::remove_all(root);
   return 0;

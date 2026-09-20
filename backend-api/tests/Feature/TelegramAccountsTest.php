@@ -8,6 +8,7 @@ use App\Models\TelegramAccount;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
@@ -110,6 +111,42 @@ final class TelegramAccountsTest extends TestCase
         ])->assertStatus(409)->assertJsonPath('error.code', 'operation.conflict');
     }
 
+    public function test_proxy_update_keeps_database_revision_unchanged_until_tdlib_has_the_full_configuration(): void
+    {
+        $account = $this->account();
+        $attempt = 0;
+        Http::fake(function ($request) use (&$attempt) {
+            $attempt++;
+            if ($attempt === 1) {
+                throw new ConnectionException('runtime unavailable');
+            }
+
+            return Http::response(['data' => ['applied_revision' => 2, 'completed' => true, 'runtime_available' => true]]);
+        });
+        $payload = [
+            'desired_revision' => 1,
+            'id' => '31112233-4455-4677-8899-aabbccddeeff',
+            'mode' => 'http',
+            'host' => 'proxy.example',
+            'port' => 8080,
+            'username' => 'proxy-user',
+            'password' => 'proxy-secret-sentinel',
+        ];
+
+        $this->withToken($this->token)->putJson("/v1/telegram/accounts/{$account->id}/proxy", $payload)
+            ->assertStatus(503)->assertJsonPath('error.code', 'service.tdlib_unavailable');
+        $this->assertDatabaseHas('telegram_accounts', [
+            'id' => $account->id,
+            'desired_revision' => 1,
+            'proxy_id' => null,
+        ]);
+
+        $this->withToken($this->token)->putJson("/v1/telegram/accounts/{$account->id}/proxy", $payload)
+            ->assertAccepted()->assertJsonPath('data.desired_revision', 2);
+        Http::assertSent(fn ($request): bool => $request->method() === 'PUT'
+            && data_get($request->data(), 'proxy.password') === 'proxy-secret-sentinel');
+    }
+
     public function test_late_confirmation_cannot_acknowledge_a_newer_intent(): void
     {
         Http::fake(function () {
@@ -210,6 +247,34 @@ final class TelegramAccountsTest extends TestCase
         Http::fake(['*' => Http::response(['data' => ['applied_revision' => 2, 'completed' => true]])]);
         $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
         $this->assertSame(AccountLifecycle::Removed, TelegramAccount::withTrashed()->findOrFail($account->id)->lifecycle);
+    }
+
+    public function test_reconciliation_resumes_after_the_persisted_cursor_and_skips_backoff_accounts(): void
+    {
+        foreach ([
+            '10112233-4455-4677-8899-aabbccddeeff',
+            '20112233-4455-4677-8899-aabbccddeeff',
+            '30112233-4455-4677-8899-aabbccddeeff',
+        ] as $id) {
+            TelegramAccount::query()->create([
+                'id' => $id,
+                'label' => 'Cursor test',
+                'storage_generation' => fake()->uuid(),
+                'lifecycle' => AccountLifecycle::Active,
+                'desired_revision' => 1,
+            ]);
+        }
+        Cache::forever('telebezel:accounts-reconcile:cursor:1', '20112233-4455-4677-8899-aabbccddeeff');
+        Cache::put('telebezel:accounts-reconcile:backoff:10112233-4455-4677-8899-aabbccddeeff', true, now()->addMinute());
+        Http::fake(['*' => Http::response(['data' => ['applied_revision' => 1]])]);
+
+        $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
+
+        $requests = Http::recorded()->map(fn ($pair) => basename(parse_url($pair[0]->url(), PHP_URL_PATH)))->all();
+        $this->assertSame([
+            '30112233-4455-4677-8899-aabbccddeeff',
+            '20112233-4455-4677-8899-aabbccddeeff',
+        ], $requests);
     }
 
     public function test_identity_is_transient_redacted_and_authorization_response_is_projected(): void

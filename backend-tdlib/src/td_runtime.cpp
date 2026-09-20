@@ -90,10 +90,11 @@ void TdRuntime::start() {
       account.use_test_dc = manifest.use_test_dc;
       account.lifecycle = manifest.lifecycle;
       account.operation_id = manifest.operation_id;
+      account.operation_phase = manifest.operation_phase;
       account.revision_fingerprint = manifest.content_hash;
       account.proxy = manifest.proxy;
       account.tombstone = manifest.tombstone;
-      account.closed = manifest.tombstone || manifest.lifecycle == "logout_pending";
+      account.closed = manifest.tombstone;
       accounts_.emplace(account.uuid, std::move(account));
       std::cerr << nlohmann::json{{"event", "account_awaiting_reconciliation"},
                                   {"account_uuid", manifest.uuid},
@@ -274,14 +275,14 @@ nlohmann::json TdRuntime::reconcile(const std::string &uuid, const nlohmann::jso
       return safe_error("storage.missing", 409);
     if (account->busy)
       return safe_error("operation.conflict", 409);
+    const auto requested_proxy = command.value("proxy", nlohmann::json::object());
+    if (requested_proxy.size() == 1 && requested_proxy.contains("id") &&
+        account->proxy.value("id", "") != requested_proxy.value("id", ""))
+      return safe_error("configuration.missing", 409);
     account->busy = true;
     account->revision = revision;
     account->lifecycle = command.value("lifecycle", "provisioning");
-    const auto requested_proxy = command.value("proxy", nlohmann::json::object());
-    if (requested_proxy.size() == 1 && requested_proxy.contains("id")) {
-      if (account->proxy.value("id", "") != requested_proxy.value("id", ""))
-        return safe_error("configuration.missing", 409);
-    } else {
+    if (!(requested_proxy.size() == 1 && requested_proxy.contains("id"))) {
       account->proxy = requested_proxy;
     }
     account->operation_id = nullable_string(command, "operation_id");
@@ -299,6 +300,7 @@ nlohmann::json TdRuntime::reconcile(const std::string &uuid, const nlohmann::jso
                              account->operation_id,
                              false,
                              nullptr,
+                             "",
                              ""};
     manifest.content_hash = account->revision_fingerprint;
     registry_.write(manifest, account->proxy);
@@ -347,6 +349,8 @@ void TdRuntime::activate(Account &account) {
   std::string uuid;
   {
     std::lock_guard lock(mutex_);
+    if (account.client_id != 0 && account.closing)
+      throw std::runtime_error("operation.outcome_unknown");
     if (account.client_id != 0 && !account.closed)
       return;
     uuid = account.uuid;
@@ -398,14 +402,18 @@ void TdRuntime::activate(Account &account) {
     if (!response || response->get_id() == td_api::error::ID)
       throw std::runtime_error("configuration.invalid");
   } catch (...) {
-    transport_->send(client, next_id(), td_api::make_object<td_api::close>());
-    std::lock_guard lock(mutex_);
-    client_accounts_.erase(client);
-    if (account.client_id == client) {
-      account.client_id = 0;
-      account.closed = true;
+    const auto failure = std::current_exception();
+    {
+      std::lock_guard lock(mutex_);
+      if (account.client_id == client)
+        account.closing = true;
     }
-    throw;
+    transport_->send(client, next_id(), td_api::make_object<td_api::close>());
+    std::unique_lock lock(mutex_);
+    condition_.wait_for(lock, std::chrono::seconds(8),
+                        [&account, client] { return account.client_id != client || account.closed; });
+    lock.unlock();
+    std::rethrow_exception(failure);
   }
 }
 
@@ -667,6 +675,7 @@ void TdRuntime::handle_update(std::int32_t client_id, td_api::Object &object) {
     }
     if (state_id == td_api::authorizationStateClosed::ID) {
       account.closed = true;
+      account.closing = false;
       if (account.client_id == client_id)
         account.client_id = 0;
       client_accounts_.erase(mapped);
@@ -755,104 +764,122 @@ nlohmann::json TdRuntime::authorization_action(const std::string &uuid, const nl
 }
 
 nlohmann::json TdRuntime::logout(const std::string &uuid, const nlohmann::json &command) {
-  std::int32_t client = 0;
-  Account *selected = nullptr;
-  bool resume_closed = false;
-  bool persist_intent = false;
-  AccountManifest intent_manifest;
-  nlohmann::json intent_proxy;
+  Account *account = nullptr;
+  bool new_operation = false;
   const std::string fingerprint = command_fingerprint(command);
+  const std::string operation_id = nullable_string(command, "logout_operation_id");
   {
     std::lock_guard lock(mutex_);
-    auto &account = validated_account(uuid, command);
-    if (account.revision == command.at("revision").get<std::uint64_t>() && !account.revision_fingerprint.empty() &&
-        account.revision_fingerprint != fingerprint)
+    account = &validated_account(uuid, command);
+    const auto revision = command.at("revision").get<std::uint64_t>();
+    if (account->revision == revision && !account->revision_fingerprint.empty() &&
+        account->revision_fingerprint != fingerprint)
       return safe_error("operation.conflict", 409);
-    if (account.operation_id == nullable_string(command, "logout_operation_id") &&
-        account.lifecycle == "logout_pending") {
-      if (!account.closed)
-        return account_json(account);
-      if (account.busy)
-        return safe_error("operation.conflict", 409);
-      account.busy = true;
-      selected = &account;
-      resume_closed = true;
+    if (account->revision == revision && account->lifecycle == "logout_pending" &&
+        account->operation_id != operation_id)
+      return safe_error("operation.conflict", 409);
+    const bool resuming = account->revision == revision && account->lifecycle == "logout_pending" &&
+                          account->operation_id == operation_id;
+    if (!resuming) {
+      account->revision = revision;
+      account->lifecycle = "logout_pending";
+      account->operation_id = operation_id;
+      account->operation_phase = "intent";
+      account->revision_fingerprint = fingerprint;
+      new_operation = true;
     } else {
-      if (account.busy)
-        return safe_error("operation.conflict", 409);
-      account.busy = true;
-      account.revision = command.at("revision").get<std::uint64_t>();
-      account.lifecycle = "logout_pending";
-      account.operation_id = nullable_string(command, "logout_operation_id");
-      account.revision_fingerprint = fingerprint;
-      client = account.client_id;
-      selected = &account;
-      intent_manifest = {1,
-                         uuid,
-                         account.generation,
-                         config_.use_test_dc,
-                         1,
-                         account.revision,
-                         account.lifecycle,
-                         account.operation_id,
-                         false,
-                         nullptr,
-                         ""};
-      intent_manifest.content_hash = account.revision_fingerprint;
-      intent_proxy = account.proxy;
-      persist_intent = true;
+      if (account->revision_fingerprint.empty())
+        account->revision_fingerprint = fingerprint;
+      if (account->operation_phase.empty()) {
+        // Legacy manifests are an intent, never proof that logOut reached TDLib.
+        account->operation_phase = "intent";
+      }
     }
+    if (account->busy)
+      return safe_error("operation.conflict", 409);
+    account->busy = true;
   }
-  if (persist_intent) {
-    try {
-      registry_.write(intent_manifest, intent_proxy);
-    } catch (...) {
-      std::lock_guard lock(mutex_);
-      selected->busy = false;
-      throw;
-    }
-  }
-  if (resume_closed) {
-    try {
-      activate(*selected);
-    } catch (...) {
-      std::lock_guard lock(mutex_);
-      selected->busy = false;
-      throw;
-    }
+
+  const auto persist = [&](const std::string &phase, const std::string &lifecycle,
+                           const std::string &persisted_operation) {
     AccountManifest manifest;
     nlohmann::json proxy;
-    std::uint64_t revision = 0;
     {
       std::lock_guard lock(mutex_);
-      selected->lifecycle = "active";
-      selected->operation_id.clear();
-      selected->reconciled = true;
-      selected->busy = false;
-      manifest = {1,       uuid, selected->generation, config_.use_test_dc, 1, selected->revision, "active", "", false,
-                  nullptr, ""};
-      manifest.content_hash = selected->revision_fingerprint;
-      proxy = selected->proxy;
-      revision = selected->revision;
+      account->operation_phase = phase;
+      manifest = {1,
+                  uuid,
+                  account->generation,
+                  config_.use_test_dc,
+                  1,
+                  account->revision,
+                  lifecycle,
+                  persisted_operation,
+                  false,
+                  nullptr,
+                  "",
+                  ""};
+      manifest.content_hash = account->revision_fingerprint;
+      manifest.operation_phase = phase;
+      proxy = account->proxy;
     }
     registry_.write(manifest, proxy);
-    return {{"applied_revision", revision}, {"completed", true}};
-  }
-  const auto response = request(client, td_api::make_object<td_api::logOut>());
-  if (td_error_code(response, 504)) {
+  };
+
+  try {
+    if (new_operation)
+      persist("intent", "logout_pending", operation_id);
+
+    bool closed = false;
+    std::string phase;
+    {
+      std::lock_guard lock(mutex_);
+      closed = account->closed;
+      phase = account->operation_phase;
+    }
+    if (closed && phase == "executing") {
+      persist("confirmed", "logout_pending", operation_id);
+      phase = "confirmed";
+    }
+    if (phase == "confirmed") {
+      activate(*account);
+      persist("", "active", "");
+      std::lock_guard lock(mutex_);
+      account->lifecycle = "active";
+      account->operation_id.clear();
+      account->operation_phase.clear();
+      account->reconciled = true;
+      account->busy = false;
+      return {{"applied_revision", account->revision}, {"completed", true}};
+    }
+
+    activate(*account);
+    persist("executing", "logout_pending", operation_id);
+    std::int32_t client = 0;
+    {
+      std::lock_guard lock(mutex_);
+      client = account->client_id;
+    }
+    const auto response = request(client, td_api::make_object<td_api::logOut>());
+    if (td_error_code(response, 504)) {
+      std::lock_guard lock(mutex_);
+      account->busy = false;
+      return safe_error("operation.outcome_unknown", 504);
+    }
+    if (!response || response->get_id() == td_api::error::ID) {
+      std::lock_guard lock(mutex_);
+      account->busy = false;
+      return safe_error(td_error_message(response, "service.busy") ? "service.busy" : "telegram.operation_failed",
+                        td_error_message(response, "service.busy") ? 503 : 502);
+    }
     std::lock_guard lock(mutex_);
-    accounts_.at(uuid).busy = false;
-    return safe_error("operation.outcome_unknown", 504);
-  }
-  if (!response || response->get_id() == td_api::error::ID) {
+    account->busy = false;
+    return {{"applied_revision", account->revision}, {"completed", false}};
+  } catch (...) {
     std::lock_guard lock(mutex_);
-    accounts_.at(uuid).busy = false;
-    return safe_error(td_error_message(response, "service.busy") ? "service.busy" : "telegram.operation_failed",
-                      td_error_message(response, "service.busy") ? 503 : 502);
+    account->busy = false;
+    throw;
   }
-  std::lock_guard lock(mutex_);
-  accounts_.at(uuid).busy = false;
-  return {{"applied_revision", accounts_.at(uuid).revision}, {"completed", false}};
 }
 
 nlohmann::json TdRuntime::update_proxy(const std::string &uuid, const nlohmann::json &command) {
@@ -865,6 +892,9 @@ nlohmann::json TdRuntime::update_proxy(const std::string &uuid, const nlohmann::
     account = &validated_account(uuid, command);
     if (account->revision == command.at("revision").get<std::uint64_t>() && !account->revision_fingerprint.empty()) {
       if (account->revision_fingerprint != fingerprint)
+        return safe_error("operation.conflict", 409);
+      const auto requested_proxy = command.value("proxy", nlohmann::json::object());
+      if (!(requested_proxy.size() == 1 && requested_proxy.contains("id")) && account->proxy != requested_proxy)
         return safe_error("operation.conflict", 409);
       auto result = account_json(*account);
       result["completed"] = account->operation_id.empty();
@@ -887,6 +917,7 @@ nlohmann::json TdRuntime::update_proxy(const std::string &uuid, const nlohmann::
                        account->operation_id,
                        false,
                        nullptr,
+                       "",
                        ""};
     intent_manifest.content_hash = account->revision_fingerprint;
     intent_proxy = account->proxy;
@@ -927,8 +958,10 @@ nlohmann::json TdRuntime::update_proxy(const std::string &uuid, const nlohmann::
 nlohmann::json TdRuntime::remove(const std::string &uuid, const nlohmann::json &command) {
   Account *account = nullptr;
   const std::string fingerprint = command_fingerprint(command);
+  const std::string operation_id = nullable_string(command, "operation_id");
   AccountManifest intent_manifest;
   nlohmann::json intent_proxy;
+  bool new_operation = false;
   {
     std::lock_guard lock(mutex_);
     if (const auto existing = accounts_.find(uuid); existing != accounts_.end() && existing->second.tombstone) {
@@ -940,18 +973,32 @@ nlohmann::json TdRuntime::remove(const std::string &uuid, const nlohmann::json &
       return safe_error("account.gone", 410);
     }
     account = &validated_account(uuid, command);
+    if (account->revision == command.at("revision").get<std::uint64_t>() && account->lifecycle == "removing" &&
+        account->operation_id != operation_id)
+      return safe_error("operation.conflict", 409);
     if (account->revision == command.at("revision").get<std::uint64_t>() && !account->revision_fingerprint.empty()) {
-      return account->revision_fingerprint == fingerprint && account->lifecycle == "removed"
-                 ? nlohmann::json{{"applied_revision", account->revision}, {"completed", true}}
-                 : safe_error("operation.conflict", 409);
+      if (account->revision_fingerprint != fingerprint)
+        return safe_error("operation.conflict", 409);
+      if (account->lifecycle == "removed")
+        return {{"applied_revision", account->revision}, {"completed", true}};
+      if (account->lifecycle != "removing" || account->operation_id != operation_id)
+        return safe_error("operation.conflict", 409);
     }
     if (account->busy)
       return safe_error("operation.conflict", 409);
     account->busy = true;
-    account->revision = command.at("revision").get<std::uint64_t>();
-    account->lifecycle = "removing";
-    account->operation_id = nullable_string(command, "operation_id");
-    account->revision_fingerprint = fingerprint;
+    if (account->revision != command.at("revision").get<std::uint64_t>() || account->lifecycle != "removing") {
+      account->revision = command.at("revision").get<std::uint64_t>();
+      account->lifecycle = "removing";
+      account->operation_id = operation_id;
+      account->revision_fingerprint = fingerprint;
+      account->operation_phase = "intent";
+      new_operation = true;
+    } else if (account->operation_phase.empty()) {
+      account->operation_phase = "intent";
+    }
+    if (account->revision_fingerprint.empty())
+      account->revision_fingerprint = fingerprint;
     intent_manifest = {1,
                        uuid,
                        account->generation,
@@ -962,18 +1009,21 @@ nlohmann::json TdRuntime::remove(const std::string &uuid, const nlohmann::json &
                        account->operation_id,
                        false,
                        nullptr,
+                       "",
                        ""};
     intent_manifest.content_hash = account->revision_fingerprint;
+    intent_manifest.operation_phase = account->operation_phase;
     intent_proxy = account->proxy;
   }
   try {
+    if (new_operation)
+      registry_.write(intent_manifest, intent_proxy);
+    {
+      std::lock_guard lock(mutex_);
+      account->operation_phase = "closing";
+      intent_manifest.operation_phase = "closing";
+    }
     registry_.write(intent_manifest, intent_proxy);
-  } catch (...) {
-    std::lock_guard lock(mutex_);
-    account->busy = false;
-    throw;
-  }
-  try {
     close_account(*account, true);
     registry_.remove_account_directory(uuid);
   } catch (...) {
@@ -991,8 +1041,10 @@ nlohmann::json TdRuntime::remove(const std::string &uuid, const nlohmann::json &
                             account->operation_id,
                             true,
                             nullptr,
+                            "",
                             ""};
   tombstone.content_hash = account->revision_fingerprint;
+  tombstone.operation_phase = "confirmed";
   try {
     registry_.write(tombstone, nlohmann::json{{"mode", "inherit"}, {"http_only", false}});
   } catch (...) {
@@ -1006,13 +1058,16 @@ nlohmann::json TdRuntime::remove(const std::string &uuid, const nlohmann::json &
   account->reconciled = false;
   account->busy = false;
   account->lifecycle = "removed";
+  account->operation_phase = "confirmed";
   return {{"applied_revision", account->revision}, {"completed", true}};
 }
 
 void TdRuntime::close_account(Account &account, bool destroy) {
   std::int32_t client = 0;
   {
-    std::lock_guard lock(mutex_);
+    std::unique_lock lock(mutex_);
+    if (account.closing && !condition_.wait_for(lock, std::chrono::seconds(8), [&account] { return !account.closing; }))
+      throw std::runtime_error("operation.outcome_unknown");
     if (account.client_id == 0 || account.closed)
       return;
     client = account.client_id;

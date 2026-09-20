@@ -130,7 +130,8 @@ final class TelegramAccountService
     public function updateProxy(string $id, array $input, string $requestId): TelegramAccount
     {
         $proxy = $this->normalizedProxy($input);
-        $account = DB::transaction(function () use ($id, $input, $proxy): TelegramAccount {
+
+        return DB::transaction(function () use ($id, $input, $proxy, $requestId): TelegramAccount {
             $account = TelegramAccount::query()->whereKey($id)->lockForUpdate()->first();
             if ($account === null || $account->lifecycle === AccountLifecycle::Removed) {
                 throw new ApiException($account === null ? 'account.not_found' : 'account.gone', $account === null ? 404 : 410);
@@ -145,23 +146,18 @@ final class TelegramAccountService
             $account->desired_revision++;
             $account->operation_id = (string) Str::uuid();
             $account->last_error_code = null;
+            $data = $this->tdlib->updateProxy($id, $this->command($account, $proxy), $requestId);
+            if (($data['applied_revision'] ?? null) === $account->desired_revision) {
+                $account->applied_revision = $account->desired_revision;
+            }
+            if (($data['completed'] ?? false) === true) {
+                $account->operation_id = null;
+            }
+            $this->applySnapshot($account, $data, false);
             $account->save();
 
             return $account;
         }, 3);
-        try {
-            $data = $this->tdlib->updateProxy($id, $this->command($account, $proxy), $requestId);
-        } catch (ApiException $exception) {
-            if ($exception->errorCode !== 'service.tdlib_unavailable') {
-                throw $exception;
-            }
-            $this->recordDeferredError($account, $exception->errorCode);
-
-            return $account->fresh();
-        }
-        $this->confirm($account, $data);
-
-        return $account->fresh();
     }
 
     /** @param array<string, mixed> $input

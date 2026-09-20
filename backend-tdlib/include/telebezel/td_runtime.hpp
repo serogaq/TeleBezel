@@ -49,6 +49,7 @@ private:
     std::string qr_link;
     std::string last_error;
     std::string operation_id;
+    std::string operation_phase;
     std::string revision_fingerprint;
     nlohmann::json proxy = {{"mode", "inherit"}, {"http_only", false}};
     nlohmann::json telegram_identity;
@@ -57,6 +58,7 @@ private:
     std::chrono::steady_clock::time_point resend_available_at{};
     bool reconciled{false};
     bool closed{false};
+    bool closing{false};
     bool tombstone{false};
     bool busy{false};
     std::chrono::steady_clock::time_point discovered_at{std::chrono::steady_clock::now()};

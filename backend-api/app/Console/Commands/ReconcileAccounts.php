@@ -41,21 +41,40 @@ final class ReconcileAccounts extends Command
                 [AccountLifecycle::LogoutPending->value, AccountLifecycle::Removing->value, AccountLifecycle::Provisioning->value],
                 [AccountLifecycle::Active->value],
             ];
-            foreach ($phases as $lifecycles) {
-                $continue = (clone $query)->whereIn('lifecycle', $lifecycles)->chunkById(25, function ($batch) use ($accounts, $requestId, $started): bool {
+            foreach ($phases as $phase => $lifecycles) {
+                $cursorKey = "telebezel:accounts-reconcile:cursor:{$phase}";
+                $cursor = Cache::get($cursorKey);
+                $cursor = is_string($cursor) ? $cursor : null;
+                $process = function ($batch) use ($accounts, $requestId, $started, $cursorKey): bool {
                     foreach ($batch as $account) {
                         if ((hrtime(true) - $started) / 1_000_000_000 >= 45) {
                             return false;
                         }
+                        Cache::forever($cursorKey, $account->id);
+                        $backoffKey = "telebezel:accounts-reconcile:backoff:{$account->id}";
+                        if (Cache::has($backoffKey)) {
+                            continue;
+                        }
                         try {
                             $accounts->reconcile($account, $requestId);
+                            Cache::forget($backoffKey);
                         } catch (ApiException $exception) {
+                            Cache::put($backoffKey, true, now()->addMinute());
                             $this->warn("{$account->id}: {$exception->errorCode}");
                         }
                     }
 
                     return true;
-                }, 'id');
+                };
+                $after = (clone $query)->whereIn('lifecycle', $lifecycles)->orderBy('id');
+                if ($cursor !== null) {
+                    $after->where('id', '>', $cursor);
+                }
+                $continue = $after->chunkById(25, $process, 'id');
+                if ($continue !== false && $cursor !== null && (hrtime(true) - $started) / 1_000_000_000 < 45) {
+                    $continue = (clone $query)->whereIn('lifecycle', $lifecycles)->where('id', '<=', $cursor)
+                        ->orderBy('id')->chunkById(25, $process, 'id');
+                }
                 if ($continue === false || (hrtime(true) - $started) / 1_000_000_000 >= 45) {
                     break;
                 }

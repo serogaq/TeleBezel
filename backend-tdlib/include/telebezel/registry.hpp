@@ -20,11 +20,12 @@ struct AccountManifest {
   bool tombstone{false};
   nlohmann::json proxy{nlohmann::json::object()};
   std::string content_hash;
+  std::string operation_phase;
 };
 
 class Registry final {
 public:
-  explicit Registry(std::filesystem::path root);
+  Registry(std::filesystem::path root, std::filesystem::path master_key_file);
   ~Registry();
   Registry(const Registry &) = delete;
   Registry &operator=(const Registry &) = delete;
@@ -44,6 +45,7 @@ private:
   std::filesystem::path root_;
   std::filesystem::path registry_root_;
   std::filesystem::path accounts_root_;
+  std::filesystem::path master_key_file_;
   int lock_fd_{-1};
 };
 bool valid_uuid(const std::string &value);

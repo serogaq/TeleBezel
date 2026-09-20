@@ -22,6 +22,27 @@ std::uint8_t nibble(char value) {
   }
   throw std::runtime_error("invalid hexadecimal value");
 }
+std::array<std::uint8_t, 32> derive_key(const std::array<std::uint8_t, 32> &master_key, const std::string &uuid,
+                                        const char *salt, std::size_t salt_size) {
+  const auto info = uuid_bytes(uuid);
+  std::array<std::uint8_t, 32> output{};
+  EVP_PKEY_CTX *context = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+  if (context == nullptr || EVP_PKEY_derive_init(context) <= 0 ||
+      EVP_PKEY_CTX_set_hkdf_md(context, EVP_sha256()) <= 0 ||
+      EVP_PKEY_CTX_set1_hkdf_salt(context, reinterpret_cast<const unsigned char *>(salt), salt_size) <= 0 ||
+      EVP_PKEY_CTX_set1_hkdf_key(context, master_key.data(), master_key.size()) <= 0 ||
+      EVP_PKEY_CTX_add1_hkdf_info(context, info.data(), info.size()) <= 0) {
+    EVP_PKEY_CTX_free(context);
+    throw std::runtime_error("key derivation failed");
+  }
+  std::size_t size = output.size();
+  if (EVP_PKEY_derive(context, output.data(), &size) <= 0 || size != output.size()) {
+    EVP_PKEY_CTX_free(context);
+    throw std::runtime_error("key derivation failed");
+  }
+  EVP_PKEY_CTX_free(context);
+  return output;
+}
 } // namespace
 
 std::array<std::uint8_t, 32> read_master_key(const std::filesystem::path &path) {
@@ -87,24 +108,12 @@ std::array<std::uint8_t, 16> uuid_bytes(const std::string &uuid) {
 std::array<std::uint8_t, 32> derive_database_key(const std::array<std::uint8_t, 32> &master_key,
                                                  const std::string &uuid) {
   constexpr char salt[] = "TeleBezel/TDLib/HKDF-SHA256/v1";
-  const auto info = uuid_bytes(uuid);
-  std::array<std::uint8_t, 32> output{};
-  EVP_PKEY_CTX *context = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
-  if (context == nullptr || EVP_PKEY_derive_init(context) <= 0 ||
-      EVP_PKEY_CTX_set_hkdf_md(context, EVP_sha256()) <= 0 ||
-      EVP_PKEY_CTX_set1_hkdf_salt(context, reinterpret_cast<const unsigned char *>(salt), sizeof(salt) - 1) <= 0 ||
-      EVP_PKEY_CTX_set1_hkdf_key(context, master_key.data(), master_key.size()) <= 0 ||
-      EVP_PKEY_CTX_add1_hkdf_info(context, info.data(), info.size()) <= 0) {
-    EVP_PKEY_CTX_free(context);
-    throw std::runtime_error("database key derivation failed");
-  }
-  std::size_t size = output.size();
-  if (EVP_PKEY_derive(context, output.data(), &size) <= 0 || size != output.size()) {
-    EVP_PKEY_CTX_free(context);
-    throw std::runtime_error("database key derivation failed");
-  }
-  EVP_PKEY_CTX_free(context);
-  return output;
+  return derive_key(master_key, uuid, salt, sizeof(salt) - 1);
+}
+
+std::array<std::uint8_t, 32> derive_proxy_key(const std::array<std::uint8_t, 32> &master_key, const std::string &uuid) {
+  constexpr char salt[] = "TeleBezel/Proxy/HKDF-SHA256/v1";
+  return derive_key(master_key, uuid, salt, sizeof(salt) - 1);
 }
 
 std::string hex_encode(const std::uint8_t *data, std::size_t size) {

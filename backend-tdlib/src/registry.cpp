@@ -1,8 +1,11 @@
 #include "telebezel/registry.hpp"
+#include "telebezel/crypto.hpp"
 #include <cerrno>
 #include <fcntl.h>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <regex>
 #include <stdexcept>
 #include <sys/file.h>
@@ -11,6 +14,97 @@
 
 namespace telebezel {
 namespace {
+std::vector<std::uint8_t> hex_decode(const std::string &value) {
+  if (value.size() % 2 != 0)
+    throw std::runtime_error("storage.corrupt");
+  const auto digit = [](char character) -> std::uint8_t {
+    if (character >= '0' && character <= '9')
+      return static_cast<std::uint8_t>(character - '0');
+    if (character >= 'a' && character <= 'f')
+      return static_cast<std::uint8_t>(character - 'a' + 10);
+    throw std::runtime_error("storage.corrupt");
+  };
+  std::vector<std::uint8_t> result(value.size() / 2);
+  for (std::size_t index = 0; index < result.size(); ++index)
+    result[index] = static_cast<std::uint8_t>((digit(value[index * 2]) << 4U) | digit(value[index * 2 + 1]));
+  return result;
+}
+
+nlohmann::json protect_proxy(const nlohmann::json &proxy, const std::array<std::uint8_t, 32> &key,
+                             const std::string &uuid) {
+  const std::string plaintext = proxy.dump();
+  std::array<std::uint8_t, 12> nonce{};
+  std::array<std::uint8_t, 16> tag{};
+  std::vector<std::uint8_t> ciphertext(plaintext.size() + 16);
+  if (RAND_bytes(nonce.data(), nonce.size()) != 1)
+    throw std::runtime_error("storage.io_error");
+  EVP_CIPHER_CTX *context = EVP_CIPHER_CTX_new();
+  int written = 0;
+  int total = 0;
+  const bool initialized =
+      context != nullptr && EVP_EncryptInit_ex(context, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1 &&
+      EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_IVLEN, nonce.size(), nullptr) == 1 &&
+      EVP_EncryptInit_ex(context, nullptr, nullptr, key.data(), nonce.data()) == 1 &&
+      EVP_EncryptUpdate(context, nullptr, &written, reinterpret_cast<const unsigned char *>(uuid.data()),
+                        uuid.size()) == 1 &&
+      EVP_EncryptUpdate(context, ciphertext.data(), &written, reinterpret_cast<const unsigned char *>(plaintext.data()),
+                        plaintext.size()) == 1;
+  if (initialized)
+    total = written;
+  const bool finalized = initialized && EVP_EncryptFinal_ex(context, ciphertext.data() + total, &written) == 1;
+  if (finalized)
+    total += written;
+  const bool tagged = finalized && EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_GET_TAG, tag.size(), tag.data()) == 1;
+  EVP_CIPHER_CTX_free(context);
+  if (!tagged)
+    throw std::runtime_error("storage.io_error");
+  ciphertext.resize(static_cast<std::size_t>(total));
+  return {{"version", 1},
+          {"nonce", hex_encode(nonce.data(), nonce.size())},
+          {"ciphertext", hex_encode(ciphertext.data(), ciphertext.size())},
+          {"tag", hex_encode(tag.data(), tag.size())}};
+}
+
+nlohmann::json unprotect_proxy(const nlohmann::json &protected_proxy, const std::array<std::uint8_t, 32> &key,
+                               const std::string &uuid) {
+  try {
+    if (protected_proxy.at("version").get<int>() != 1)
+      throw std::runtime_error("storage.corrupt");
+    const auto nonce = hex_decode(protected_proxy.at("nonce").get<std::string>());
+    const auto ciphertext = hex_decode(protected_proxy.at("ciphertext").get<std::string>());
+    const auto tag = hex_decode(protected_proxy.at("tag").get<std::string>());
+    if (nonce.size() != 12 || tag.size() != 16)
+      throw std::runtime_error("storage.corrupt");
+    std::vector<std::uint8_t> plaintext(ciphertext.size() + 1);
+    EVP_CIPHER_CTX *context = EVP_CIPHER_CTX_new();
+    int written = 0;
+    int total = 0;
+    const bool initialized =
+        context != nullptr && EVP_DecryptInit_ex(context, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1 &&
+        EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_IVLEN, nonce.size(), nullptr) == 1 &&
+        EVP_DecryptInit_ex(context, nullptr, nullptr, key.data(), nonce.data()) == 1 &&
+        EVP_DecryptUpdate(context, nullptr, &written, reinterpret_cast<const unsigned char *>(uuid.data()),
+                          uuid.size()) == 1 &&
+        EVP_DecryptUpdate(context, plaintext.data(), &written, ciphertext.data(), ciphertext.size()) == 1;
+    if (initialized)
+      total = written;
+    const bool tagged = initialized && EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_TAG, tag.size(),
+                                                           const_cast<std::uint8_t *>(tag.data())) == 1;
+    const bool finalized = tagged && EVP_DecryptFinal_ex(context, plaintext.data() + total, &written) == 1;
+    if (finalized)
+      total += written;
+    EVP_CIPHER_CTX_free(context);
+    if (!finalized)
+      throw std::runtime_error("storage.invalid_key");
+    const auto result = nlohmann::json::parse(plaintext.begin(), plaintext.begin() + total);
+    if (!result.is_object())
+      throw std::runtime_error("storage.corrupt");
+    return result;
+  } catch (const nlohmann::json::exception &) {
+    throw std::runtime_error("storage.corrupt");
+  }
+}
+
 void ensure_plain_directory(const std::filesystem::path &path) {
   std::error_code error;
   const auto status = std::filesystem::symlink_status(path, error);
@@ -48,8 +142,9 @@ bool valid_uuid(const std::string &value) {
   return std::regex_match(value, expression);
 }
 
-Registry::Registry(std::filesystem::path root)
-    : root_(std::move(root)), registry_root_(root_ / "registry"), accounts_root_(root_ / "accounts") {}
+Registry::Registry(std::filesystem::path root, std::filesystem::path master_key_file)
+    : root_(std::move(root)), registry_root_(root_ / "registry"), accounts_root_(root_ / "accounts"),
+      master_key_file_(std::move(master_key_file)) {}
 
 Registry::~Registry() {
   if (lock_fd_ >= 0) {
@@ -123,11 +218,19 @@ std::optional<AccountManifest> Registry::read(const std::string &uuid) const {
     result.operation_id = json.contains("operation_id") && json["operation_id"].is_string()
                               ? json["operation_id"].get<std::string>()
                               : std::string{};
+    result.operation_phase = json.contains("operation_phase") && json["operation_phase"].is_string()
+                                 ? json["operation_phase"].get<std::string>()
+                                 : std::string{};
     result.tombstone = json.value("tombstone", false);
     result.content_hash = json.contains("content_hash") && json["content_hash"].is_string()
                               ? json["content_hash"].get<std::string>()
                               : std::string{};
-    result.proxy = json.at("proxy");
+    result.proxy =
+        unprotect_proxy(json.at("proxy_protected"), derive_proxy_key(read_master_key(master_key_file_), uuid), uuid);
+  } catch (const std::runtime_error &exception) {
+    if (std::string(exception.what()) == "storage.invalid_key")
+      throw;
+    throw std::runtime_error("storage.corrupt");
   } catch (const std::exception &) {
     throw std::runtime_error("storage.corrupt");
   }
@@ -184,7 +287,7 @@ std::map<std::string, std::string> Registry::manifest_errors() const {
       static_cast<void>(read(uuid));
     } catch (const std::exception &exception) {
       const std::string code = exception.what();
-      result.emplace(uuid, code == "storage.unsafe_path" ? code : "storage.corrupt");
+      result.emplace(uuid, code == "storage.unsafe_path" || code == "storage.invalid_key" ? code : "storage.corrupt");
     }
   }
   return result;
@@ -213,9 +316,12 @@ void Registry::write(const AccountManifest &manifest, const nlohmann::json &prox
       {"revision", manifest.revision},
       {"lifecycle", manifest.lifecycle},
       {"operation_id", manifest.operation_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(manifest.operation_id)},
+      {"operation_phase",
+       manifest.operation_phase.empty() ? nlohmann::json(nullptr) : nlohmann::json(manifest.operation_phase)},
       {"tombstone", manifest.tombstone},
       {"content_hash", manifest.content_hash.empty() ? nlohmann::json(nullptr) : nlohmann::json(manifest.content_hash)},
-      {"proxy", proxy}};
+      {"proxy_protected",
+       protect_proxy(proxy, derive_proxy_key(read_master_key(master_key_file_), manifest.uuid), manifest.uuid)}};
   const std::string encoded = json.dump();
   const int descriptor = ::open(temporary.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (descriptor < 0) {

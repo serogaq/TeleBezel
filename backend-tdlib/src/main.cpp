@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
                  ? 0
                  : 1;
     }
-    telebezel::Registry registry(config.data_directory);
+    telebezel::Registry registry(config.data_directory, config.master_key_file);
     registry.open();
     telebezel::TdRuntime runtime(config, registry);
     runtime.start();

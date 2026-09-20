@@ -128,7 +128,7 @@ int main() {
                                std::filesystem::perm_options::replace);
   require(telebezel::read_master_key(master_path)[0] == 0);
   {
-    telebezel::Registry registry(registry_root);
+    telebezel::Registry registry(registry_root, master_path);
     registry.open();
     const std::string uuid = "00112233-4455-4677-8899-aabbccddeeff";
     const std::string generation = "11112233-4455-4677-8899-aabbccddeeff";
@@ -137,12 +137,19 @@ int main() {
     const std::string unsafe = "50112233-4455-4677-8899-aabbccddeeff";
     registry.ensure_account_directories(uuid);
     require(registry.account_directory_exists(uuid));
-    registry.write({1, uuid, generation, false, 1, 7, "active", "", false, nullptr, ""},
+    registry.write({1, uuid, generation, false, 1, 7, "active", "", false, nullptr, "", ""},
                    nlohmann::json{{"mode", "direct"}, {"http_only", false}});
     const auto manifest = registry.read(uuid);
     require(manifest.has_value());
     require(manifest->generation == generation);
     require(manifest->revision == 7);
+    {
+      std::ifstream stored(registry_root / "registry" / (uuid + ".json"));
+      const std::string encoded((std::istreambuf_iterator<char>(stored)), std::istreambuf_iterator<char>());
+      require(encoded.find("proxy_protected") != std::string::npos);
+      require(encoded.find("\"proxy\"") == std::string::npos);
+      require(encoded.find("direct") == std::string::npos);
+    }
     registry.ensure_account_directories(orphan);
     require(registry.orphan_account_ids() == std::vector<std::string>{orphan});
     {
@@ -166,7 +173,7 @@ int main() {
     require(rejected);
     bool second_owner_rejected = false;
     try {
-      telebezel::Registry second_owner(registry_root);
+      telebezel::Registry second_owner(registry_root, master_path);
       second_owner.open();
     } catch (const std::runtime_error &) {
       second_owner_rejected = true;
