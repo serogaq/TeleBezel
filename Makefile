@@ -67,7 +67,7 @@ api-check: ## Validate, format-check, analyze, and test backend-api
 tdlib-check: ## Configure, build, and test backend-tdlib
 	$(CLANG_FORMAT_BIN) --dry-run --Werror $$(find backend-tdlib/include backend-tdlib/src backend-tdlib/tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print)
 	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON $(TDLIB_CMAKE_ARGS)
-	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target telebezel-tdlib telebezel-tdlib-tests --parallel 2
+	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target telebezel-tdlib telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2
 	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target test
 
 workflow-audit: ## Run actionlint and zizmor through pinned tools
@@ -88,6 +88,7 @@ compose-build: ## Build both application images
 secrets-init: ## Create ignored local development secrets if absent
 	@umask 077; test -f secrets/postgres_password || openssl rand -base64 32 > secrets/postgres_password
 	@umask 077; test -f secrets/tdlib_internal_token || openssl rand -hex 32 > secrets/tdlib_internal_token
+	@umask 077; test -f secrets/tdlib_database_master_key || openssl rand -hex 32 > secrets/tdlib_database_master_key
 	@umask 077; test -f secrets/laravel_app_key || { printf 'base64:' > secrets/laravel_app_key; openssl rand -base64 32 | tr -d '\n' >> secrets/laravel_app_key; printf '\n' >> secrets/laravel_app_key; }
 	@$(MAKE) --no-print-directory secrets-provision
 
@@ -95,6 +96,7 @@ secrets-provision: ## Grant only required container UIDs access to secret files 
 	bash tests/secrets/provision_file.sh secrets/postgres_password 999 10001
 	bash tests/secrets/provision_file.sh secrets/laravel_app_key 10001
 	bash tests/secrets/provision_file.sh secrets/tdlib_internal_token 10001 10002
+	bash tests/secrets/provision_file.sh secrets/tdlib_database_master_key 10002
 
 db-migrate: ## Apply production-safe migrations explicitly
 	docker compose run --rm -e PGOPTIONS='-c statement_timeout=30000 -c lock_timeout=5000' backend-api php artisan telebezel:migrate-locked

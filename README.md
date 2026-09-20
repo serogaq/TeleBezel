@@ -1,7 +1,8 @@
 # TeleBezel
 
-TeleBezel is a modern Pebble Telegram client. This repository currently contains
-the Stage 0 foundation and connectivity proof, not Telegram features. Remote
+TeleBezel is a modern Pebble Telegram client. This repository contains the
+Stage 1 multi-account authorization and durable-session backend foundation; chats,
+messages, and watch-side Telegram UI remain outside this stage. Remote
 CI, cross-architecture release, RePebble staging, and physical-watch acceptance
 remain deployment gates rather than claims established by local tests.
 
@@ -23,6 +24,7 @@ make secrets-init
 docker compose up -d postgres backend-tdlib
 make db-migrate
 docker compose up -d backend-api
+docker compose exec backend-api php artisan telebezel:accounts-reconcile
 make api-client-issue NAME=my-pebble
 make integration-test
 ```
@@ -35,6 +37,10 @@ reachable hostname and port. Never expose the private TDLib or PostgreSQL ports.
 
 The persistence boundary is strict: PostgreSQL stores application-owned API
 state, while the TDLib volume stores Telegram-owned session and cache data.
+The API exposes account-slot, authorization, proxy, logout, and local-removal
+endpoints under `/v1/telegram/accounts`. After every deployment, run
+`telebezel:accounts-reconcile`; configure host cron to run `php artisan
+schedule:run` once per minute.
 
 For a standalone watch build, run `make app-build`; it writes and validates
 `app/build/app.pbw`. `make app-check` also runs the C and PebbleKit JS checks.

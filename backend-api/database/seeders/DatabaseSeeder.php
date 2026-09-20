@@ -8,6 +8,6 @@ final class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        // Stage 0 has no product seed data.
+        // Production account state is never seeded.
     }
 }

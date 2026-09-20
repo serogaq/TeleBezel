@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.11
 FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS build
 ARG CMAKE_VERSION=4.4.3
-ARG VERSION=0.1.0
+ARG VERSION=0.2.0
 ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential ca-certificates ccache gperf libssl-dev ninja-build php-cli python3-venv zlib1g-dev \
@@ -22,13 +22,13 @@ RUN --mount=type=cache,id=telebezel-tdlib-build-${TARGETARCH},target=/src/build 
     test "$VERSION" = "$(cat VERSION)" \
     && ccache --zero-stats \
     && /opt/cmake/bin/cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_BUILD_TESTS=ON \
-    && /opt/cmake/bin/cmake --build build --target telebezel-tdlib telebezel-tdlib-tests --parallel 2 \
+    && /opt/cmake/bin/cmake --build build --target telebezel-tdlib telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2 \
     && /opt/cmake/bin/ctest --test-dir build --output-on-failure \
     && install -D -m 0755 build/telebezel-tdlib /out/telebezel-tdlib \
     && ccache --show-stats
 
 FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime
-ARG VERSION=0.1.0
+ARG VERSION=0.2.0
 LABEL org.opencontainers.image.source="https://github.com/serogaq/TeleBezel" \
       org.opencontainers.image.title="TeleBezel backend-tdlib" \
       org.opencontainers.image.version="${VERSION}"

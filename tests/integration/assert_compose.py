@@ -15,9 +15,11 @@ assert set(postgres['networks']) == {'api-db'}
 assert api['ports'][0]['host_ip'] == '127.0.0.1' and api['ports'][0]['target'] == 8080
 assert not tdlib.get('ports') and not postgres.get('ports')
 assert not api.get('volumes')
-assert sources(tdlib, 'volumes') == {'tdlib-data'}
+tdlib_volumes = tdlib.get('volumes', [])
+assert {entry['source'] for entry in tdlib_volumes if entry['type'] == 'volume'} == {'tdlib-data'}
+assert all(entry['target'] != '/run/secrets/telebezel-proxies' for entry in tdlib_volumes)
 assert sources(postgres, 'volumes') == {'postgres-data'}
 assert sources(api, 'secrets') == {'laravel_app_key', 'postgres_password', 'tdlib_internal_token'}
-assert sources(tdlib, 'secrets') == {'tdlib_internal_token'}
+assert sources(tdlib, 'secrets') == {'tdlib_internal_token', 'tdlib_database_master_key'}
 assert sources(postgres, 'secrets') == {'postgres_password'}
 assert api['read_only'] and tdlib['read_only'] and postgres['read_only']

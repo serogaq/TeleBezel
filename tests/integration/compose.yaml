@@ -2,6 +2,13 @@ services:
   backend-api:
     # One worker makes sequential HTTP probes exercise the same Octane process.
     command: [php, artisan, octane:frankenphp, --host=0.0.0.0, --port=8080, --workers=1, --max-requests=500]
+  backend-tdlib:
+    environment:
+      TELEGRAM_API_ID: "12345"
+      TELEGRAM_API_HASH: "0123456789abcdef0123456789abcdef"
+networks:
+  tdlib-egress:
+    internal: true
 secrets:
   postgres_password:
     file: ${TEST_SECRET_DIR:?}/postgres_password
@@ -9,3 +16,5 @@ secrets:
     file: ${TEST_SECRET_DIR:?}/laravel_app_key
   tdlib_internal_token:
     file: ${TEST_SECRET_DIR:?}/tdlib_internal_token
+  tdlib_database_master_key:
+    file: ${TEST_SECRET_DIR:?}/tdlib_database_master_key
