@@ -1,0 +1,122 @@
+#include "telebezel/crypto.hpp"
+#include <cctype>
+#include <cerrno>
+#include <fcntl.h>
+#include <openssl/evp.h>
+#include <openssl/kdf.h>
+#include <openssl/sha.h>
+#include <stdexcept>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+namespace telebezel {
+namespace {
+std::uint8_t nibble(char value) {
+  if (value >= '0' && value <= '9') {
+    return static_cast<std::uint8_t>(value - '0');
+  }
+  value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
+  if (value >= 'a' && value <= 'f') {
+    return static_cast<std::uint8_t>(value - 'a' + 10);
+  }
+  throw std::runtime_error("invalid hexadecimal value");
+}
+} // namespace
+
+std::array<std::uint8_t, 32> read_master_key(const std::filesystem::path &path) {
+  const int descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  struct stat status{};
+  if (descriptor < 0 || ::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) || status.st_uid != ::geteuid() ||
+      (status.st_mode & 0077) != 0) {
+    if (descriptor >= 0)
+      ::close(descriptor);
+    throw std::runtime_error("database master key is missing or invalid");
+  }
+  std::array<char, 66> buffer{};
+  std::size_t length = 0;
+  while (length < buffer.size()) {
+    const auto amount = ::read(descriptor, buffer.data() + length, buffer.size() - length);
+    if (amount > 0) {
+      length += static_cast<std::size_t>(amount);
+      continue;
+    }
+    if (amount < 0 && errno == EINTR)
+      continue;
+    if (amount < 0)
+      length = buffer.size();
+    break;
+  }
+  ::close(descriptor);
+  if (length != 64 && !(length == 65 && buffer[64] == '\n')) {
+    throw std::runtime_error("database master key is missing or invalid");
+  }
+  const std::string encoded(buffer.data(), 64);
+  std::array<std::uint8_t, 32> result{};
+  for (std::size_t index = 0; index < result.size(); ++index) {
+    result[index] = static_cast<std::uint8_t>((nibble(encoded[index * 2]) << 4U) | nibble(encoded[index * 2 + 1]));
+  }
+  return result;
+}
+
+std::array<std::uint8_t, 16> uuid_bytes(const std::string &uuid) {
+  if (uuid.size() != 36 || uuid[8] != '-' || uuid[13] != '-' || uuid[18] != '-' || uuid[23] != '-') {
+    throw std::runtime_error("invalid UUID");
+  }
+  std::array<std::uint8_t, 16> result{};
+  std::size_t output = 0;
+  for (std::size_t index = 0; index < uuid.size();) {
+    if (uuid[index] == '-') {
+      ++index;
+      continue;
+    }
+    if (index + 1 >= uuid.size() || output >= result.size()) {
+      throw std::runtime_error("invalid UUID");
+    }
+    result[output++] = static_cast<std::uint8_t>((nibble(uuid[index]) << 4U) | nibble(uuid[index + 1]));
+    index += 2;
+  }
+  if (output != result.size()) {
+    throw std::runtime_error("invalid UUID");
+  }
+  return result;
+}
+
+std::array<std::uint8_t, 32> derive_database_key(const std::array<std::uint8_t, 32> &master_key,
+                                                 const std::string &uuid) {
+  constexpr char salt[] = "TeleBezel/TDLib/HKDF-SHA256/v1";
+  const auto info = uuid_bytes(uuid);
+  std::array<std::uint8_t, 32> output{};
+  EVP_PKEY_CTX *context = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+  if (context == nullptr || EVP_PKEY_derive_init(context) <= 0 ||
+      EVP_PKEY_CTX_set_hkdf_md(context, EVP_sha256()) <= 0 ||
+      EVP_PKEY_CTX_set1_hkdf_salt(context, reinterpret_cast<const unsigned char *>(salt), sizeof(salt) - 1) <= 0 ||
+      EVP_PKEY_CTX_set1_hkdf_key(context, master_key.data(), master_key.size()) <= 0 ||
+      EVP_PKEY_CTX_add1_hkdf_info(context, info.data(), info.size()) <= 0) {
+    EVP_PKEY_CTX_free(context);
+    throw std::runtime_error("database key derivation failed");
+  }
+  std::size_t size = output.size();
+  if (EVP_PKEY_derive(context, output.data(), &size) <= 0 || size != output.size()) {
+    EVP_PKEY_CTX_free(context);
+    throw std::runtime_error("database key derivation failed");
+  }
+  EVP_PKEY_CTX_free(context);
+  return output;
+}
+
+std::string hex_encode(const std::uint8_t *data, std::size_t size) {
+  static constexpr char digits[] = "0123456789abcdef";
+  std::string result(size * 2, '0');
+  for (std::size_t index = 0; index < size; ++index) {
+    result[index * 2] = digits[data[index] >> 4U];
+    result[index * 2 + 1] = digits[data[index] & 0x0fU];
+  }
+  return result;
+}
+std::string sha256_hex(const std::string &value) {
+  std::array<std::uint8_t, SHA256_DIGEST_LENGTH> digest{};
+  SHA256(reinterpret_cast<const unsigned char *>(value.data()), value.size(), digest.data());
+  return hex_encode(digest.data(), digest.size());
+}
+} // namespace telebezel

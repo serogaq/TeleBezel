@@ -7,13 +7,24 @@ compose=(docker compose -p "$project" -f compose.yaml -f tests/integration/compo
 work_dir=$(mktemp -d)
 export TEST_SECRET_DIR="$work_dir"
 export API_PORT="${API_PORT:-18080}"
-trap '"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; rm -rf "$work_dir"' EXIT
+cleanup() {
+  status=$?
+  if [[ $status -ne 0 ]]; then
+    "${compose[@]}" logs --no-color --no-log-prefix || true
+  fi
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$work_dir"
+  exit "$status"
+}
+trap cleanup EXIT
 umask 077
 openssl rand -base64 32 > "$work_dir/postgres_password"
 openssl rand -hex 32 > "$work_dir/tdlib_internal_token"
+openssl rand -hex 32 > "$work_dir/tdlib_database_master_key"
 { printf 'base64:'; openssl rand -base64 32 | tr -d '\n'; printf '\n'; } > "$work_dir/laravel_app_key"
 bash tests/secrets/provision_file.sh "$work_dir/postgres_password" 999 10001
 bash tests/secrets/provision_file.sh "$work_dir/tdlib_internal_token" 10001 10002
+bash tests/secrets/provision_file.sh "$work_dir/tdlib_database_master_key" 10002
 bash tests/secrets/provision_file.sh "$work_dir/laravel_app_key" 10001
 "${compose[@]}" config --format json | python3 tests/integration/assert_compose.py
 curl_bounded() { curl --connect-timeout 2 --max-time 12 "$@"; }
@@ -46,6 +57,36 @@ status=$(curl_bounded -fsS -H "Authorization: Bearer $token" "http://127.0.0.1:$
 python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["data"]["dependencies"]=={"postgres":"ready","tdlib":"ready"}' <<<"$status"
 status_b=$(curl_bounded -fsS -H "Authorization: Bearer $token_b" "http://127.0.0.1:$API_PORT/v1/status")
 python3 -c 'import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); assert a["request_id"] != b["request_id"]' "$status" "$status_b"
+create_code=$(curl_bounded -sS -o "$work_dir/account-a.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $token_b" -H 'Idempotency-Key: integration-account-a' -H 'Content-Type: application/json' \
+  -d '{"label":"Integration A","proxy":{"id":"91112233-4455-4677-8899-aabbccddeeff","mode":"direct"}}' \
+  "http://127.0.0.1:$API_PORT/v1/telegram/accounts")
+test "$create_code" = 201
+account_a=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$work_dir/account-a.json")
+repeat_code=$(curl_bounded -sS -o "$work_dir/account-a-repeat.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $token_b" -H 'Idempotency-Key: integration-account-a' -H 'Content-Type: application/json' \
+  -d '{"label":"Integration A","proxy":{"id":"91112233-4455-4677-8899-aabbccddeeff","mode":"direct"}}' \
+  "http://127.0.0.1:$API_PORT/v1/telegram/accounts")
+test "$repeat_code" = 200
+create_code=$(curl_bounded -sS -o "$work_dir/account-b.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $token_b" -H 'Idempotency-Key: integration-account-b' -H 'Content-Type: application/json' \
+  -d '{"label":"Integration B"}' \
+  "http://127.0.0.1:$API_PORT/v1/telegram/accounts")
+test "$create_code" = 201
+account_b=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$work_dir/account-b.json")
+test "$account_a" != "$account_b"
+authorization=''
+for _ in {1..15}; do
+  authorization=$(curl_bounded -fsS -H "Authorization: Bearer $token_b" \
+    "http://127.0.0.1:$API_PORT/v1/telegram/accounts/$account_a/authorization")
+  if python3 -c 'import json,sys; assert json.loads(sys.argv[1])["data"]["state"] in {"initializing","awaiting_phone_number"}' "$authorization" 2>/dev/null; then
+    break
+  fi
+  sleep 2
+done
+account_snapshot=$(curl_bounded -fsS -H "Authorization: Bearer $token_b" \
+  "http://127.0.0.1:$API_PORT/v1/telegram/accounts/$account_a")
+python3 -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; account=json.loads(sys.argv[2])["data"]; assert d["state"] in {"initializing","awaiting_phone_number"}, {"authorization":d,"account":account}; assert d["authorization_version"], d' "$authorization" "$account_snapshot"
 for _ in {1..59}; do curl_bounded -fsS -H "Authorization: Bearer $token" "http://127.0.0.1:$API_PORT/v1/status" >/dev/null; done
 code=$(curl_bounded -sS -o "$work_dir/rate-limited.json" -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$API_PORT/v1/status")
 test "$code" = 429
@@ -65,6 +106,13 @@ for _ in {1..30}; do
   sleep 1
 done
 test "$tdlib_ready" = true
+before_reconcile=$(curl_bounded -fsS -H "Authorization: Bearer $token_b" \
+  "http://127.0.0.1:$API_PORT/v1/telegram/accounts/$account_a")
+python3 -c 'import json,sys; assert json.load(sys.stdin)["data"]["runtime"]["available"] is False' <<<"$before_reconcile"
+"${compose[@]}" run --rm backend-api php artisan telebezel:accounts-reconcile >/dev/null
+after_reconcile=$(curl_bounded -fsS -H "Authorization: Bearer $token_b" \
+  "http://127.0.0.1:$API_PORT/v1/telegram/accounts/$account_a")
+python3 -c 'import json,sys; assert json.load(sys.stdin)["data"]["runtime"]["available"] is True' <<<"$after_reconcile"
 "${compose[@]}" stop postgres
 code=$(curl_bounded -sS -o "$work_dir/postgres-down.json" -w '%{http_code}' -H "Authorization: Bearer $token_b" "http://127.0.0.1:$API_PORT/v1/status")
 test "$code" = 503
@@ -97,7 +145,8 @@ test "$ready" = true
 import os,sys
 logs=sys.stdin.read()
 secrets=[os.environ["PUBLIC_TOKEN"],os.environ["SECOND_TOKEN"]]
-for name in ("postgres_password","tdlib_internal_token","laravel_app_key"):
+for name in ("postgres_password","tdlib_internal_token","tdlib_database_master_key","laravel_app_key"):
     secrets.append(open(os.path.join(os.environ["TEST_SECRET_DIR"],name)).read().strip())
 assert all(secret not in logs for secret in secrets), "A secret appeared in Compose logs"
+assert "account_awaiting_reconciliation" in logs
 '

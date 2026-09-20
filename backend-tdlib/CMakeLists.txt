@@ -14,10 +14,13 @@ find_package(Threads REQUIRED)
 
 add_executable(telebezel-tdlib
   src/config.cpp
+  src/crypto.cpp
   src/http_server.cpp
   src/main.cpp
+  src/registry.cpp
   src/status.cpp
-  src/td_runtime.cpp)
+  src/td_runtime.cpp
+  src/transport.cpp)
 target_include_directories(telebezel-tdlib PRIVATE include)
 target_include_directories(telebezel-tdlib SYSTEM BEFORE PRIVATE
   "${tdlib_SOURCE_DIR}"
@@ -29,7 +32,7 @@ target_compile_options(telebezel-tdlib PRIVATE $<$<CXX_COMPILER_ID:Clang,GNU>:-W
 
 if(TELEBEZEL_BUILD_TESTS)
   enable_testing()
-  add_executable(telebezel-tdlib-tests tests/status_test.cpp src/config.cpp src/status.cpp)
+  add_executable(telebezel-tdlib-tests tests/status_test.cpp src/config.cpp src/crypto.cpp src/registry.cpp src/status.cpp)
   target_include_directories(telebezel-tdlib-tests PRIVATE include)
   target_link_libraries(telebezel-tdlib-tests PRIVATE nlohmann_json::nlohmann_json OpenSSL::Crypto)
   target_compile_definitions(telebezel-tdlib-tests PRIVATE TELEBEZEL_SERVICE_VERSION="${PROJECT_VERSION}")
@@ -40,4 +43,17 @@ if(TELEBEZEL_BUILD_TESTS)
     target_link_options(telebezel-tdlib-tests PRIVATE -fsanitize=address,undefined)
   endif()
   add_test(NAME telebezel-tdlib-tests COMMAND telebezel-tdlib-tests)
+  add_executable(telebezel-tdlib-runtime-tests tests/runtime_test.cpp src/config.cpp src/crypto.cpp src/registry.cpp
+    src/status.cpp src/td_runtime.cpp src/transport.cpp)
+  target_include_directories(telebezel-tdlib-runtime-tests PRIVATE include)
+  target_include_directories(telebezel-tdlib-runtime-tests SYSTEM BEFORE PRIVATE
+    "${tdlib_SOURCE_DIR}" "${tdlib_SOURCE_DIR}/td/generate/auto" "${json_SOURCE_DIR}/include")
+  target_link_libraries(telebezel-tdlib-runtime-tests PRIVATE Td::TdStatic nlohmann_json::nlohmann_json OpenSSL::Crypto Threads::Threads)
+  target_compile_definitions(telebezel-tdlib-runtime-tests PRIVATE TELEBEZEL_SERVICE_VERSION="${PROJECT_VERSION}")
+  target_compile_options(telebezel-tdlib-runtime-tests PRIVATE $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Werror>)
+  if(TELEBEZEL_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(telebezel-tdlib-runtime-tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(telebezel-tdlib-runtime-tests PRIVATE -fsanitize=address,undefined)
+  endif()
+  add_test(NAME telebezel-tdlib-runtime-tests COMMAND telebezel-tdlib-runtime-tests)
 endif()

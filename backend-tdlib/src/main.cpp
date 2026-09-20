@@ -46,7 +46,9 @@ int main(int argc, char **argv) {
                  ? 0
                  : 1;
     }
-    telebezel::TdRuntime runtime;
+    telebezel::Registry registry(config.data_directory);
+    registry.open();
+    telebezel::TdRuntime runtime(config, registry);
     runtime.start();
     telebezel::HttpServer server(config, runtime);
     std::signal(SIGINT, handle_signal);

@@ -109,7 +109,7 @@ jobs:
           clang-format --dry-run --Werror "${sources[@]}"
           ccache --zero-stats
           cmake -S backend-tdlib -B backend-tdlib/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_BUILD_TESTS=ON
-          cmake --build backend-tdlib/build --target telebezel-tdlib telebezel-tdlib-tests --parallel 2
+          cmake --build backend-tdlib/build --target telebezel-tdlib telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2
           ctest --test-dir backend-tdlib/build --output-on-failure
           ccache --show-stats
 
@@ -133,11 +133,11 @@ jobs:
           ccache --zero-stats
           cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
           cmake --build backend-tdlib/analysis-build --target tdapi --parallel 2
-          clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/main.cpp
+          clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/crypto.cpp backend-tdlib/src/registry.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/transport.cpp backend-tdlib/src/main.cpp
       - name: Run sanitizer-instrumented adapter tests
         run: |
           cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZERS=ON
-          cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests --parallel 2
+          cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir backend-tdlib/sanitizer-build --output-on-failure
           ccache --show-stats
 

@@ -5,5 +5,6 @@ return [
     'tdlib' => [
         'base_url' => env('TDLIB_BASE_URL', 'http://backend-tdlib:8081'),
         'token' => env('TDLIB_INTERNAL_TOKEN'),
+        'token_file' => env('TDLIB_INTERNAL_TOKEN_FILE'),
     ],
 ];

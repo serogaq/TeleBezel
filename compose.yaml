@@ -4,7 +4,7 @@ services:
   backend-api:
     build:
       context: ./backend-api
-      args: {VERSION: "${API_VERSION:-0.1.0}"}
+      args: {VERSION: "${API_VERSION:-0.2.0}"}
     image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-api:local"
     restart: unless-stopped
     read_only: true
@@ -57,9 +57,10 @@ services:
   backend-tdlib:
     build:
       context: ./backend-tdlib
-      args: {VERSION: "${TDLIB_SERVICE_VERSION:-0.1.0}"}
+      args: {VERSION: "${TDLIB_SERVICE_VERSION:-0.2.0}"}
     image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-tdlib:local"
     restart: unless-stopped
+    stop_grace_period: 45s
     read_only: true
     user: "10002:10002"
     cap_drop: [ALL]
@@ -71,10 +72,13 @@ services:
       TDLIB_LISTEN_PORT: "8081"
       TDLIB_DATA_DIRECTORY: /var/lib/telebezel/tdlib
       TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token
+      TDLIB_DATABASE_MASTER_KEY_FILE: /run/secrets/tdlib_database_master_key
+      TDLIB_USE_TEST_DC: "${TDLIB_USE_TEST_DC:-false}"
       TDLIB_PROXY_MODE: "${TDLIB_PROXY_MODE:-direct}"
       TDLIB_PROXY_HOST: "${TDLIB_PROXY_HOST:-}"
       TDLIB_PROXY_PORT: "${TDLIB_PROXY_PORT:-}"
-    secrets: [tdlib_internal_token]
+      TDLIB_PROXY_HTTP_ONLY: "${TDLIB_PROXY_HTTP_ONLY:-false}"
+    secrets: [tdlib_internal_token, tdlib_database_master_key]
     volumes:
       - tdlib-data:/var/lib/telebezel/tdlib
     tmpfs:
@@ -131,3 +135,5 @@ secrets:
     file: ./secrets/laravel_app_key
   tdlib_internal_token:
     file: ./secrets/tdlib_internal_token
+  tdlib_database_master_key:
+    file: ./secrets/tdlib_database_master_key

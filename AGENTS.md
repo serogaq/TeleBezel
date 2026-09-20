@@ -12,3 +12,6 @@
 - Octane workers are long-lived. Request/authentication state must not live in globals, statics, or mutable singletons.
 - Migrations are explicit deployment steps. Container startup must never run destructive or automatic migrations.
 - GitHub Actions must be pinned to immutable full commit SHAs and pass actionlint/zizmor.
+- Account storage uses immutable UUID + storage-generation identity and monotonic desired revisions.
+- Discovered TDLib sessions must remain offline until Laravel reconciliation; tombstoned UUIDs never reactivate.
+- Logout uses TDLib `logOut`; local removal uses `destroy` or verified offline deletion and never Telegram `deleteAccount`.

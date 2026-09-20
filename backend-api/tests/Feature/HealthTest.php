@@ -15,12 +15,12 @@ final class HealthTest extends TestCase
     public function test_liveness_does_not_require_dependencies(): void
     {
         $this->getJson('/healthz')->assertOk()->assertHeader('X-Request-ID')
-            ->assertExactJson(['status' => 'ok', 'service' => 'backend-api', 'version' => '0.1.0']);
+            ->assertExactJson(['status' => 'ok', 'service' => 'backend-api', 'version' => '0.2.0']);
     }
 
     public function test_readiness_checks_postgres_and_tdlib(): void
     {
-        Http::fake(['*' => Http::response(['data' => ['status' => 'ready', 'client_manager' => 'ready', 'service_version' => '0.1.0', 'tdlib_version' => '1.8.67', 'accounts' => 0]])]);
+        Http::fake(['*' => Http::response(['data' => ['status' => 'ready', 'client_manager' => 'ready', 'service_version' => '0.2.0', 'tdlib_version' => '1.8.67', 'accounts' => 0]])]);
         $this->getJson('/readyz')->assertOk()->assertExactJson(['status' => 'ready']);
         Http::assertSent(fn ($request): bool => $request->hasHeader('Authorization', 'Bearer test-internal-token'));
     }
