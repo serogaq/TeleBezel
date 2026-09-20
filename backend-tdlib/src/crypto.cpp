@@ -27,8 +27,10 @@ std::uint8_t nibble(char value) {
 std::array<std::uint8_t, 32> read_master_key(const std::filesystem::path &path) {
   const int descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   struct stat status{};
-  if (descriptor < 0 || ::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) || status.st_uid != ::geteuid() ||
-      (status.st_mode & 0077) != 0) {
+  // Compose bind-mounted secrets retain host ownership on native Linux. The
+  // process must be able to open the file (typically through a named ACL), but
+  // the key must never be writable by group/other or readable by everyone.
+  if (descriptor < 0 || ::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) || (status.st_mode & 0037) != 0) {
     if (descriptor >= 0)
       ::close(descriptor);
     throw std::runtime_error("database master key is missing or invalid");

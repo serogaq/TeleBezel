@@ -112,6 +112,11 @@ int main() {
                                std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
                                    std::filesystem::perms::group_read,
                                std::filesystem::perm_options::replace);
+  require(telebezel::read_master_key(master_path)[0] == 0);
+  std::filesystem::permissions(master_path,
+                               std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
+                                   std::filesystem::perms::others_read,
+                               std::filesystem::perm_options::replace);
   rejected = false;
   try {
     static_cast<void>(telebezel::read_master_key(master_path));
