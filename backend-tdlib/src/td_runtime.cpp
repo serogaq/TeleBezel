@@ -2,6 +2,7 @@
 #include "telebezel/crypto.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <td/telegram/td_api.h>
 
@@ -62,6 +63,72 @@ std::pair<std::string, bool> delivery_method(const td_api::AuthenticationCodeTyp
     return {"firebase", false};
   return {"unknown", false};
 }
+nlohmann::json message_content(const td_api::MessageContent *content) {
+  if (content != nullptr && content->get_id() == td_api::messageText::ID) {
+    const auto &text = static_cast<const td_api::messageText &>(*content);
+    return {{"kind", "text"}, {"text", text.text_ ? text.text_->text_ : std::string{}}};
+  }
+  return {{"kind", "unsupported"}, {"fallback_key", "message.unsupported"}};
+}
+nlohmann::json message_projection(const td_api::message &message) {
+  nlohmann::json sender = nullptr;
+  if (message.sender_id_) {
+    if (message.sender_id_->get_id() == td_api::messageSenderUser::ID)
+      sender = {{"type", "user"},
+                {"id", std::to_string(static_cast<const td_api::messageSenderUser &>(*message.sender_id_).user_id_)}};
+    else if (message.sender_id_->get_id() == td_api::messageSenderChat::ID)
+      sender = {{"type", "chat"},
+                {"id", std::to_string(static_cast<const td_api::messageSenderChat &>(*message.sender_id_).chat_id_)}};
+  }
+  return {{"id", std::to_string(message.id_)},
+          {"chat_id", std::to_string(message.chat_id_)},
+          {"sender", sender},
+          {"date", message.date_},
+          {"edit_date", message.edit_date_},
+          {"is_outgoing", message.is_outgoing_},
+          {"author_signature", message.author_signature_},
+          {"content", message_content(message.content_.get())}};
+}
+std::string chat_type(const td_api::ChatType *type) {
+  if (type == nullptr)
+    return "unknown";
+  if (type->get_id() == td_api::chatTypePrivate::ID)
+    return "private";
+  if (type->get_id() == td_api::chatTypeBasicGroup::ID)
+    return "basic_group";
+  if (type->get_id() == td_api::chatTypeSupergroup::ID)
+    return static_cast<const td_api::chatTypeSupergroup &>(*type).is_channel_ ? "channel" : "supergroup";
+  if (type->get_id() == td_api::chatTypeSecret::ID)
+    return "secret";
+  return "unknown";
+}
+void apply_position(nlohmann::json &projection, const td_api::chatPosition *position) {
+  if (position == nullptr || position->list_ == nullptr)
+    return;
+  const std::string list = position->list_->get_id() == td_api::chatListMain::ID      ? "main"
+                           : position->list_->get_id() == td_api::chatListArchive::ID ? "archive"
+                                                                                      : "other";
+  if (position->order_ == 0)
+    projection["positions"].erase(list);
+  else
+    projection["positions"][list] = {{"order", std::to_string(position->order_)}, {"is_pinned", position->is_pinned_}};
+}
+nlohmann::json chat_projection(const td_api::chat &chat) {
+  nlohmann::json projection{
+      {"id", std::to_string(chat.id_)},
+      {"type", chat_type(chat.type_.get())},
+      {"title", chat.title_},
+      {"is_forum", chat.view_as_topics_},
+      {"is_marked_unread", chat.is_marked_as_unread_},
+      {"unread_count", chat.unread_count_},
+      {"last_read_inbox_message_id", std::to_string(chat.last_read_inbox_message_id_)},
+      {"last_read_outbox_message_id", std::to_string(chat.last_read_outbox_message_id_)},
+      {"positions", nlohmann::json::object()},
+      {"last_message", chat.last_message_ ? message_projection(*chat.last_message_) : nlohmann::json(nullptr)}};
+  for (const auto &position : chat.positions_)
+    apply_position(projection, position.get());
+  return projection;
+}
 } // namespace
 
 TdRuntime::TdRuntime(const Config &config, Registry &registry, std::unique_ptr<TdTransport> transport)
@@ -93,6 +160,7 @@ void TdRuntime::start() {
       account.operation_phase = manifest.operation_phase;
       account.revision_fingerprint = manifest.content_hash;
       account.proxy = manifest.proxy;
+      account.runtime_epoch = make_request_id();
       account.tombstone = manifest.tombstone;
       account.closed = manifest.tombstone;
       accounts_.emplace(account.uuid, std::move(account));
@@ -189,6 +257,8 @@ nlohmann::json TdRuntime::account_json(const Account &account) const {
       {"uuid", account.uuid},
       {"generation", account.generation},
       {"applied_revision", account.revision},
+      {"effective_config_id",
+       account.effective_config_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(account.effective_config_id)},
       {"runtime_available", account.reconciled && !account.closed},
       {"authorization_state", account.authorization_state},
       {"connection_state", account.connection_state},
@@ -223,6 +293,444 @@ nlohmann::json TdRuntime::snapshot(const std::string &uuid) const {
   return iterator == accounts_.end() ? safe_error("account.not_found", 404) : account_json(iterator->second);
 }
 
+void TdRuntime::append_event(Account &account, const std::string &type, std::int64_t chat_id, std::int64_t message_id) {
+  nlohmann::json event{{"sequence", ++account.event_sequence}, {"type", type}, {"chat_id", std::to_string(chat_id)}};
+  if (message_id != 0)
+    event["message_id"] = std::to_string(message_id);
+  account.events.push_back(std::move(event));
+  while (account.events.size() > 5000)
+    account.events.pop_front();
+}
+
+std::string TdRuntime::cursor_for(const Account &account, std::uint64_t sequence) const {
+  const std::string payload =
+      std::to_string(account.authorization_generation) + ":" + account.runtime_epoch + ":" + std::to_string(sequence);
+  return payload + "." +
+         sha256_hex(config_.internal_token + ":" + account.uuid + ":" + account.generation + ":" + payload);
+}
+
+std::optional<std::uint64_t> TdRuntime::parse_cursor(const Account &account, const std::string &cursor) const {
+  const auto dot = cursor.rfind('.');
+  if (dot == std::string::npos)
+    return std::nullopt;
+  const auto payload = cursor.substr(0, dot);
+  const auto signature =
+      sha256_hex(config_.internal_token + ":" + account.uuid + ":" + account.generation + ":" + payload);
+  const auto prefix = std::to_string(account.authorization_generation) + ":" + account.runtime_epoch + ":";
+  if (!token_matches(signature, cursor.substr(dot + 1)) || !payload.starts_with(prefix))
+    return std::nullopt;
+  try {
+    std::size_t parsed = 0;
+    const auto sequence = std::stoull(payload.substr(prefix.size()), &parsed);
+    if (parsed != payload.size() - prefix.size())
+      return std::nullopt;
+    return sequence;
+  } catch (const std::exception &) {
+    return std::nullopt;
+  }
+}
+
+nlohmann::json TdRuntime::chats(const std::string &uuid, const std::string &list, std::size_t limit,
+                                const std::string &cursor) {
+  std::int32_t client = 0;
+  std::uint64_t lower_sequence = 0;
+  std::uint64_t authorization_generation = 1;
+  std::string generation;
+  std::optional<std::pair<std::int64_t, std::int64_t>> boundary;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = accounts_.find(uuid);
+    if (found == accounts_.end() || !found->second.reconciled || found->second.authorization_state != "ready")
+      return safe_error("service.busy", 503);
+    client = found->second.client_id;
+    lower_sequence = found->second.event_sequence;
+    authorization_generation = found->second.authorization_generation;
+    generation = found->second.generation;
+  }
+  if (!cursor.empty()) {
+    const auto dot = cursor.rfind('.');
+    const auto payload = dot == std::string::npos ? std::string{} : cursor.substr(0, dot);
+    const auto signature = sha256_hex(config_.internal_token + ":" + uuid + ":" + generation + ":" + payload);
+    std::vector<std::string> fields;
+    std::size_t position = 0;
+    while (position <= payload.size()) {
+      const auto separator = payload.find(':', position);
+      fields.push_back(
+          payload.substr(position, separator == std::string::npos ? std::string::npos : separator - position));
+      if (separator == std::string::npos)
+        break;
+      position = separator + 1;
+    }
+    try {
+      const auto now =
+          static_cast<std::uint64_t>(std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+      if (dot == std::string::npos || !token_matches(signature, cursor.substr(dot + 1)) || fields.size() != 6 ||
+          fields[0] != "l" || std::stoull(fields[1]) != authorization_generation || fields[2] != list ||
+          std::stoull(fields[3]) < now)
+        return safe_error("cursor.unusable", 409);
+      boundary = {std::stoll(fields[4]), std::stoll(fields[5])};
+    } catch (const std::exception &) {
+      return safe_error("cursor.unusable", 409);
+    }
+  }
+  bool load_failed = false;
+  td_api::object_ptr<td_api::ChatList> chat_list =
+      list == "archive" ? td_api::object_ptr<td_api::ChatList>(td_api::make_object<td_api::chatListArchive>())
+                        : td_api::object_ptr<td_api::ChatList>(td_api::make_object<td_api::chatListMain>());
+  const auto response =
+      request(client, td_api::make_object<td_api::getChats>(std::move(chat_list), 50), std::chrono::seconds(6));
+  load_failed = !response || response->get_id() == td_api::error::ID;
+  std::lock_guard lock(mutex_);
+  const auto found = accounts_.find(uuid);
+  if (found == accounts_.end() || found->second.tombstone)
+    return safe_error("account.not_found", 404);
+  const auto &account = found->second;
+  if (!account.reconciled || account.authorization_state != "ready")
+    return safe_error("service.busy", 503);
+  std::vector<nlohmann::json> items;
+  for (const auto &[chat_id, projection] : account.chats) {
+    static_cast<void>(chat_id);
+    if (projection["positions"].contains(list))
+      items.push_back(projection);
+  }
+  std::sort(items.begin(), items.end(), [&list](const auto &left, const auto &right) {
+    const auto left_order = std::stoll(left["positions"][list].value("order", "0"));
+    const auto right_order = std::stoll(right["positions"][list].value("order", "0"));
+    return left_order == right_order ? std::stoll(left.value("id", "0")) > std::stoll(right.value("id", "0"))
+                                     : left_order > right_order;
+  });
+  if (boundary) {
+    items.erase(items.begin(), std::find_if(items.begin(), items.end(), [&list, &boundary](const auto &item) {
+                  const auto order = std::stoll(item["positions"][list].value("order", "0"));
+                  const auto id = std::stoll(item.value("id", "0"));
+                  return order < boundary->first || (order == boundary->first && id < boundary->second);
+                }));
+  }
+  const bool truncated = items.size() > limit;
+  nlohmann::json next_cursor = nullptr;
+  if (truncated) {
+    const auto &last = items[limit - 1];
+    const auto expires = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 900;
+    const auto payload = "l:" + std::to_string(account.authorization_generation) + ":" + list + ":" +
+                         std::to_string(expires) + ":" + last["positions"][list].value("order", "0") + ":" +
+                         last.value("id", "0");
+    next_cursor = payload + "." +
+                  sha256_hex(config_.internal_token + ":" + account.uuid + ":" + account.generation + ":" + payload);
+  }
+  if (truncated)
+    items.resize(limit);
+  return {{"items", items},
+          {"stale", true},
+          {"partial", load_failed},
+          {"has_more", load_failed ? nlohmann::json(nullptr) : nlohmann::json(truncated)},
+          {"next_cursor", next_cursor},
+          {"retry_cursor",
+           load_failed ? (cursor.empty() ? nlohmann::json(nullptr) : nlohmann::json(cursor)) : nlohmann::json(nullptr)},
+          {"updates_cursor", cursor_for(account, lower_sequence)},
+          {"observed_at", std::chrono::system_clock::to_time_t(std::chrono::system_clock::now())},
+          {"source", load_failed ? "tdlib_memory" : "tdlib"}};
+}
+
+nlohmann::json TdRuntime::chat(const std::string &uuid, std::int64_t chat_id) const {
+  std::lock_guard lock(mutex_);
+  const auto account = accounts_.find(uuid);
+  if (account == accounts_.end() || !account->second.reconciled)
+    return safe_error("account.not_found", 404);
+  const auto found = account->second.chats.find(chat_id);
+  if (found == account->second.chats.end())
+    return safe_error("chat.not_found", 404);
+  return {{"item", found->second},
+          {"stale", true},
+          {"partial", false},
+          {"updates_cursor", cursor_for(account->second, account->second.event_sequence)},
+          {"source", "tdlib_memory"}};
+}
+
+nlohmann::json TdRuntime::messages(const std::string &uuid, std::int64_t chat_id, std::size_t limit,
+                                   const std::string &cursor) {
+  std::int32_t client = 0;
+  std::uint64_t lower_sequence = 0;
+  std::uint64_t authorization_generation = 1;
+  std::string epoch;
+  std::string generation;
+  std::int64_t anchor = 0;
+  {
+    std::lock_guard lock(mutex_);
+    const auto account = accounts_.find(uuid);
+    if (account == accounts_.end() || !account->second.reconciled || account->second.client_id == 0)
+      return safe_error("account.not_found", 404);
+    client = account->second.client_id;
+    lower_sequence = account->second.event_sequence;
+    epoch = account->second.runtime_epoch;
+    generation = account->second.generation;
+    authorization_generation = account->second.authorization_generation;
+  }
+  if (!cursor.empty()) {
+    const auto dot = cursor.rfind('.');
+    const std::string prefix = "h:" + std::to_string(authorization_generation) + ":" + std::to_string(chat_id) + ":";
+    if (dot == std::string::npos || !cursor.starts_with(prefix))
+      return safe_error("cursor.unusable", 409);
+    const auto payload = cursor.substr(0, dot);
+    const auto signature = sha256_hex(config_.internal_token + ":" + uuid + ":" + generation + ":" + payload);
+    if (!token_matches(signature, cursor.substr(dot + 1)))
+      return safe_error("cursor.unusable", 409);
+    try {
+      anchor = std::stoll(payload.substr(prefix.size()));
+    } catch (const std::exception &) {
+      return safe_error("cursor.unusable", 409);
+    }
+  }
+  bool fallback = false;
+  auto response = request(
+      client, td_api::make_object<td_api::getChatHistory>(chat_id, anchor, 0, static_cast<std::int32_t>(limit), false),
+      std::chrono::seconds(6));
+  if (!response || response->get_id() == td_api::error::ID) {
+    fallback = true;
+    response = request(
+        client, td_api::make_object<td_api::getChatHistory>(chat_id, anchor, 0, static_cast<std::int32_t>(limit), true),
+        std::chrono::seconds(2));
+  }
+  std::vector<nlohmann::json> items;
+  if (response && response->get_id() == td_api::messages::ID) {
+    auto &history = static_cast<td_api::messages &>(*response);
+    for (const auto &item : history.messages_)
+      if (item && (anchor == 0 || item->id_ != anchor))
+        items.push_back(message_projection(*item));
+  }
+  std::lock_guard lock(mutex_);
+  const auto account = accounts_.find(uuid);
+  if (account == accounts_.end() || account->second.runtime_epoch != epoch)
+    return safe_error("sync.resync_required", 409);
+  if (!account->second.events.empty() && lower_sequence + 1 < account->second.events.front().value("sequence", 0ULL))
+    return safe_error("sync.resync_required", 409);
+  for (const auto &item : items) {
+    const auto message_id = std::stoll(item.value("id", "0"));
+    const auto changed_after_read = std::any_of(account->second.events.begin(), account->second.events.end(),
+                                                [lower_sequence, chat_id, message_id](const auto &event) {
+                                                  return event.value("sequence", 0ULL) > lower_sequence &&
+                                                         event.value("chat_id", "") == std::to_string(chat_id) &&
+                                                         event.value("message_id", "") == std::to_string(message_id);
+                                                });
+    if (!changed_after_read)
+      account->second.messages[{chat_id, message_id}] = item;
+  }
+  if (items.empty()) {
+    for (auto iterator = account->second.messages.rbegin(); iterator != account->second.messages.rend(); ++iterator) {
+      if (iterator->first.first == chat_id && (anchor == 0 || iterator->first.second <= anchor))
+        items.push_back(iterator->second);
+      if (items.size() == limit)
+        break;
+    }
+    fallback = true;
+  }
+  nlohmann::json next_cursor = nullptr;
+  if (!items.empty()) {
+    const auto payload = "h:" + std::to_string(account->second.authorization_generation) + ":" +
+                         std::to_string(chat_id) + ":" + items.back().value("id", "0");
+    next_cursor = payload + "." + sha256_hex(config_.internal_token + ":" + uuid + ":" + generation + ":" + payload);
+  }
+  return {{"items", items},
+          {"stale", true},
+          {"partial", fallback || items.size() < limit},
+          {"has_more", nullptr},
+          {"next_cursor", next_cursor},
+          {"retry_cursor", (fallback || items.size() < limit)
+                               ? (cursor.empty() ? nlohmann::json(next_cursor) : nlohmann::json(cursor))
+                               : nlohmann::json(nullptr)},
+          {"updates_cursor", cursor_for(account->second, lower_sequence)},
+          {"observed_at", std::chrono::system_clock::to_time_t(std::chrono::system_clock::now())},
+          {"source", fallback ? "tdlib_local" : "tdlib"}};
+}
+
+nlohmann::json TdRuntime::message(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id) {
+  std::int32_t client = 0;
+  std::uint64_t lower_sequence = 0;
+  std::string epoch;
+  {
+    std::lock_guard lock(mutex_);
+    const auto account = accounts_.find(uuid);
+    if (account == accounts_.end() || !account->second.reconciled)
+      return safe_error("account.not_found", 404);
+    const auto found = account->second.messages.find({chat_id, message_id});
+    if (found != account->second.messages.end())
+      return {{"item", found->second},
+              {"stale", true},
+              {"partial", false},
+              {"updates_cursor", cursor_for(account->second, account->second.event_sequence)},
+              {"source", "tdlib_memory"}};
+    client = account->second.client_id;
+    lower_sequence = account->second.event_sequence;
+    epoch = account->second.runtime_epoch;
+  }
+  const auto response =
+      request(client, td_api::make_object<td_api::getMessage>(chat_id, message_id), std::chrono::seconds(6));
+  if (!response || response->get_id() != td_api::message::ID)
+    return safe_error("message.not_found", 404);
+  const auto projection = message_projection(static_cast<const td_api::message &>(*response));
+  std::lock_guard lock(mutex_);
+  auto &account = accounts_.at(uuid);
+  if (account.runtime_epoch != epoch)
+    return safe_error("sync.resync_required", 409);
+  const auto changed_after_read = std::any_of(account.events.begin(), account.events.end(),
+                                              [lower_sequence, chat_id, message_id](const auto &event) {
+                                                return event.value("sequence", 0ULL) > lower_sequence &&
+                                                       event.value("chat_id", "") == std::to_string(chat_id) &&
+                                                       event.value("message_id", "") == std::to_string(message_id);
+                                              });
+  if (changed_after_read) {
+    if (const auto current = account.messages.find({chat_id, message_id}); current != account.messages.end())
+      return {{"item", current->second},
+              {"stale", true},
+              {"partial", false},
+              {"updates_cursor", cursor_for(account, lower_sequence)},
+              {"source", "tdlib_memory"}};
+    return safe_error("sync.resync_required", 409);
+  }
+  account.messages[{chat_id, message_id}] = projection;
+  return {{"item", projection},
+          {"stale", true},
+          {"partial", false},
+          {"updates_cursor", cursor_for(account, account.event_sequence)},
+          {"source", "tdlib"}};
+}
+
+nlohmann::json TdRuntime::updates(const std::string &uuid, const std::string &cursor, std::size_t limit) const {
+  std::lock_guard lock(mutex_);
+  const auto found = accounts_.find(uuid);
+  if (found == accounts_.end() || !found->second.reconciled)
+    return safe_error("account.not_found", 404);
+  const auto &account = found->second;
+  std::uint64_t sequence = account.event_sequence;
+  if (!cursor.empty()) {
+    const auto parsed = parse_cursor(account, cursor);
+    if (!parsed)
+      return safe_error("sync.resync_required", 409);
+    sequence = *parsed;
+  }
+  if (!account.events.empty() && sequence + 1 < account.events.front().value("sequence", 0ULL))
+    return safe_error("sync.resync_required", 409);
+  std::vector<nlohmann::json> items;
+  auto last = sequence;
+  for (const auto &event : account.events) {
+    if (event.value("sequence", 0ULL) <= sequence)
+      continue;
+    items.push_back(event);
+    last = event.value("sequence", last);
+    if (items.size() == limit)
+      break;
+  }
+  return {{"items", items}, {"cursor", cursor_for(account, last)}, {"has_more", last < account.event_sequence}};
+}
+
+nlohmann::json TdRuntime::set_interest(const std::string &uuid, std::int64_t chat_id, const std::string &lease_key,
+                                       bool active) {
+  std::int32_t client = 0;
+  bool transition = false;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = accounts_.find(uuid);
+    if (found == accounts_.end() || !found->second.reconciled || found->second.client_id == 0)
+      return safe_error("account.not_found", 404);
+    auto &account = found->second;
+    const auto now = std::chrono::steady_clock::now();
+    for (auto iterator = account.interests.begin(); iterator != account.interests.end();) {
+      if (iterator->second.second > now) {
+        ++iterator;
+        continue;
+      }
+      auto &count = account.interest_counts[iterator->second.first];
+      if (count > 0)
+        --count;
+      iterator = account.interests.erase(iterator);
+    }
+    const auto existing = account.interests.find(lease_key);
+    if (active) {
+      if (existing == account.interests.end()) {
+        if (account.interests.size() >= 20)
+          return safe_error("interest.limit_reached", 429);
+        const auto first_separator = lease_key.find(':');
+        const auto second_separator =
+            first_separator == std::string::npos ? std::string::npos : lease_key.find(':', first_separator + 1);
+        const auto principal_prefix =
+            second_separator == std::string::npos ? lease_key : lease_key.substr(0, second_separator + 1);
+        const auto principal_count =
+            std::count_if(account.interests.begin(), account.interests.end(),
+                          [&principal_prefix](const auto &entry) { return entry.first.starts_with(principal_prefix); });
+        if (principal_count >= 4)
+          return safe_error("interest.limit_reached", 429);
+        transition = account.interest_counts[chat_id]++ == 0;
+      }
+      account.interests[lease_key] = {chat_id, now + std::chrono::seconds(90)};
+    } else if (existing != account.interests.end()) {
+      auto &count = account.interest_counts[existing->second.first];
+      transition = count > 0 && --count == 0;
+      account.interests.erase(existing);
+    }
+    client = account.client_id;
+  }
+  if (transition) {
+    const auto response = active ? request(client, td_api::make_object<td_api::openChat>(chat_id))
+                                 : request(client, td_api::make_object<td_api::closeChat>(chat_id));
+    if (!response || response->get_id() == td_api::error::ID) {
+      if (active) {
+        std::lock_guard lock(mutex_);
+        if (auto account = accounts_.find(uuid); account != accounts_.end()) {
+          if (auto lease = account->second.interests.find(lease_key); lease != account->second.interests.end()) {
+            auto &count = account->second.interest_counts[lease->second.first];
+            if (count > 0)
+              --count;
+            account->second.interests.erase(lease);
+          }
+        }
+      }
+      return safe_error("telegram.operation_failed", 502);
+    }
+    bool compensate = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (const auto account = accounts_.find(uuid); account != accounts_.end()) {
+        const auto count = account->second.interest_counts.find(chat_id);
+        const bool wanted_open = count != account->second.interest_counts.end() && count->second > 0;
+        compensate = wanted_open != active;
+      }
+    }
+    if (compensate) {
+      if (active)
+        transport_->send(client, next_id(), td_api::make_object<td_api::closeChat>(chat_id));
+      else
+        transport_->send(client, next_id(), td_api::make_object<td_api::openChat>(chat_id));
+    }
+  }
+  return {{"active", active}, {"expires_in", active ? 90 : 0}};
+}
+
+nlohmann::json TdRuntime::release_interests(const std::string &principal_type, const std::string &principal_id) {
+  const auto prefix = principal_type + ":" + principal_id + ":";
+  std::vector<std::pair<std::int32_t, std::int64_t>> closes;
+  std::size_t released = 0;
+  {
+    std::lock_guard lock(mutex_);
+    for (auto &[uuid, account] : accounts_) {
+      static_cast<void>(uuid);
+      for (auto iterator = account.interests.begin(); iterator != account.interests.end();) {
+        if (!iterator->first.starts_with(prefix)) {
+          ++iterator;
+          continue;
+        }
+        const auto chat_id = iterator->second.first;
+        auto &count = account.interest_counts[chat_id];
+        if (count > 0 && --count == 0 && account.client_id != 0)
+          closes.emplace_back(account.client_id, chat_id);
+        iterator = account.interests.erase(iterator);
+        ++released;
+      }
+    }
+  }
+  for (const auto &[client, chat_id] : closes)
+    transport_->send(client, next_id(), td_api::make_object<td_api::closeChat>(chat_id));
+  return {{"released", released}};
+}
+
 TdRuntime::Account &TdRuntime::validated_account(const std::string &uuid, const nlohmann::json &command) {
   if (!valid_uuid(uuid) || command.value("uuid", "") != uuid || !valid_uuid(command.value("generation", "")) ||
       !command.contains("revision") || !command["revision"].is_number_integer() ||
@@ -239,6 +747,7 @@ TdRuntime::Account &TdRuntime::validated_account(const std::string &uuid, const 
     account.uuid = uuid;
     account.generation = command.at("generation").get<std::string>();
     account.use_test_dc = config_.use_test_dc;
+    account.runtime_epoch = make_request_id();
     iterator = accounts_.emplace(uuid, std::move(account)).first;
     status_.account_count = accounts_.size();
   }
@@ -250,6 +759,10 @@ TdRuntime::Account &TdRuntime::validated_account(const std::string &uuid, const 
   const auto revision = command.at("revision").get<std::uint64_t>();
   if (revision < account.revision)
     throw std::runtime_error("operation.conflict");
+  const auto authorization_generation = command.value("authorization_generation", account.authorization_generation);
+  if (authorization_generation < account.authorization_generation)
+    throw std::runtime_error("operation.conflict");
+  account.authorization_generation = authorization_generation;
   if (account.tombstone)
     throw std::runtime_error("account.gone");
   return account;
@@ -281,6 +794,10 @@ nlohmann::json TdRuntime::reconcile(const std::string &uuid, const nlohmann::jso
       return safe_error("configuration.missing", 409);
     account->busy = true;
     account->revision = revision;
+    account->authorization_generation = command.value("authorization_generation", 1ULL);
+    account->effective_config_id = command.value("effective_config_id", "");
+    account->telegram_api_id = command.value("telegram_api_id", config_.telegram_api_id);
+    account->telegram_api_hash = command.value("telegram_api_hash", config_.telegram_api_hash);
     account->lifecycle = command.value("lifecycle", "provisioning");
     if (!(requested_proxy.size() == 1 && requested_proxy.contains("id"))) {
       account->proxy = requested_proxy;
@@ -347,6 +864,9 @@ nlohmann::json TdRuntime::reconcile(const std::string &uuid, const nlohmann::jso
 
 void TdRuntime::activate(Account &account) {
   std::string uuid;
+  const auto telegram_api_id = account.telegram_api_id == 0 ? config_.telegram_api_id : account.telegram_api_id;
+  const auto &telegram_api_hash =
+      account.telegram_api_hash.empty() ? config_.telegram_api_hash : account.telegram_api_hash;
   {
     std::lock_guard lock(mutex_);
     if (account.client_id != 0 && account.closing)
@@ -355,7 +875,7 @@ void TdRuntime::activate(Account &account) {
       return;
     uuid = account.uuid;
   }
-  if (config_.telegram_api_id == 0 || config_.telegram_api_hash.empty() || config_.master_key_file.empty()) {
+  if (telegram_api_id == 0 || telegram_api_hash.empty() || config_.master_key_file.empty()) {
     throw std::runtime_error("configuration.missing");
   }
   if (!std::filesystem::exists(config_.master_key_file))
@@ -379,11 +899,10 @@ void TdRuntime::activate(Account &account) {
     auto network_barrier = begin_request(
         client, td_api::make_object<td_api::setNetworkType>(td_api::make_object<td_api::networkTypeNone>()));
     const std::string key(reinterpret_cast<const char *>(derived.data()), derived.size());
-    auto parameters =
-        begin_request(client, td_api::make_object<td_api::setTdlibParameters>(
-                                  config_.use_test_dc, (root / "db").string(), (root / "files").string(), key, false,
-                                  false, false, false, config_.telegram_api_id, config_.telegram_api_hash, "en",
-                                  "TeleBezel", "Linux", TELEBEZEL_SERVICE_VERSION));
+    auto parameters = begin_request(client, td_api::make_object<td_api::setTdlibParameters>(
+                                                config_.use_test_dc, (root / "db").string(), (root / "files").string(),
+                                                key, true, true, false, false, telegram_api_id, telegram_api_hash, "en",
+                                                "TeleBezel", "Linux", TELEBEZEL_SERVICE_VERSION));
     auto response = await_request(std::move(network_barrier), std::chrono::seconds(8));
     auto parameters_response = await_request(std::move(parameters), std::chrono::seconds(8));
     throw_runtime_control_error(response);
@@ -442,7 +961,7 @@ void TdRuntime::apply_proxy(Account &account) {
     }
   }
   const std::string mode = desired.value("mode", "inherit");
-  if (mode != "inherit" && !valid_uuid(desired.value("id", "")))
+  if (mode != "inherit" && mode != "direct" && !valid_uuid(desired.value("id", "")))
     throw std::runtime_error("configuration.invalid");
   const ProxyConfig *selected = &config_.proxy;
   ProxyConfig override;
@@ -556,6 +1075,7 @@ void TdRuntime::receive_loop() {
   auto next_reminder = std::chrono::steady_clock::now() + std::chrono::minutes(5);
   while (!receive_done_.load()) {
     std::vector<std::int32_t> stalled_clients;
+    std::vector<std::pair<std::int32_t, std::int64_t>> expired_chats;
     {
       std::lock_guard lock(mutex_);
       const auto now = std::chrono::steady_clock::now();
@@ -572,10 +1092,26 @@ void TdRuntime::receive_loop() {
         else
           ++iterator;
       }
+      for (auto &[uuid, account] : accounts_) {
+        static_cast<void>(uuid);
+        for (auto iterator = account.interests.begin(); iterator != account.interests.end();) {
+          if (iterator->second.second > now) {
+            ++iterator;
+            continue;
+          }
+          const auto chat_id = iterator->second.first;
+          auto &count = account.interest_counts[chat_id];
+          if (count > 0 && --count == 0 && account.client_id != 0)
+            expired_chats.emplace_back(account.client_id, chat_id);
+          iterator = account.interests.erase(iterator);
+        }
+      }
     }
     for (const auto client : stalled_clients) {
       transport_->send(client, next_id(), td_api::make_object<td_api::close>());
     }
+    for (const auto &[client, chat_id] : expired_chats)
+      transport_->send(client, next_id(), td_api::make_object<td_api::closeChat>(chat_id));
     auto response = transport_->receive(0.1);
     if (!response.object) {
       if (std::chrono::steady_clock::now() >= next_reminder) {
@@ -688,6 +1224,99 @@ void TdRuntime::handle_update(std::int32_t client_id, td_api::Object &object) {
   } else if (object.get_id() == td_api::updateConnectionState::ID) {
     auto &update = static_cast<td_api::updateConnectionState &>(object);
     account.connection_state = update.state_ ? connection_name(update.state_->get_id()) : "unknown";
+  } else if (object.get_id() == td_api::updateNewChat::ID) {
+    auto &update = static_cast<td_api::updateNewChat &>(object);
+    if (update.chat_) {
+      account.chats[update.chat_->id_] = chat_projection(*update.chat_);
+      if (update.chat_->last_message_)
+        account.messages[{update.chat_->id_, update.chat_->last_message_->id_}] =
+            message_projection(*update.chat_->last_message_);
+      append_event(account, "chat_changed", update.chat_->id_);
+    }
+  } else if (object.get_id() == td_api::updateChatTitle::ID) {
+    auto &update = static_cast<td_api::updateChatTitle &>(object);
+    account.chats[update.chat_id_]["id"] = std::to_string(update.chat_id_);
+    account.chats[update.chat_id_]["title"] = update.title_;
+    append_event(account, "chat_changed", update.chat_id_);
+  } else if (object.get_id() == td_api::updateChatPosition::ID) {
+    auto &update = static_cast<td_api::updateChatPosition &>(object);
+    account.chats[update.chat_id_]["id"] = std::to_string(update.chat_id_);
+    if (!account.chats[update.chat_id_].contains("positions"))
+      account.chats[update.chat_id_]["positions"] = nlohmann::json::object();
+    apply_position(account.chats[update.chat_id_], update.position_.get());
+    append_event(account, "chat_changed", update.chat_id_);
+  } else if (object.get_id() == td_api::updateChatLastMessage::ID) {
+    auto &update = static_cast<td_api::updateChatLastMessage &>(object);
+    auto &chat = account.chats[update.chat_id_];
+    chat["id"] = std::to_string(update.chat_id_);
+    chat["positions"] = nlohmann::json::object();
+    for (const auto &position : update.positions_)
+      apply_position(chat, position.get());
+    chat["last_message"] = update.last_message_ ? message_projection(*update.last_message_) : nlohmann::json(nullptr);
+    if (update.last_message_)
+      account.messages[{update.chat_id_, update.last_message_->id_}] = message_projection(*update.last_message_);
+    append_event(account, "chat_changed", update.chat_id_);
+  } else if (object.get_id() == td_api::updateChatDraftMessage::ID) {
+    auto &update = static_cast<td_api::updateChatDraftMessage &>(object);
+    auto &chat = account.chats[update.chat_id_];
+    chat["id"] = std::to_string(update.chat_id_);
+    chat["positions"] = nlohmann::json::object();
+    for (const auto &position : update.positions_)
+      apply_position(chat, position.get());
+    append_event(account, "chat_changed", update.chat_id_);
+  } else if (object.get_id() == td_api::updateNewMessage::ID) {
+    auto &update = static_cast<td_api::updateNewMessage &>(object);
+    if (update.message_) {
+      account.messages[{update.message_->chat_id_, update.message_->id_}] = message_projection(*update.message_);
+      append_event(account, "message_changed", update.message_->chat_id_, update.message_->id_);
+    }
+  } else if (object.get_id() == td_api::updateMessageContent::ID) {
+    auto &update = static_cast<td_api::updateMessageContent &>(object);
+    auto found = account.messages.find({update.chat_id_, update.message_id_});
+    if (found != account.messages.end())
+      found->second["content"] = message_content(update.new_content_.get());
+    auto &last = account.chats[update.chat_id_]["last_message"];
+    if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
+      last["content"] = message_content(update.new_content_.get());
+      append_event(account, "chat_changed", update.chat_id_);
+    }
+    append_event(account, "message_changed", update.chat_id_, update.message_id_);
+  } else if (object.get_id() == td_api::updateMessageEdited::ID) {
+    auto &update = static_cast<td_api::updateMessageEdited &>(object);
+    auto found = account.messages.find({update.chat_id_, update.message_id_});
+    if (found != account.messages.end())
+      found->second["edit_date"] = update.edit_date_;
+    auto &last = account.chats[update.chat_id_]["last_message"];
+    if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
+      last["edit_date"] = update.edit_date_;
+      append_event(account, "chat_changed", update.chat_id_);
+    }
+    append_event(account, "message_changed", update.chat_id_, update.message_id_);
+  } else if (object.get_id() == td_api::updateDeleteMessages::ID) {
+    auto &update = static_cast<td_api::updateDeleteMessages &>(object);
+    for (const auto message_id : update.message_ids_) {
+      account.messages.erase({update.chat_id_, message_id});
+      append_event(account, update.from_cache_ ? "message_changed" : "message_deleted", update.chat_id_, message_id);
+      auto &last = account.chats[update.chat_id_]["last_message"];
+      if (last.is_object() && last.value("id", "") == std::to_string(message_id)) {
+        last = nullptr;
+        append_event(account, "chat_changed", update.chat_id_);
+      }
+    }
+  } else if (object.get_id() == td_api::updateChatReadInbox::ID) {
+    auto &update = static_cast<td_api::updateChatReadInbox &>(object);
+    auto &chat = account.chats[update.chat_id_];
+    chat["last_read_inbox_message_id"] = std::to_string(update.last_read_inbox_message_id_);
+    chat["unread_count"] = update.unread_count_;
+    append_event(account, "chat_changed", update.chat_id_);
+  } else if (object.get_id() == td_api::updateChatReadOutbox::ID) {
+    auto &update = static_cast<td_api::updateChatReadOutbox &>(object);
+    account.chats[update.chat_id_]["last_read_outbox_message_id"] = std::to_string(update.last_read_outbox_message_id_);
+    append_event(account, "chat_changed", update.chat_id_);
+  } else if (object.get_id() == td_api::updateChatIsMarkedAsUnread::ID) {
+    auto &update = static_cast<td_api::updateChatIsMarkedAsUnread &>(object);
+    account.chats[update.chat_id_]["is_marked_unread"] = update.is_marked_as_unread_;
+    append_event(account, "chat_changed", update.chat_id_);
   }
 }
 
@@ -904,6 +1533,7 @@ nlohmann::json TdRuntime::update_proxy(const std::string &uuid, const nlohmann::
       return safe_error("operation.conflict", 409);
     account->busy = true;
     account->revision = command.at("revision").get<std::uint64_t>();
+    account->effective_config_id = command.value("effective_config_id", "");
     account->proxy = command.value("proxy", nlohmann::json::object());
     account->operation_id = nullable_string(command, "operation_id");
     account->revision_fingerprint = fingerprint;
@@ -953,6 +1583,45 @@ nlohmann::json TdRuntime::update_proxy(const std::string &uuid, const nlohmann::
   registry_.write(completed, proxy);
   result["completed"] = true;
   return result;
+}
+
+nlohmann::json TdRuntime::ping_proxy(const std::string &uuid, const nlohmann::json &proxy_config) {
+  std::int32_t client = 0;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = accounts_.find(uuid);
+    if (found == accounts_.end() || found->second.tombstone)
+      return safe_error("account.not_found", 404);
+    if (found->second.client_id == 0 || found->second.closed)
+      return safe_error("service.busy", 503);
+    client = found->second.client_id;
+  }
+  const auto mode = proxy_config.value("mode", "");
+  const auto host = proxy_config.value("host", "");
+  const auto port = proxy_config.value("port", 0);
+  const auto username = proxy_config.value("username", "");
+  const auto password = proxy_config.value("password", "");
+  const auto secret = proxy_config.value("secret", "");
+  const auto http_only = proxy_config.value("http_only", false);
+  if (host.empty() || port < 1 || port > 65535 ||
+      (mode == "mtproto" && (secret.empty() || !username.empty() || !password.empty())) ||
+      ((mode == "socks5" || mode == "http") && !secret.empty()) ||
+      (mode != "socks5" && mode != "http" && mode != "mtproto") || (!password.empty() && username.empty()) ||
+      (mode != "http" && http_only))
+    return safe_error("configuration.invalid", 422);
+  td_api::object_ptr<td_api::ProxyType> type;
+  if (mode == "socks5")
+    type = td_api::make_object<td_api::proxyTypeSocks5>(username, password);
+  else if (mode == "http")
+    type = td_api::make_object<td_api::proxyTypeHttp>(username, password, http_only);
+  else
+    type = td_api::make_object<td_api::proxyTypeMtproto>(secret);
+  auto proxy = td_api::make_object<td_api::proxy>(host, port, std::move(type));
+  auto response = request(client, td_api::make_object<td_api::pingProxy>(std::move(proxy)));
+  if (!response || response->get_id() != td_api::seconds::ID)
+    return safe_error("proxy.unreachable", 502);
+  const auto seconds = td::move_tl_object_as<td_api::seconds>(response);
+  return {{"latency_ms", static_cast<std::int64_t>(std::llround(seconds->seconds_ * 1000.0))}};
 }
 
 nlohmann::json TdRuntime::remove(const std::string &uuid, const nlohmann::json &command) {
@@ -1066,6 +1735,8 @@ void TdRuntime::close_account(Account &account, bool destroy) {
   std::int32_t client = 0;
   {
     std::unique_lock lock(mutex_);
+    account.interests.clear();
+    account.interest_counts.clear();
     if (account.closing && !condition_.wait_for(lock, std::chrono::seconds(8), [&account] { return !account.closing; }))
       throw std::runtime_error("operation.outcome_unknown");
     if (account.client_id == 0 || account.closed)

@@ -34,12 +34,15 @@ final class TelegramAccountController extends Controller
 
     public function store(CreateTelegramAccountRequest $request, TelegramAccountService $accounts): JsonResponse
     {
-        [$account, $created] = $accounts->create(
-            (string) $request->attributes->get('api_client_id'),
+        $arguments = [
+            (string) $request->attributes->get('principal_id'),
             (string) $request->header('Idempotency-Key'),
             $request->validated(),
             $this->requestId($request),
-        );
+        ];
+        [$account, $created] = $request->attributes->get('principal_type') === 'owner'
+            ? $accounts->createForOwner(...$arguments)
+            : $accounts->create(...$arguments);
 
         return response()->json(['data' => (new TelegramAccountResource($account))->resolve($request), 'request_id' => $this->requestId($request)], $created ? 201 : 200, ['Cache-Control' => 'no-store']);
     }

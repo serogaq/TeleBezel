@@ -42,21 +42,24 @@ function create(options) {
     checkStatus(sequence, value);
   }
   function showConfiguration() {
+    var saved = options.settings.load(options.storage);
+    openClay(saved);
+  }
+  function openClay(saved) {
     var strings = options.localization.resolve(options.locales, options.getLocale());
     activeClay = new options.Clay(options.configPage.build(strings), null, {autoHandleEvents: false});
-    activeClay.setSettings(options.settings.toClay(options.settings.load(options.storage)));
+    activeClay.setSettings(options.settings.toClay(saved));
     options.Pebble.openURL(activeClay.generateUrl());
   }
   function webviewClosed(event) {
     if (!activeClay || !event || !event.response) { activeClay = null; return; }
-    var value = options.settings.fromClay(activeClay.getSettings(event.response, false));
-    if (options.settings.validate(value).ok) {
+    var saved = options.settings.load(options.storage);
+    var value = options.settings.fromClay(activeClay.getSettings(event.response, false), saved);
+    if (options.settings.validateEndpoint(value).ok) {
       options.settings.save(options.storage, value);
       ++generation;
-      // A live watch receives REFRESH and issues a new sequenced request. Also
-      // test the saved settings now so a configuration page close is observable.
       send(options.protocol.response.refresh, 0, 0, 1);
-      if (latestStatusSeq > 0) { checkStatus(latestStatusSeq, value); }
+      if (latestStatusSeq > 0 && options.settings.validate(value).ok) { checkStatus(latestStatusSeq, value); }
     }
     activeClay = null;
   }

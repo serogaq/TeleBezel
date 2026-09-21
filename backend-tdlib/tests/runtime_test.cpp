@@ -46,6 +46,8 @@ public:
         push({client, request, td_api::make_object<td_api::error>(400, "PROXY_FAILED")});
       else
         push({client, request, td_api::make_object<td_api::addedProxy>()});
+    } else if (type == td_api::pingProxy::ID) {
+      push({client, request, td_api::make_object<td_api::seconds>(0.125)});
     } else {
       push({client, request, td_api::make_object<td_api::ok>()});
     }
@@ -63,6 +65,9 @@ public:
   }
   void emit_state(std::int32_t client, td_api::object_ptr<td_api::AuthorizationState> state) {
     push({client, 0, td_api::make_object<td_api::updateAuthorizationState>(std::move(state))});
+  }
+  void emit_update(std::int32_t client, td_api::object_ptr<td_api::Object> update) {
+    push({client, 0, std::move(update)});
   }
   std::vector<std::pair<std::int32_t, std::int32_t>> sent() {
     std::lock_guard lock(mutex_);
@@ -146,6 +151,27 @@ int main() {
   };
   require(runtime.reconcile(first, command(first)).value("runtime_available", false));
   require(runtime.reconcile(second, command(second)).value("runtime_available", false));
+  require(
+      runtime
+          .ping_proxy(first, {{"mode", "mtproto"}, {"host", "proxy.example"}, {"port", 443}, {"secret", "dd-secret"}})
+          .value("latency_ms", 0) == 125);
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  auto projected_chat = td_api::make_object<td_api::chat>();
+  projected_chat->id_ = 42;
+  projected_chat->title_ = "Projection test";
+  projected_chat->type_ = td_api::make_object<td_api::chatTypePrivate>(7);
+  projected_chat->positions_.push_back(
+      td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListMain>(), 100, true, nullptr));
+  transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(projected_chat)));
+  wait_until([&] { return runtime.chats(first, "main", 20, "")["items"].size() == 1; });
+  const auto initial_cursor = runtime.chats(first, "main", 20, "").value("updates_cursor", "");
+  transport->emit_update(1, td_api::make_object<td_api::updateChatTitle>(42, "Renamed"));
+  wait_until([&] { return runtime.chat(first, 42)["item"].value("title", "") == "Renamed"; });
+  require(runtime.updates(first, initial_cursor, 100)["items"].size() == 1);
+  const std::string device = "80112233-4455-4677-8899-aabbccddeeff";
+  const std::string view = "90112233-4455-4677-8899-aabbccddeeff";
+  require(runtime.set_interest(first, 42, "device:" + device + ":" + view + ":42", true).value("active", false));
+  require(runtime.release_interests("device", device).value("released", 0) == 1);
   const auto sent = transport->sent();
   require(sent.size() >= 2);
   require(sent[0].second == td_api::setNetworkType::ID);
@@ -231,6 +257,7 @@ int main() {
   require(runtime.logout(second, logout).value("completed", false));
   auto proxy_update = logout;
   proxy_update["revision"] = 3;
+  proxy_update["effective_config_id"] = "51112233-4455-4677-8899-aabbccddeeff";
   proxy_update["lifecycle"] = "active";
   proxy_update["operation_id"] = "41112233-4455-4677-8899-aabbccddeeff";
   proxy_update.erase("logout_operation_id");
@@ -242,6 +269,16 @@ int main() {
                                          {"password", "proxy-password"},
                                          {"http_only", true}};
   require(runtime.update_proxy(second, proxy_update).value("completed", false));
+  require(runtime.snapshot(second).value("effective_config_id", "") ==
+          proxy_update["effective_config_id"].get<std::string>());
+  auto direct_update = proxy_update;
+  direct_update["revision"] = 4;
+  direct_update["effective_config_id"] = "61112233-4455-4677-8899-aabbccddeeff";
+  direct_update["operation_id"] = "61112233-4455-4677-8899-aabbccddeefe";
+  direct_update["proxy"] = nlohmann::json{{"mode", "direct"}};
+  require(runtime.update_proxy(second, direct_update).value("completed", false));
+  require(runtime.snapshot(second).value("effective_config_id", "") ==
+          direct_update["effective_config_id"].get<std::string>());
   auto stale_proxy = proxy_update;
   stale_proxy["revision"] = 2;
   bool stale_proxy_rejected = false;

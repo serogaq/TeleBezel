@@ -29,6 +29,9 @@ final class TelegramAccount extends Model
         'authorization_state', 'connection_state',
         'last_error_code', 'operation_id', 'logout_operation_id',
         'logout_completed_at',
+        'authorization_generation', 'effective_config_id', 'last_reconcile_attempt_at',
+        'last_reconcile_success_at', 'next_reconcile_at', 'reconcile_failures',
+        'reconcile_blocked_revision',
     ];
 
     protected function casts(): array
@@ -40,6 +43,12 @@ final class TelegramAccount extends Model
             'proxy_port' => 'integer',
             'runtime_available' => 'boolean',
             'logout_completed_at' => 'immutable_datetime',
+            'authorization_generation' => 'integer',
+            'last_reconcile_attempt_at' => 'immutable_datetime',
+            'last_reconcile_success_at' => 'immutable_datetime',
+            'next_reconcile_at' => 'immutable_datetime',
+            'reconcile_blocked_revision' => 'integer',
+            'reconcile_failures' => 'integer',
             'deleted_at' => 'immutable_datetime',
         ];
     }

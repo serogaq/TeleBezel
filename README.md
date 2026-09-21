@@ -1,8 +1,10 @@
 # TeleBezel
 
 TeleBezel is a modern Pebble Telegram client. This repository contains the
-Stage 1 multi-account authorization and durable-session backend foundation; chats,
-messages, and watch-side Telegram UI remain outside this stage. Remote
+Stage 2 phone-managed, multi-account backend: owner-issued device tokens, durable
+configuration and reconciliation, chat/history reads, and a replayable update
+journal. Sending messages and a complete watch-side Telegram UI remain outside
+this stage. Remote
 CI, cross-architecture release, RePebble staging, and physical-watch acceptance
 remain deployment gates rather than claims established by local tests.
 
@@ -23,13 +25,14 @@ Docker Desktop, then run:
 make secrets-init
 docker compose up -d postgres backend-tdlib
 make db-migrate
-docker compose up -d backend-api
-docker compose exec backend-api php artisan telebezel:accounts-reconcile
-make api-client-issue NAME=my-pebble
+docker compose up -d backend-api scheduler
+docker compose run --rm backend-api php artisan telebezel:bootstrap-code
 make integration-test
 ```
 
-Configure the returned token in the Pebble configuration page. In a local phone
+Open HTTPS `/settings` in the phone browser, use the one-time bootstrap code,
+and create a device token under Connected Pebbles. Enter the reachable backend
+address and that token in the Pebble Clay configuration page. In a local phone
 emulator, use a host address it can actually reach; `127.0.0.1` on a physical
 phone means the phone itself, not this Docker host. For physical devices, place
 a trusted HTTPS reverse proxy in front of the loopback-bound API and enter its
@@ -37,10 +40,11 @@ reachable hostname and port. Never expose the private TDLib or PostgreSQL ports.
 
 The persistence boundary is strict: PostgreSQL stores application-owned API
 state, while the TDLib volume stores Telegram-owned session and cache data.
-The API exposes account-slot, authorization, proxy, logout, and local-removal
-endpoints under `/v1/telegram/accounts`. After every deployment, run
-`telebezel:accounts-reconcile`; configure host cron to run `php artisan
-schedule:run` once per minute.
+The API exposes account lifecycle plus chats, history, individual messages,
+interest leases, and update polling under `/v1/telegram/accounts`. The dedicated
+`scheduler` service runs reconciliation; migrations remain an explicit one-shot
+deployment step. See [`docs/openapi-stage2.yaml`](docs/openapi-stage2.yaml) and
+[`docs/stage-2-acceptance.md`](docs/stage-2-acceptance.md).
 
 For a standalone watch build, run `make app-build`; it writes and validates
 `app/build/app.pbw`. `make app-check` also runs the C and PebbleKit JS checks.

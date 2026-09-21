@@ -19,7 +19,7 @@ TDLIB_BUILD_DIR ?= backend-tdlib/build
 TDLIB_CMAKE_ARGS ?=
 CMAKE_GENERATOR_ARGS ?= $(if $(wildcard $(TDLIB_BUILD_DIR)/CMakeCache.txt),,-G Ninja)
 
-.PHONY: help toolchain-check app-build app-check app-qemu app-install api-check tdlib-check workflow-audit compose-config compose-build secrets-init secrets-provision db-migrate api-client-issue integration-test image-smoke check clean
+.PHONY: help toolchain-check app-build app-check app-qemu app-install api-check tdlib-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test image-smoke check clean
 help:
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -91,6 +91,13 @@ secrets-init: ## Create ignored local development secrets if absent
 	@umask 077; test -f secrets/tdlib_database_master_key || openssl rand -hex 32 > secrets/tdlib_database_master_key
 	@umask 077; test -f secrets/laravel_app_key || { printf 'base64:' > secrets/laravel_app_key; openssl rand -base64 32 | tr -d '\n' >> secrets/laravel_app_key; printf '\n' >> secrets/laravel_app_key; }
 	@$(MAKE) --no-print-directory secrets-provision
+
+preflight: ## Validate Docker, Compose, and existing key files without changing them
+	sh deploy/preflight.sh
+	docker compose run --rm backend-api php artisan telebezel:preflight-keys
+
+bootstrap-code: ## Print a one-time owner bootstrap code
+	docker compose run --rm backend-api php artisan telebezel:bootstrap-code
 
 secrets-provision: ## Grant only required container UIDs access to secret files on native Linux
 	bash tests/secrets/provision_file.sh secrets/postgres_password 999 10001

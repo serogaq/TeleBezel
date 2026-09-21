@@ -1,3 +1,6 @@
 # Changelog
-## 0.1.0 - Unreleased
-- Stage 0 connectivity and configuration foundation.
+
+## Unreleased
+
+- Replace unsupported post-Clay navigation with manual owner-issued device tokens.
+- Connectivity and configuration foundation.

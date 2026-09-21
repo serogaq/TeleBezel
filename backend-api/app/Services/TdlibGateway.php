@@ -56,12 +56,74 @@ final class TdlibGateway
         return $this->request('PUT', "/internal/v1/accounts/{$accountId}/proxy", $command, $requestId);
     }
 
+    /** @param array<string, mixed> $proxy
+     * @return array<string, mixed>
+     */
+    public function pingProxy(string $accountId, array $proxy, string $requestId): array
+    {
+        return $this->request('POST', "/internal/v1/accounts/{$accountId}/proxy/ping", ['proxy' => $proxy], $requestId);
+    }
+
     /** @param array<string, mixed> $command
      * @return array<string, mixed>
      */
     public function remove(string $accountId, array $command, string $requestId): array
     {
         return $this->request('DELETE', "/internal/v1/accounts/{$accountId}", $command, $requestId);
+    }
+
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function chats(string $accountId, array $query, string $requestId): array
+    {
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats", $query, $requestId, true);
+    }
+
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function chat(string $accountId, string $chatId, array $query, string $requestId): array
+    {
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}", $query, $requestId, true);
+    }
+
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function messages(string $accountId, string $chatId, array $query, string $requestId): array
+    {
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages", $query, $requestId, true);
+    }
+
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function message(string $accountId, string $chatId, string $messageId, array $query, string $requestId): array
+    {
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages/{$messageId}", $query, $requestId, true);
+    }
+
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function updates(string $accountId, array $query, string $requestId): array
+    {
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/updates", $query, $requestId, true);
+    }
+
+    /** @param array<string, mixed> $lease
+     * @return array<string, mixed>
+     */
+    public function interest(string $method, string $accountId, string $chatId, string $viewId, array $lease, string $requestId): array
+    {
+        return $this->request($method, "/internal/v1/accounts/{$accountId}/chats/{$chatId}/interests/{$viewId}", $lease, $requestId);
+    }
+
+    public function releasePrincipalInterests(string $type, string $id, string $requestId): void
+    {
+        $this->request('DELETE', '/internal/v1/interests/principal', ['principal_type' => $type,
+            'principal_id' => $id], $requestId);
     }
 
     private function client(string $requestId, bool $read): PendingRequest
@@ -72,7 +134,7 @@ final class TdlibGateway
             ->acceptJson()
             ->asJson()
             ->connectTimeout(1)
-            ->timeout($read ? 2 : 10);
+            ->timeout(10);
     }
 
     /** @param array<string, mixed> $payload
@@ -109,7 +171,9 @@ final class TdlibGateway
             'storage.missing', 'storage.identity_mismatch', 'storage.corrupt', 'storage.unsafe_path', 'storage.invalid_key',
             'storage.io_error', 'storage.volume_in_use',
             'configuration.missing', 'configuration.invalid', 'configuration.environment_mismatch', 'service.busy', 'service.stopping',
-            'telegram.operation_failed',
+            'telegram.operation_failed', 'proxy.unreachable',
+            'chat.not_found', 'message.not_found', 'cursor.invalid', 'cursor.unusable', 'sync.resync_required',
+            'read.deadline', 'interest.limit_reached',
         ];
         $code = $json['error']['code'] ?? null;
         if (! is_string($code) || ! in_array($code, $safeCodes, true)) {

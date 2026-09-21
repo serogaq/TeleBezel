@@ -1,0 +1,150 @@
+(() => {
+  'use strict';
+  const csrf = document.querySelector('meta[name="csrf-token"]').content;
+  const status = document.getElementById('status');
+  const flow = globalThis.TeleBezelSettingsFlow;
+  let lastOwnerActivityAt = 0;
+  let ownerActivityPromise = null;
+  const request = async (url, options = {}) => {
+    const method = options.method || 'GET';
+    const isOwnerMutation = flow.shouldRecordOwnerActivity(url, method);
+    if (isOwnerMutation) await recordOwnerActivity();
+    const response = await fetch(url, {...options, credentials: 'same-origin', headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf, ...options.headers}});
+    const text = await response.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!response.ok) {
+      const error = new Error(body.error?.code || 'request.failed');
+      error.status = response.status;
+      if (response.status === 401 && url.startsWith('/v1/owner/') && url !== '/v1/owner/login') {
+        document.getElementById('configuration').hidden = true;
+        document.getElementById('access').hidden = false;
+      }
+      throw error;
+    }
+    return body.data;
+  };
+  const recordOwnerActivity = async () => {
+    if (Date.now() - lastOwnerActivityAt < 60000) return;
+    if (ownerActivityPromise === null) {
+      ownerActivityPromise = request('/v1/owner/activity', {method: 'POST', body: '{}'})
+        .then(() => { lastOwnerActivityAt = Date.now(); })
+        .finally(() => { ownerActivityPromise = null; });
+    }
+    await ownerActivityPromise;
+  };
+  const node = (tag, text, className) => { const element = document.createElement(tag); if (text != null) element.textContent = text; if (className) element.className = className; return element; };
+  const formValue = (form, name) => new FormData(form).get(name)?.toString() || '';
+  let revision = null;
+  let accountRefreshTimer = null;
+  let accountRefreshDelay = 1000;
+
+  const renderSettings = async () => {
+    const [settings, accountData, replies, devices, proxies] = await Promise.all([
+      request('/v1/owner/settings'), request('/v1/owner/telegram/accounts'), request('/v1/owner/quick-replies'), request('/v1/owner/devices'), request('/v1/owner/proxies')
+    ]);
+    revision = settings.configuration_revision;
+    document.getElementById('configuration').hidden = false;
+    document.getElementById('access').hidden = true;
+    document.querySelector('#telegram [name="telegram_api_id"]').value = settings.telegram.api_id || '';
+    document.querySelector('#proxy-policy [name="failure_action"]').value = settings.proxy_runtime.failure_action;
+    document.querySelector('#proxy-policy [name="connect_timeout_seconds"]').value = settings.proxy_runtime.connect_timeout_seconds;
+    const dl = document.getElementById('runtime-status'); dl.replaceChildren();
+    const values = {Instance: settings.instance_id, 'Configuration revision': revision, Scheduler: settings.scheduler?.last_result || 'not observed', 'Last scheduler tick': settings.scheduler?.last_tick_at || 'never'};
+    Object.entries(values).forEach(([key, value]) => dl.append(node('dt', key), node('dd', String(value))));
+    renderAccounts(accountData); renderReplies(replies); renderDevices(devices); renderProxies(proxies, settings.proxy_runtime.active_profile_id);
+  };
+
+  const showRecovery = code => { const output = document.getElementById('recovery'); output.hidden = false; output.textContent = `Save this recovery code now:\n${code}`; };
+  const authenticated = async authData => {
+    lastOwnerActivityAt = Date.now();
+    if (authData?.recovery_code) showRecovery(authData.recovery_code);
+    await renderSettings(); status.textContent = 'Signed in. Changes are saved on this server.';
+  };
+  document.getElementById('login').addEventListener('submit', async event => { event.preventDefault(); try { await authenticated(await request('/v1/owner/login', {method: 'POST', body: JSON.stringify({password: formValue(event.target, 'password')})})); } catch (error) { status.textContent = error.message; } });
+  document.getElementById('bootstrap').addEventListener('submit', async event => { event.preventDefault(); try { await authenticated(await request('/v1/owner/bootstrap', {method: 'POST', body: JSON.stringify({bootstrap_code: formValue(event.target, 'bootstrap_code'), password: formValue(event.target, 'password')})})); } catch (error) { status.textContent = error.message; } });
+  document.getElementById('recover').addEventListener('submit', async event => { event.preventDefault(); try { await authenticated(await request('/v1/owner/recover', {method: 'POST', body: JSON.stringify({recovery_code: formValue(event.target, 'recovery_code'), password: formValue(event.target, 'password')})})); } catch (error) { status.textContent = error.message; } });
+
+  document.getElementById('telegram').addEventListener('submit', async event => { event.preventDefault(); const hash = formValue(event.target, 'telegram_api_hash'); const body = {configuration_revision: revision, telegram_api_id: Number(formValue(event.target, 'telegram_api_id'))}; if (hash) body.telegram_api_hash = hash; try { revision = (await request('/v1/owner/settings', {method: 'PUT', body: JSON.stringify(body)})).configuration_revision; event.target.reset(); await renderSettings(); status.textContent = 'Telegram credentials saved and reconciliation requested.'; } catch (error) { status.textContent = error.message; } });
+  const renderProxies = (proxies, activeId) => {
+    const list = document.getElementById('proxies'); list.replaceChildren();
+    let current = document.getElementById('proxy-current');
+    if (!current) { current = node('p'); current.id = 'proxy-current'; list.closest('section').querySelector('h2').after(current); }
+    const activeProfile = proxies.find(proxy => proxy.id === activeId);
+    current.textContent = activeProfile ? `Current: ${activeProfile.label} · ${activeProfile.mode} · ${activeProfile.host}:${activeProfile.port}` : 'Current: direct connection';
+    proxies.forEach(proxy => {
+      const item = node('div', null, 'item'); const copy = node('div');
+      const ping = proxy.ping.ok === true ? `${proxy.ping.latency_ms} ms` : proxy.ping.ok === false ? `unreachable · ${proxy.ping.error}` : 'not tested';
+      copy.append(node('p', `${proxy.label}${proxy.active ? ' · ACTIVE' : ''}`), node('p', `${proxy.mode} · ${proxy.host}:${proxy.port} · ${ping}`, 'meta'));
+      const actions = node('div');
+      const activate = node('button', proxy.active ? 'Active' : 'Activate', 'secondary'); activate.type = 'button'; activate.disabled = proxy.active; activate.addEventListener('click', async () => { try { await request(`/v1/owner/proxies/${proxy.id}/activate`, {method: 'POST', body: '{}'}); await renderSettings(); } catch (error) { status.textContent = error.message; } });
+      const pingButton = node('button', 'Ping', 'secondary'); pingButton.type = 'button'; pingButton.addEventListener('click', async () => { try { await request(`/v1/owner/proxies/${proxy.id}/ping`, {method: 'POST', body: '{}'}); await renderSettings(); } catch (error) { status.textContent = error.message; } });
+      const remove = node('button', 'Delete', 'danger'); remove.type = 'button'; remove.disabled = proxy.active; remove.addEventListener('click', async () => { try { await request(`/v1/owner/proxies/${proxy.id}`, {method: 'DELETE'}); await renderSettings(); } catch (error) { status.textContent = error.message; } });
+      actions.append(activate, pingButton, remove); item.append(copy, actions); list.append(item);
+    });
+  };
+  document.getElementById('proxy-add').addEventListener('submit', async event => { event.preventDefault(); const mode = formValue(event.target, 'mode'); const body = {label: formValue(event.target, 'label'), mode, host: formValue(event.target, 'host'), port: Number(formValue(event.target, 'port'))}; const username = formValue(event.target, 'username'); const credential = formValue(event.target, 'credential'); if (username) body.username = username; if (credential) body[mode === 'mtproto' ? 'secret' : 'password'] = credential; if (mode === 'http') body.http_only = event.target.elements.http_only.checked; try { await request('/v1/owner/proxies', {method: 'POST', body: JSON.stringify(body)}); event.target.reset(); await renderSettings(); status.textContent = 'Proxy added and tested.'; } catch (error) { status.textContent = error.message; } });
+  document.getElementById('proxy-policy').addEventListener('submit', async event => { event.preventDefault(); try { await request('/v1/owner/proxies/settings', {method: 'PUT', body: JSON.stringify({failure_action: formValue(event.target, 'failure_action'), connect_timeout_seconds: Number(formValue(event.target, 'connect_timeout_seconds'))})}); await renderSettings(); status.textContent = 'Proxy failover policy saved.'; } catch (error) { status.textContent = error.message; } });
+  document.getElementById('proxy-ping-all').addEventListener('click', async () => { try { status.textContent = 'Testing proxies…'; await request('/v1/owner/proxies/ping', {method: 'POST', body: '{}'}); await renderSettings(); status.textContent = 'Proxy test completed.'; } catch (error) { status.textContent = error.message; } });
+  document.getElementById('proxy-direct').addEventListener('click', async () => { try { await request('/v1/owner/proxies/direct', {method: 'POST', body: '{}'}); await renderSettings(); status.textContent = 'Direct connection selected.'; } catch (error) { status.textContent = error.message; } });
+
+  const scheduleAccountRefresh = () => {
+    if (accountRefreshTimer !== null || document.hidden) return;
+    accountRefreshTimer = setTimeout(async () => {
+      accountRefreshTimer = null;
+      try {
+        renderAccounts(await request('/v1/owner/telegram/accounts'));
+        accountRefreshDelay = Math.min(Math.round(accountRefreshDelay * 1.5), 5000);
+      } catch (error) {
+        if (error.status === 401) status.textContent = 'Your owner session expired. Reload this page to sign in again.';
+        else {
+          status.textContent = error.message;
+          scheduleAccountRefresh();
+        }
+      }
+    }, accountRefreshDelay);
+  };
+  const renderAccounts = accounts => {
+    const list = document.getElementById('accounts');
+    let preparing = false;
+    list.replaceChildren();
+    accounts.forEach(account => {
+      const view = flow.accountView(account);
+      preparing ||= view.shouldPoll;
+      const item = node('div', null, 'item');
+      const copy = node('div');
+      const details = `${account.lifecycle} · auth ${view.authorizationState} · connection ${view.connectionState}${view.errorCode ? ` · error ${view.errorCode}` : ''}`;
+      copy.append(node('p', account.label || 'Telegram account'), node('p', details, 'meta'));
+      const auth = node('button', view.buttonLabel, 'secondary');
+      auth.type = 'button';
+      auth.disabled = !view.canAuthorize;
+      auth.setAttribute('aria-busy', view.waitingForRuntime ? 'true' : 'false');
+      auth.addEventListener('click', () => authorize(account.id));
+      const logout = node('button', 'Log out', 'danger');
+      logout.type = 'button';
+      logout.disabled = account.lifecycle !== 'active';
+      logout.addEventListener('click', async () => { try { await request(`/v1/owner/telegram/accounts/${account.id}/logout`, {method: 'POST', body: '{}'}); await renderSettings(); } catch (error) { status.textContent = error.message; } });
+      const actions = node('div');
+      actions.append(auth, logout);
+      item.append(copy, actions);
+      list.append(item);
+    });
+    if (preparing) scheduleAccountRefresh();
+    else accountRefreshDelay = 1000;
+  };
+  const authorize = async id => { try { const auth = await request(`/v1/owner/telegram/accounts/${id}/authorization`); if (auth.qr_link) { status.textContent = auth.qr_link; return; } const action = auth.allowed_actions?.[0]; if (!action) { status.textContent = `Authorization: ${auth.state || 'ready'}`; return; } const value = ['start_qr', 'resend_code'].includes(action) ? null : window.prompt(`Value for ${action}`); if (value === null && !['start_qr', 'resend_code'].includes(action)) return; await request(`/v1/owner/telegram/accounts/${id}/authorization/actions`, {method: 'POST', body: JSON.stringify(flow.authorizationPayload(auth, action, value))}); await renderSettings(); } catch (error) { status.textContent = error.message; } };
+  document.getElementById('account-add').addEventListener('submit', async event => { event.preventDefault(); try { await request('/v1/owner/telegram/accounts', {method: 'POST', headers: {'Idempotency-Key': crypto.randomUUID()}, body: JSON.stringify({label: formValue(event.target, 'label'), proxy: {mode: 'inherit'}})}); event.target.reset(); await renderSettings(); } catch (error) { status.textContent = error.message; } });
+
+  const renderReplies = replies => { const list = document.getElementById('replies'); list.replaceChildren(); replies.forEach(reply => { const item = node('div', null, 'item'); item.append(node('p', reply.text)); const remove = node('button', 'Delete', 'danger'); remove.type = 'button'; remove.addEventListener('click', async () => { await request(`/v1/owner/quick-replies/${reply.id}`, {method: 'DELETE'}); await renderSettings(); }); item.append(remove); list.append(item); }); };
+  document.getElementById('reply-add').addEventListener('submit', async event => { event.preventDefault(); try { await request('/v1/owner/quick-replies', {method: 'POST', body: JSON.stringify({text: formValue(event.target, 'text')})}); event.target.reset(); await renderSettings(); } catch (error) { status.textContent = error.message; } });
+  const renderDevices = devices => { const list = document.getElementById('devices'); list.replaceChildren(); devices.forEach(device => { const item = node('div', null, 'item'); item.append(node('p', device.name), node('p', device.revoked_at ? 'revoked' : `last seen ${device.last_seen_at || 'never'}`, 'meta')); if (!device.revoked_at) { const revoke = node('button', 'Revoke', 'danger'); revoke.type = 'button'; revoke.addEventListener('click', async () => { await request(`/v1/owner/devices/${device.id}`, {method: 'DELETE'}); await renderSettings(); }); item.append(revoke); } list.append(item); }); };
+  document.getElementById('device-add').addEventListener('submit', async event => { event.preventDefault(); try { const device = await request('/v1/owner/devices', {method: 'POST', body: JSON.stringify({name: formValue(event.target, 'name')})}); const output = document.getElementById('device-token'); output.hidden = false; output.textContent = `Copy this token now; it will not be shown again:\n${device.token}`; await renderSettings(); status.textContent = 'Device token created. Paste it into the TeleBezel Clay settings.'; } catch (error) { status.textContent = error.message; } });
+  document.getElementById('rotate-recovery').addEventListener('click', async () => { try { const data = await request('/v1/owner/recovery-code', {method: 'POST', body: '{}'}); showRecovery(data.recovery_code); status.textContent = 'New recovery code created. Save it now.'; } catch (error) { status.textContent = error.message; } });
+  document.getElementById('sign-out').addEventListener('click', async () => { await request('/v1/owner/logout', {method: 'POST', body: '{}'}); location.reload(); });
+
+  authenticated().catch(error => {
+    if (error.status === 401) {
+      document.getElementById('access').hidden = false;
+      status.textContent = 'Sign in to manage this server.';
+    } else status.textContent = error.message;
+  });
+})();

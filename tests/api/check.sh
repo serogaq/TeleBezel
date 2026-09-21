@@ -28,6 +28,7 @@ if test -f bootstrap/cache/config.php; then
   echo 'Refusing database tests with a cached Laravel configuration' >&2
   exit 1
 fi
+node --test tests/Js/SettingsFlowTest.js
 "$php_bin" "$composer_bin" install --no-interaction --prefer-dist
 "$php_bin" "$composer_bin" validate --strict
 "$php_bin" vendor/bin/pint --test

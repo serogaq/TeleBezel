@@ -21,5 +21,6 @@ backend-tdlib/build/
 backend-tdlib/analysis-build/
 backend-tdlib/sanitizer-build/
 secrets/*
+release/*
 !secrets/.gitkeep
 !.env.example

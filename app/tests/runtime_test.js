@@ -10,7 +10,7 @@ function makeHarness() {
   var calls = [];
   var failNext = false;
   var memory = {};
-  var storage = {getItem: function(key) { return memory[key] || null; }, setItem: function(key, value) { memory[key] = value; }};
+  var storage = {getItem: function(key) { return memory[key] || null; }, setItem: function(key, value) { memory[key] = value; }, removeItem: function(key) { delete memory[key]; }};
   var pebble = {
     addEventListener: function(name, callback) { events[name] = callback; },
     sendAppMessage: function(message, success, failure) {
@@ -53,4 +53,5 @@ h.failNext();
 h.calls[2].callback({code: protocol.result.ok});
 assert.strictEqual(h.messages.length, 6, 'failed watch delivery retries once');
 assert.strictEqual(h.messages[5].REQUEST_SEQ, 4);
+
 process.stdout.write('PKJS lifecycle tests passed\n');

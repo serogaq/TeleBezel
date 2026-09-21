@@ -9,8 +9,9 @@ assert.strictEqual(settings.validate({}).missing, true);
 assert.strictEqual(settings.validate({address: 'https://bad:443', token: 'x'}).ok, false);
 assert.strictEqual(settings.validate({address: 'localhost:8080', ssl: false, token: 'tb_x'}).ok, true);
 settings.save(storage, {address: 'localhost:8080', ssl: false, token: 'tb_secret'});
+assert.strictEqual(settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, CONFIG_TOKEN: ''}, settings.load(storage)).token, 'tb_secret');
 function FakeXhr() { this.headers = {}; this.readyState = 0; }
-FakeXhr.prototype.open = function(method, url) { this.method = method; this.url = url; };
+FakeXhr.prototype.open = function(method, url, async) { this.method = method; this.url = url; this.async = async; };
 FakeXhr.prototype.setRequestHeader = function(name, value) { this.headers[name] = value; };
 FakeXhr.prototype.send = function() { this.status = 200; this.responseText = '{"data":{"status":"ready"}}'; this.readyState = 4; this.onreadystatechange(); this.onerror(); };
 var calls = 0;

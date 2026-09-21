@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\ApiClient;
+use App\Models\Device;
 use Closure;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -21,15 +22,26 @@ final class AuthenticateApiClient
         try {
             $hash = hash('sha256', $token);
             $client = ApiClient::query()->where('token_hash', $hash)->whereNull('revoked_at')->first();
+            $device = $client === null ? Device::query()->where('token_hash', $hash)->whereNull('revoked_at')->first() : null;
         } catch (QueryException) {
             return $this->error($request, 503, 'service.database_unavailable');
         }
 
-        if ($client === null || ! hash_equals($client->token_hash, $hash)) {
+        if ($client === null && $device === null) {
             return $this->error($request, 401, 'auth.unauthorized');
         }
 
-        $request->attributes->set('api_client_id', $client->getKey());
+        if ($client !== null) {
+            $request->attributes->set('api_client_id', $client->getKey());
+            $request->attributes->set('principal_type', 'api_client');
+            $request->attributes->set('principal_id', $client->getKey());
+        } else {
+            $device->forceFill(['last_seen_at' => now()])->save();
+            $request->attributes->set('device_id', $device->getKey());
+            $request->attributes->set('instance_id', $device->instance_id);
+            $request->attributes->set('principal_type', 'device');
+            $request->attributes->set('principal_id', $device->getKey());
+        }
 
         return $next($request);
     }

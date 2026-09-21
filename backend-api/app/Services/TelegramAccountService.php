@@ -5,6 +5,9 @@ namespace App\Services;
 use App\Enums\AccountLifecycle;
 use App\Exceptions\ApiException;
 use App\Models\AccountIdempotencyKey;
+use App\Models\Instance;
+use App\Models\OwnerAccountIdempotencyKey;
+use App\Models\ProxyProfile;
 use App\Models\TelegramAccount;
 use Illuminate\Database\QueryException;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -20,6 +23,23 @@ final class TelegramAccountService
      */
     public function create(string $apiClientId, string $idempotencyKey, array $input, string $requestId): array
     {
+        return $this->createIdempotent(AccountIdempotencyKey::class, 'api_client_id', $apiClientId, $idempotencyKey, $input, $requestId);
+    }
+
+    /** @param array<string, mixed> $input
+     * @return array{TelegramAccount, bool}
+     */
+    public function createForOwner(string $ownerSessionId, string $idempotencyKey, array $input, string $requestId): array
+    {
+        return $this->createIdempotent(OwnerAccountIdempotencyKey::class, 'owner_session_id', $ownerSessionId, $idempotencyKey, $input, $requestId);
+    }
+
+    /** @param class-string<AccountIdempotencyKey|OwnerAccountIdempotencyKey> $keyModel
+     * @param  array<string, mixed>  $input
+     * @return array{TelegramAccount, bool}
+     */
+    private function createIdempotent(string $keyModel, string $scopeColumn, string $scopeId, string $idempotencyKey, array $input, string $requestId): array
+    {
         if (strlen($idempotencyKey) < 8 || strlen($idempotencyKey) > 200) {
             throw new ApiException('request.invalid_idempotency_key', 422);
         }
@@ -27,9 +47,9 @@ final class TelegramAccountService
         $proxy = $this->normalizedProxy($input['proxy'] ?? ['mode' => 'inherit']);
         $requestHash = hash('sha256', $this->canonicalJson(['label' => $input['label'], 'proxy' => $proxy]));
         try {
-            [$account, $created] = DB::transaction(function () use ($apiClientId, $keyHash, $requestHash, $input, $proxy): array {
-                $existing = AccountIdempotencyKey::query()
-                    ->where('api_client_id', $apiClientId)->where('key_hash', $keyHash)->lockForUpdate()->first();
+            [$account, $created] = DB::transaction(function () use ($keyModel, $scopeColumn, $scopeId, $keyHash, $requestHash, $input, $proxy): array {
+                $existing = $keyModel::query()
+                    ->where($scopeColumn, $scopeId)->where('key_hash', $keyHash)->lockForUpdate()->first();
                 if ($existing !== null) {
                     if (! hash_equals($existing->request_hash, $requestHash)) {
                         throw new ApiException('operation.conflict', 409);
@@ -47,13 +67,14 @@ final class TelegramAccountService
                     'storage_generation' => (string) Str::uuid(),
                     'lifecycle' => AccountLifecycle::Provisioning,
                     'desired_revision' => 1,
+                    'effective_config_id' => (string) Str::uuid(),
                     'proxy_id' => $proxy['id'] ?? null,
                     'proxy_server' => $proxy['host'] ?? null,
                     'proxy_port' => $proxy['port'] ?? null,
                     'proxy_type' => $proxy['mode'] === 'inherit' ? null : $proxy['mode'],
                 ]);
-                AccountIdempotencyKey::query()->create([
-                    'api_client_id' => $apiClientId,
+                $keyModel::query()->create([
+                    $scopeColumn => $scopeId,
                     'key_hash' => $keyHash,
                     'request_hash' => $requestHash,
                     'telegram_account_id' => $account->id,
@@ -66,7 +87,7 @@ final class TelegramAccountService
                 throw $exception;
             }
 
-            return $this->create($apiClientId, $idempotencyKey, $input, $requestId);
+            return $this->createIdempotent($keyModel, $scopeColumn, $scopeId, $idempotencyKey, $input, $requestId);
         }
 
         if ($created) {
@@ -89,6 +110,7 @@ final class TelegramAccountService
                     foreach ($paginator->getCollection() as $account) {
                         if (isset($snapshots[$account->id]) && is_array($snapshots[$account->id])) {
                             $this->applySnapshot($account, $snapshots[$account->id]);
+                            $this->persistSnapshotState($account);
                         }
                     }
                 }
@@ -118,6 +140,7 @@ final class TelegramAccountService
         if ($refresh) {
             try {
                 $this->applySnapshot($account, $this->tdlib->snapshot($id, $requestId));
+                $this->persistSnapshotState($account);
             } catch (ApiException) {
                 $account->runtime_available = false;
             }
@@ -131,7 +154,7 @@ final class TelegramAccountService
     {
         $proxy = $this->normalizedProxy($input);
 
-        return DB::transaction(function () use ($id, $input, $proxy, $requestId): TelegramAccount {
+        $account = DB::transaction(function () use ($id, $input, $proxy): TelegramAccount {
             $account = TelegramAccount::query()->whereKey($id)->lockForUpdate()->first();
             if ($account === null || $account->lifecycle === AccountLifecycle::Removed) {
                 throw new ApiException($account === null ? 'account.not_found' : 'account.gone', $account === null ? 404 : 410);
@@ -144,20 +167,16 @@ final class TelegramAccountService
             $account->proxy_port = $proxy['port'] ?? null;
             $account->proxy_type = $proxy['mode'] === 'inherit' ? null : $proxy['mode'];
             $account->desired_revision++;
+            $account->effective_config_id = (string) Str::uuid();
             $account->operation_id = (string) Str::uuid();
             $account->last_error_code = null;
-            $data = $this->tdlib->updateProxy($id, $this->command($account, $proxy), $requestId);
-            if (($data['applied_revision'] ?? null) === $account->desired_revision) {
-                $account->applied_revision = $account->desired_revision;
-            }
-            if (($data['completed'] ?? false) === true) {
-                $account->operation_id = null;
-            }
-            $this->applySnapshot($account, $data, false);
             $account->save();
 
             return $account;
         }, 3);
+        $this->confirm($account, $this->tdlib->updateProxy($id, $this->command($account, $proxy), $requestId));
+
+        return $account->fresh();
     }
 
     /** @param array<string, mixed> $input
@@ -191,6 +210,7 @@ final class TelegramAccountService
             if ($account->lifecycle !== AccountLifecycle::LogoutPending) {
                 $account->lifecycle = AccountLifecycle::LogoutPending;
                 $account->desired_revision++;
+                $account->authorization_generation++;
                 $account->logout_operation_id = (string) Str::uuid();
                 $account->operation_id = $account->logout_operation_id;
                 $account->logout_completed_at = null;
@@ -269,6 +289,20 @@ final class TelegramAccountService
         $this->dispatchProvision($account, $requestId, $account->lifecycle === AccountLifecycle::Active);
     }
 
+    public function applyEffectiveProxy(TelegramAccount $account, string $requestId): void
+    {
+        if ($account->lifecycle !== AccountLifecycle::Active) {
+            $this->reconcile($account, $requestId);
+
+            return;
+        }
+        try {
+            $this->confirm($account, $this->tdlib->updateProxy($account->id, $this->command($account), $requestId));
+        } catch (ApiException $exception) {
+            $this->recordDeferredError($account, $exception->errorCode);
+        }
+    }
+
     /** @return array<string, mixed> */
     public function proxy(TelegramAccount $account): array
     {
@@ -308,6 +342,9 @@ final class TelegramAccountService
             if ($locked === null || $locked->desired_revision !== $account->desired_revision) {
                 return;
             }
+            if (isset($data['effective_config_id']) && $data['effective_config_id'] !== $locked->effective_config_id) {
+                return;
+            }
             $applied = $data['applied_revision'] ?? null;
             if (is_int($applied) && $applied === $account->desired_revision) {
                 $locked->applied_revision = $applied;
@@ -333,6 +370,15 @@ final class TelegramAccountService
     /** @param array<string, mixed> $snapshot */
     private function applySnapshot(TelegramAccount $account, array $snapshot, bool $includeIdentity = true): void
     {
+        $applied = $snapshot['applied_revision'] ?? null;
+        $effectiveConfigId = $snapshot['effective_config_id'] ?? null;
+        if (is_int($applied) && $applied === $account->desired_revision
+            && is_string($effectiveConfigId) && hash_equals((string) $account->effective_config_id, $effectiveConfigId)) {
+            $account->applied_revision = $applied;
+            if (($snapshot['operation_id'] ?? null) === null) {
+                $account->operation_id = null;
+            }
+        }
         if (array_key_exists('runtime_available', $snapshot)) {
             $account->runtime_available = $snapshot['runtime_available'] === true;
         }
@@ -345,6 +391,18 @@ final class TelegramAccountService
             unset($snapshot['telegram_identity']['phone_number']);
             $account->telegram_identity = $snapshot['telegram_identity'];
         }
+    }
+
+    private function persistSnapshotState(TelegramAccount $account): void
+    {
+        TelegramAccount::query()->whereKey($account->id)->update([
+            'applied_revision' => $account->applied_revision,
+            'runtime_available' => $account->runtime_available,
+            'authorization_state' => $account->authorization_state,
+            'connection_state' => $account->connection_state,
+            'last_error_code' => $account->last_error_code,
+            'operation_id' => $account->operation_id,
+        ]);
     }
 
     /** @param array<string, mixed> $proxy
@@ -378,7 +436,8 @@ final class TelegramAccountService
     /** @return array<string, mixed> */
     private function identity(TelegramAccount $account): array
     {
-        return ['uuid' => $account->id, 'generation' => $account->storage_generation, 'revision' => $account->desired_revision];
+        return ['uuid' => $account->id, 'generation' => $account->storage_generation,
+            'authorization_generation' => $account->authorization_generation, 'revision' => $account->desired_revision];
     }
 
     /** @return array<string, mixed> */
@@ -387,9 +446,24 @@ final class TelegramAccountService
      */
     private function command(TelegramAccount $account, ?array $proxy = null): array
     {
-        $proxy ??= $account->proxy_id === null ? ['mode' => 'inherit'] : ['id' => $account->proxy_id];
+        $instance = Instance::query()->first();
+        $profile = $instance?->active_proxy_profile_id === null ? null : ProxyProfile::query()->find($instance->active_proxy_profile_id);
+        $globalProxy = $profile instanceof ProxyProfile ? ['id' => $profile->id, 'mode' => $profile->mode,
+            'host' => $profile->host, 'port' => $profile->port, 'http_only' => $profile->http_only,
+            ...($profile->username ? ['username' => $profile->username] : []), ...($profile->credentials ?? [])] : ['mode' => 'direct'];
+        $proxy ??= $account->proxy_id === null ? $globalProxy : [
+            'id' => $account->proxy_id,
+            'mode' => $account->proxy_type ?? 'direct',
+            ...$account->proxy_server === null ? [] : ['host' => $account->proxy_server],
+            ...$account->proxy_port === null ? [] : ['port' => $account->proxy_port],
+        ];
+        $credentials = $instance?->telegram_api_id !== null && $instance->telegram_api_hash !== null
+            ? ['telegram_api_id' => $instance->telegram_api_id, 'telegram_api_hash' => $instance->telegram_api_hash]
+            : [];
 
-        return [...$this->identity($account), 'operation_id' => $account->operation_id, 'lifecycle' => $account->lifecycle->value, 'proxy' => $proxy];
+        return [...$this->identity($account), 'effective_config_id' => $account->effective_config_id,
+            ...$credentials,
+            'operation_id' => $account->operation_id, 'lifecycle' => $account->lifecycle->value, 'proxy' => $proxy];
     }
 
     /** @param array<string, mixed> $value */
