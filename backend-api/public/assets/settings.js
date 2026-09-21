@@ -1,37 +1,18 @@
 (() => {
   'use strict';
-  const csrf = document.querySelector('meta[name="csrf-token"]').content;
   const status = document.getElementById('status');
   const flow = globalThis.TeleBezelSettingsFlow;
-  let lastOwnerActivityAt = 0;
-  let ownerActivityPromise = null;
-  const request = async (url, options = {}) => {
-    const method = options.method || 'GET';
-    const isOwnerMutation = flow.shouldRecordOwnerActivity(url, method);
-    if (isOwnerMutation) await recordOwnerActivity();
-    const response = await fetch(url, {...options, credentials: 'same-origin', headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf, ...options.headers}});
-    const text = await response.text();
-    const body = text ? JSON.parse(text) : {};
-    if (!response.ok) {
-      const error = new Error(body.error?.code || 'request.failed');
-      error.status = response.status;
-      if (response.status === 401 && url.startsWith('/v1/owner/') && url !== '/v1/owner/login') {
-        document.getElementById('configuration').hidden = true;
-        document.getElementById('access').hidden = false;
-      }
-      throw error;
+  const client = globalThis.TeleBezelSettingsApi.create({
+    fetch: globalThis.fetch.bind(globalThis),
+    csrf: document.querySelector('meta[name="csrf-token"]').content,
+    flow,
+    onUnauthorized: () => {
+      document.getElementById('configuration').hidden = true;
+      document.getElementById('access').hidden = false;
     }
-    return body.data;
-  };
-  const recordOwnerActivity = async () => {
-    if (Date.now() - lastOwnerActivityAt < 60000) return;
-    if (ownerActivityPromise === null) {
-      ownerActivityPromise = request('/v1/owner/activity', {method: 'POST', body: '{}'})
-        .then(() => { lastOwnerActivityAt = Date.now(); })
-        .finally(() => { ownerActivityPromise = null; });
-    }
-    await ownerActivityPromise;
-  };
+  });
+  const request = client.request;
+  const recordOwnerActivity = client.recordOwnerActivity;
   const node = (tag, text, className) => { const element = document.createElement(tag); if (text != null) element.textContent = text; if (className) element.className = className; return element; };
   const formValue = (form, name) => new FormData(form).get(name)?.toString() || '';
   let revision = null;

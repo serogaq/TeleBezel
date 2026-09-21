@@ -18,6 +18,11 @@ final class OwnerSession extends Model
 
     protected function casts(): array
     {
-        return ['authenticated_at' => 'immutable_datetime', 'last_interactive_at' => 'immutable_datetime', 'expires_at' => 'immutable_datetime', 'revoked_at' => 'immutable_datetime'];
+        return [
+            'authenticated_at' => 'immutable_datetime',
+            'last_interactive_at' => 'immutable_datetime',
+            'expires_at' => 'immutable_datetime',
+            'revoked_at' => 'immutable_datetime',
+        ];
     }
 }

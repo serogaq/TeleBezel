@@ -31,8 +31,8 @@ Route::prefix('/v1/owner')->group(function (): void {
         Route::delete('/devices/{id}', [SettingsController::class, 'revokeDevice']);
         Route::get('/quick-replies', [SettingsController::class, 'quickReplies']);
         Route::post('/quick-replies', [SettingsController::class, 'storeQuickReply']);
-        Route::put('/quick-replies/{id}', [SettingsController::class, 'updateQuickReply']);
         Route::put('/quick-replies/reorder', [SettingsController::class, 'reorderQuickReplies']);
+        Route::put('/quick-replies/{id}', [SettingsController::class, 'updateQuickReply']);
         Route::delete('/quick-replies/{id}', [SettingsController::class, 'destroyQuickReply']);
         Route::prefix('/telegram/accounts')->group(function (): void {
             Route::get('/', [TelegramAccountController::class, 'index']);

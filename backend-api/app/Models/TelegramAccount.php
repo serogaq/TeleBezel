@@ -3,11 +3,14 @@
 namespace App\Models;
 
 use App\Enums\AccountLifecycle;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
+ * @property CarbonImmutable|null $next_reconcile_at
+ * @property CarbonImmutable|null $logout_completed_at
  * @property AccountLifecycle $lifecycle
  * @property string|null $proxy_id
  * @property string|null $proxy_server
@@ -23,16 +26,7 @@ final class TelegramAccount extends Model
     use HasUuids;
     use SoftDeletes;
 
-    protected $fillable = [
-        'id', 'label', 'storage_generation', 'lifecycle', 'desired_revision',
-        'applied_revision', 'proxy_id', 'proxy_server', 'proxy_port', 'proxy_type', 'runtime_available',
-        'authorization_state', 'connection_state',
-        'last_error_code', 'operation_id', 'logout_operation_id',
-        'logout_completed_at',
-        'authorization_generation', 'effective_config_id', 'last_reconcile_attempt_at',
-        'last_reconcile_success_at', 'next_reconcile_at', 'reconcile_failures',
-        'reconcile_blocked_revision',
-    ];
+    protected $fillable = ['id', 'label', 'storage_generation', 'lifecycle', 'desired_revision', 'applied_revision', 'proxy_id', 'proxy_server', 'proxy_port', 'proxy_type', 'runtime_available', 'authorization_state', 'connection_state', 'last_error_code', 'operation_id', 'logout_operation_id', 'logout_completed_at', 'authorization_generation', 'effective_config_id', 'last_reconcile_attempt_at', 'last_reconcile_success_at', 'next_reconcile_at', 'reconcile_failures', 'reconcile_blocked_revision'];
 
     protected function casts(): array
     {

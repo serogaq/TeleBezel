@@ -2,7 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\OwnerSession;
+use App\Http\RequestContext;
+use App\Http\Requests\BootstrapOwnerRequest;
+use App\Http\Requests\LoginOwnerRequest;
+use App\Http\Requests\RecoverOwnerRequest;
+use App\Http\Resources\OwnerSessionResource;
 use App\Services\OwnerAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -10,54 +14,62 @@ use Symfony\Component\HttpFoundation\Cookie;
 
 final class OwnerSessionController extends Controller
 {
-    public function bootstrap(Request $request, OwnerAccessService $access): JsonResponse
+    public function bootstrap(BootstrapOwnerRequest $request, OwnerAccessService $access): JsonResponse
     {
-        $data = $request->validate(['bootstrap_code' => ['required', 'string', 'max:200'], 'password' => ['required', 'string', 'min:12', 'max:200']]);
-        [$instance, $token, $recovery] = $access->bootstrap($data['bootstrap_code'], $data['password']);
+        $data = $request->inputData();
+        [$instance, $token, $recovery] = $access->bootstrap($data->string('bootstrap_code'), $data->string('password'));
 
-        return $this->authenticated(['instance_id' => $instance->id, 'recovery_code' => $recovery], $token, 201);
+        return $this->authenticated([
+            'instance_id' => $instance,
+            'recovery_code' => $recovery,
+        ], $token, 201);
     }
 
-    public function login(Request $request, OwnerAccessService $access): JsonResponse
+    public function login(LoginOwnerRequest $request, OwnerAccessService $access): JsonResponse
     {
-        $data = $request->validate(['password' => ['required', 'string', 'max:200']]);
-        [$instance, $token] = $access->login($data['password']);
+        $data = $request->inputData();
+        [$instance, $token] = $access->login($data->string('password'));
 
-        return $this->authenticated(['instance_id' => $instance->id], $token);
+        return $this->authenticated([
+            'instance_id' => $instance,
+        ], $token);
     }
 
-    public function recover(Request $request, OwnerAccessService $access): JsonResponse
+    public function recover(RecoverOwnerRequest $request, OwnerAccessService $access): JsonResponse
     {
-        $data = $request->validate(['recovery_code' => ['required', 'string', 'max:200'], 'password' => ['required', 'string', 'min:12', 'max:200']]);
-        [$token, $recovery] = $access->recover($data['recovery_code'], $data['password']);
+        $data = $request->inputData();
+        [$token, $recovery] = $access->recover($data->string('recovery_code'), $data->string('password'));
 
-        return $this->authenticated(['recovery_code' => $recovery], $token);
+        return $this->authenticated([
+            'recovery_code' => $recovery,
+        ], $token);
     }
 
     public function rotateRecoveryCode(Request $request, OwnerAccessService $access): JsonResponse
     {
-        $recovery = $access->rotateRecoveryCode((string) $request->attributes->get('instance_id'));
+        $recovery = $access->rotateRecoveryCode(RequestContext::instanceId($request));
 
-        return response()->json(['data' => ['recovery_code' => $recovery]], 201, ['Cache-Control' => 'no-store']);
+        return (new OwnerSessionResource([
+            'recovery_code' => $recovery,
+        ]))->respond(status: 201);
     }
 
-    public function activity(Request $request): JsonResponse
+    public function activity(Request $request, OwnerAccessService $access): JsonResponse
     {
-        /** @var OwnerSession $session */
-        $session = $request->attributes->get('owner_session');
-        $session->forceFill(['last_interactive_at' => now()])->save();
+        $access->activity(RequestContext::principal($request)->id);
 
-        return response()->json(['data' => ['active' => true]], 200, ['Cache-Control' => 'no-store']);
+        return (new OwnerSessionResource([
+            'active' => true,
+        ]))->respond();
     }
 
-    public function logout(Request $request): JsonResponse
+    public function logout(Request $request, OwnerAccessService $access): JsonResponse
     {
-        /** @var OwnerSession $session */
-        $session = $request->attributes->get('owner_session');
-        $session->forceFill(['revoked_at' => now()])->save();
+        $access->logout(RequestContext::principal($request)->id);
 
-        return response()->json(['data' => ['authenticated' => false]], 200, ['Cache-Control' => 'no-store'])
-            ->withoutCookie('telebezel_owner');
+        return (new OwnerSessionResource([
+            'authenticated' => false,
+        ]))->respond()->withoutCookie('telebezel_owner');
     }
 
     /** @param array<string, mixed> $data */
@@ -65,6 +77,6 @@ final class OwnerSessionController extends Controller
     {
         $cookie = Cookie::create('telebezel_owner', $token, now()->addHours(12), '/', null, true, true, false, Cookie::SAMESITE_STRICT);
 
-        return response()->json(['data' => $data], $status, ['Cache-Control' => 'no-store'])->withCookie($cookie);
+        return (new OwnerSessionResource($data))->respond(status: $status)->withCookie($cookie);
     }
 }

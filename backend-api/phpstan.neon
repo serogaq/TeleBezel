@@ -1,8 +1,21 @@
 includes:
     - vendor/larastan/larastan/extension.neon
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
 
 parameters:
     paths:
         - app
         - routes
-    level: 6
+        - bootstrap/app.php
+        - database
+        - tests/Fakes
+        - tests/Integration/TdlibProcess.php
+    level: 10
+    # Larastan EloquentBuilderMethodReflection::isStatic() returns true for Query Builder forwarding.
+    # Restrict the interoperability exception to forwarded framework methods in persistence.
+    ignoreErrors:
+        -
+            identifier: staticMethod.dynamicCall
+            message: '#^Dynamic call to static method Illuminate\\Database\\Eloquent\\Builder<#'
+            paths:
+                - app/Repositories/*

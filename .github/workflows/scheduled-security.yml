@@ -65,16 +65,14 @@ jobs:
         with: {version: "${{ steps.toolchain.outputs.uv-version }}", enable-cache: true}
       - run: |
           sudo apt-get update
-          sudo apt-get install -y ccache clang clang-tidy gperf libssl-dev ninja-build php-cli zlib1g-dev
+          sudo apt-get install -y ccache clang clang-tidy cppcheck gperf libssl-dev ninja-build php-cli zlib1g-dev
       - run: |
           ccache --zero-stats
           make tdlib-check TDLIB_CMAKE_ARGS=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
           cmake --build backend-tdlib/analysis-build --target tdapi --parallel 2
-          clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/crypto.cpp backend-tdlib/src/registry.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/transport.cpp backend-tdlib/src/main.cpp
-          cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_SANITIZERS=ON
-          cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2
-          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir backend-tdlib/sanitizer-build --output-on-failure
+          python3 backend-tdlib/tests/analyse.py backend-tdlib/analysis-build
+          bash backend-tdlib/tests/sanitizers.sh backend-tdlib/analysis-build cmake
           ccache --show-stats
   release-tags:
     runs-on: ubuntu-24.04

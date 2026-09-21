@@ -1,81 +1,66 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Http\Controllers;
 
-use App\Models\ProxyProfile;
+use App\Http\RequestContext;
+use App\Http\Requests\ConfigureProxyProfilesRequest;
+use App\Http\Requests\CreateProxyProfileRequest;
+use App\Http\Resources\ProxyProfileResource;
+use App\Http\Resources\ProxySettingsResource;
 use App\Services\ProxyProfileService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
 
 final class ProxyProfileController extends Controller
 {
     public function index(Request $request, ProxyProfileService $profiles): JsonResponse
     {
-        return response()->json(['data' => $profiles->all((string) $request->attributes->get('instance_id'))]);
+        return ProxyProfileResource::listing($profiles->all(RequestContext::instanceId($request)))->respond();
     }
 
-    public function store(Request $request, ProxyProfileService $profiles): JsonResponse
+    public function store(CreateProxyProfileRequest $request, ProxyProfileService $profiles): JsonResponse
     {
-        $data = $request->validate(['label' => ['required', 'string', 'max:100'],
-            'mode' => ['required', Rule::in(['socks5', 'http', 'mtproto'])], 'host' => ['required', 'string', 'max:255'],
-            'port' => ['required', 'integer', 'between:1,65535'], 'http_only' => ['sometimes', 'boolean'],
-            'username' => ['nullable', 'string', 'max:255', 'prohibited_if:mode,mtproto'],
-            'password' => ['nullable', 'string', 'max:255', 'prohibited_if:mode,mtproto'],
-            'secret' => ['nullable', 'string', 'max:512', 'required_if:mode,mtproto', 'prohibited_unless:mode,mtproto']]);
-
-        return response()->json(['data' => $profiles->create((string) $request->attributes->get('instance_id'),
-            $data, (string) $request->attributes->get('request_id'))], 201);
+        return (new ProxyProfileResource($profiles->create(RequestContext::instanceId($request), $request->inputData(), RequestContext::requestId($request))))->respond(status: 201);
     }
 
     public function ping(string $id, Request $request, ProxyProfileService $profiles): JsonResponse
     {
-        $profile = $this->profile($id, $request);
-
-        return response()->json(['data' => $profiles->ping($profile, (string) $request->attributes->get('request_id'))]);
+        return (new ProxyProfileResource($profiles->ping(RequestContext::instanceId($request), $id, RequestContext::requestId($request))))->respond();
     }
 
     public function pingAll(Request $request, ProxyProfileService $profiles): JsonResponse
     {
-        return response()->json(['data' => $profiles->pingAll((string) $request->attributes->get('instance_id'),
-            (string) $request->attributes->get('request_id'))]);
+        return ProxyProfileResource::listing($profiles->pingAll(RequestContext::instanceId($request), RequestContext::requestId($request)))->respond();
     }
 
     public function activate(string $id, Request $request, ProxyProfileService $profiles): JsonResponse
     {
-        $profiles->activate((string) $request->attributes->get('instance_id'), $this->profile($id, $request),
-            (string) $request->attributes->get('request_id'));
+        $profiles->activate(RequestContext::instanceId($request), $id, RequestContext::requestId($request));
 
-        return response()->json(['data' => $profiles->all((string) $request->attributes->get('instance_id'))]);
+        return ProxyProfileResource::listing($profiles->all(RequestContext::instanceId($request)))->respond();
     }
 
     public function direct(Request $request, ProxyProfileService $profiles): JsonResponse
     {
-        $profiles->activate((string) $request->attributes->get('instance_id'), null,
-            (string) $request->attributes->get('request_id'));
+        $profiles->activate(RequestContext::instanceId($request), null, RequestContext::requestId($request));
 
-        return response()->json(['data' => $profiles->all((string) $request->attributes->get('instance_id'))]);
+        return ProxyProfileResource::listing($profiles->all(RequestContext::instanceId($request)))->respond();
     }
 
-    public function configure(Request $request, ProxyProfileService $profiles): JsonResponse
+    public function configure(ConfigureProxyProfilesRequest $request, ProxyProfileService $profiles): JsonResponse
     {
-        $data = $request->validate(['failure_action' => ['required', Rule::in(['direct', 'next'])],
-            'connect_timeout_seconds' => ['required', 'integer', 'between:3,300']]);
-        $profiles->configure((string) $request->attributes->get('instance_id'), $data);
+        $profiles->configure(RequestContext::instanceId($request), $request->inputData());
 
-        return response()->json(['data' => $data]);
+        return (new ProxySettingsResource($request->inputData()->all()))->respond();
     }
 
     public function destroy(string $id, Request $request, ProxyProfileService $profiles): Response
     {
-        $profiles->delete($this->profile($id, $request));
+        $profiles->delete(RequestContext::instanceId($request), $id);
 
         return response()->noContent();
-    }
-
-    private function profile(string $id, Request $request): ProxyProfile
-    {
-        return ProxyProfile::query()->whereKey($id)->where('instance_id', $request->attributes->get('instance_id'))->firstOrFail();
     }
 }

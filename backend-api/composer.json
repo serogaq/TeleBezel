@@ -3,7 +3,11 @@
     "name": "telebezel/backend-api",
     "type": "project",
     "description": "Public API for the TeleBezel Pebble Telegram client.",
-    "keywords": ["laravel", "pebble", "telegram"],
+    "keywords": [
+        "laravel",
+        "pebble",
+        "telegram"
+    ],
     "license": "proprietary",
     "require": {
         "php": "^8.5",
@@ -22,7 +26,11 @@
         "laravel/pint": "^1.27",
         "mockery/mockery": "^1.6",
         "nunomaduro/collision": "^8.6",
-        "phpunit/phpunit": "^13.3.3"
+        "pestphp/pest": "^5.2",
+        "pestphp/pest-plugin-laravel": "^5.0",
+        "phpstan/phpstan": "^2.2",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "symplify/easy-coding-standard": "^13.3"
     },
     "autoload": {
         "psr-4": {
@@ -38,7 +46,7 @@
     },
     "scripts": {
         "check": [
-            "@php vendor/bin/pint --test",
+            "@lint",
             "@php vendor/bin/phpstan analyse --memory-limit=1G",
             "@test"
         ],
@@ -47,8 +55,7 @@
             "@php artisan dev"
         ],
         "test": [
-            "@php artisan config:clear --ansi @no_additional_args",
-            "@php artisan test"
+            "@php vendor/bin/pest"
         ],
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
@@ -63,6 +70,15 @@
         "post-create-project-cmd": [],
         "pre-package-uninstall": [
             "Illuminate\\Foundation\\ComposerScripts::prePackageUninstall"
+        ],
+        "lint": [
+            "@php vendor/bin/ecs check",
+            "@php vendor/bin/pint --test"
+        ],
+        "analyse": "@php vendor/bin/phpstan analyse --memory-limit=1G",
+        "format": [
+            "@php vendor/bin/ecs check --fix",
+            "@php vendor/bin/pint"
         ]
     },
     "extra": {

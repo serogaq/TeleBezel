@@ -23,22 +23,37 @@ struct AccountManifest {
   std::string operation_phase;
 };
 
-class Registry final {
+class AccountRegistry {
+public:
+  virtual ~AccountRegistry() = default;
+  virtual const std::filesystem::path &root() const = 0;
+  virtual void open() = 0;
+  virtual std::vector<AccountManifest> discover() const = 0;
+  virtual std::vector<std::string> orphan_account_ids() const = 0;
+  virtual std::map<std::string, std::string> manifest_errors() const = 0;
+  virtual std::optional<AccountManifest> read(const std::string &uuid) const = 0;
+  virtual void write(const AccountManifest &manifest, const nlohmann::json &proxy) = 0;
+  virtual void ensure_account_directories(const std::string &uuid) = 0;
+  virtual bool account_directory_exists(const std::string &uuid) const = 0;
+  virtual void remove_account_directory(const std::string &uuid) = 0;
+};
+
+class Registry final : public AccountRegistry {
 public:
   Registry(std::filesystem::path root, std::filesystem::path master_key_file);
-  ~Registry();
+  ~Registry() override;
   Registry(const Registry &) = delete;
   Registry &operator=(const Registry &) = delete;
-  void open();
-  std::vector<AccountManifest> discover() const;
-  std::vector<std::string> orphan_account_ids() const;
-  std::map<std::string, std::string> manifest_errors() const;
-  std::optional<AccountManifest> read(const std::string &uuid) const;
-  void write(const AccountManifest &manifest, const nlohmann::json &proxy);
-  void ensure_account_directories(const std::string &uuid);
-  bool account_directory_exists(const std::string &uuid) const;
-  void remove_account_directory(const std::string &uuid);
-  const std::filesystem::path &root() const { return root_; }
+  void open() override;
+  std::vector<AccountManifest> discover() const override;
+  std::vector<std::string> orphan_account_ids() const override;
+  std::map<std::string, std::string> manifest_errors() const override;
+  std::optional<AccountManifest> read(const std::string &uuid) const override;
+  void write(const AccountManifest &manifest, const nlohmann::json &proxy) override;
+  void ensure_account_directories(const std::string &uuid) override;
+  bool account_directory_exists(const std::string &uuid) const override;
+  void remove_account_directory(const std::string &uuid) override;
+  const std::filesystem::path &root() const override { return root_; }
 
 private:
   std::filesystem::path checked_path(const std::filesystem::path &base, const std::string &component) const;

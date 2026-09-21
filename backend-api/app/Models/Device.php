@@ -15,6 +15,9 @@ final class Device extends Model
 
     protected function casts(): array
     {
-        return ['last_seen_at' => 'immutable_datetime', 'revoked_at' => 'immutable_datetime'];
+        return [
+            'last_seen_at' => 'immutable_datetime',
+            'revoked_at' => 'immutable_datetime',
+        ];
     }
 }

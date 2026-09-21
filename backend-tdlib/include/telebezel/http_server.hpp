@@ -7,6 +7,8 @@ namespace telebezel {
 class HttpServer final {
 public:
   HttpServer(const Config &config, TdRuntime &runtime);
+  int bind();
+  bool listen_bound();
   bool listen();
   void stop();
 

@@ -19,7 +19,7 @@ TDLIB_BUILD_DIR ?= backend-tdlib/build
 TDLIB_CMAKE_ARGS ?=
 CMAKE_GENERATOR_ARGS ?= $(if $(wildcard $(TDLIB_BUILD_DIR)/CMakeCache.txt),,-G Ninja)
 
-.PHONY: help toolchain-check app-build app-check app-qemu app-install api-check tdlib-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test image-smoke check clean
+.PHONY: help toolchain-check app-build app-check app-qemu app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test image-smoke check clean
 help:
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -64,11 +64,28 @@ app-install: ## Install an existing PBW on a watch: IP=phone-ip (or CloudPebble)
 api-check: ## Validate, format-check, analyze, and test backend-api
 	PHP_BIN="$(PHP_BIN)" COMPOSER_BIN="$(COMPOSER_BIN)" bash tests/api/check.sh
 
+functional-test: ## Test Laravel/PostgreSQL against the C++ HTTP runtime with fake Telegram replies
+	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZER=none $(TDLIB_CMAKE_ARGS)
+	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target telebezel-tdlib-fixture --parallel 2
+	TDLIB_FIXTURE_BIN="$(abspath $(TDLIB_BUILD_DIR))/telebezel-tdlib-fixture" $(MAKE) api-check
+
 tdlib-check: ## Configure, build, and test backend-tdlib
 	$(CLANG_FORMAT_BIN) --dry-run --Werror $$(find backend-tdlib/include backend-tdlib/src backend-tdlib/tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print)
-	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON $(TDLIB_CMAKE_ARGS)
-	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target telebezel-tdlib telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2
+	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZER=none $(TDLIB_CMAKE_ARGS)
+	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target telebezel-tdlib telebezel-tdlib-tests telebezel-tdlib-runtime-tests telebezel-tdlib-failure-tests --parallel 2
 	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target test
+
+tdlib-analysis: ## Run clang-tidy and cppcheck on every production C++ source
+	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZER=none $(TDLIB_CMAKE_ARGS)
+	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target tdapi --parallel 2
+	python3 backend-tdlib/tests/analyse.py $(TDLIB_BUILD_DIR)
+
+tdlib-sanitizers: ## Run separate ASan/UBSan, TSan and LSan builds (Linux)
+	bash backend-tdlib/tests/sanitizers.sh $(abspath $(TDLIB_BUILD_DIR)) $(CMAKE_BIN)
+
+tdlib-linux-check: ## Run C++ tests, analysis and all sanitizers in an isolated Linux build
+	$(CLANG_FORMAT_BIN) --dry-run --Werror $$(find backend-tdlib/include backend-tdlib/src backend-tdlib/tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print)
+	docker build --target quality --progress plain -t telebezel-tdlib-quality:local backend-tdlib
 
 workflow-audit: ## Run actionlint and zizmor through pinned tools
 	@python3 .github/scripts/production_licenses.py --check
@@ -119,7 +136,7 @@ image-smoke: ## Smoke an image: make image-smoke COMPONENT=backend-api
 	test "$(COMPONENT)" = backend-api -o "$(COMPONENT)" = backend-tdlib
 	bash .github/scripts/image_smoke_$(subst -,_,$(COMPONENT)).sh "ghcr.io/$(GHCR_OWNER)/telebezel-$(COMPONENT):local"
 
-check: toolchain-check app-check api-check tdlib-check workflow-audit compose-config ## Run every non-integration check
+check: toolchain-check app-check functional-test tdlib-check workflow-audit compose-config ## Run local checks including scripted API/TDLib integration
 
 clean: ## Remove generated build output
 	rm -rf app/build backend-tdlib/build

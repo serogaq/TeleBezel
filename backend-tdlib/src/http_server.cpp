@@ -40,7 +40,7 @@ bool authorize(const Config &config, const httplib::Request &request, httplib::R
 }
 nlohmann::json body(const httplib::Request &request, const std::set<std::string> &allowed,
                     const std::set<std::string> &required = {}) {
-  if (request.body.size() > 16 * 1024)
+  if (request.body.size() > std::size_t{16} * 1024)
     throw std::runtime_error("http.body_too_large");
   auto parsed = nlohmann::json::parse(request.body, nullptr, false);
   if (parsed.is_discarded() || !parsed.is_object())
@@ -147,7 +147,7 @@ void runtime_response(httplib::Response &response, const nlohmann::json &result,
 
 HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(config), runtime_(runtime) {
   server_.new_task_queue = [] { return new httplib::ThreadPool(4, 8, 64); };
-  server_.set_payload_max_length(16 * 1024);
+  server_.set_payload_max_length(std::size_t{16} * 1024);
   server_.Get("/healthz", [](const httplib::Request &, httplib::Response &response) {
     json_response(response, 200, health_json(), make_request_id());
   });
@@ -440,6 +440,12 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
   });
 }
 
-bool HttpServer::listen() { return server_.listen(config_.listen_address, config_.listen_port); }
+int HttpServer::bind() {
+  if (config_.listen_port == 0)
+    return server_.bind_to_any_port(config_.listen_address);
+  return server_.bind_to_port(config_.listen_address, config_.listen_port) ? config_.listen_port : -1;
+}
+bool HttpServer::listen_bound() { return server_.listen_after_bind(); }
+bool HttpServer::listen() { return bind() > 0 && listen_bound(); }
 void HttpServer::stop() { server_.stop(); }
 } // namespace telebezel

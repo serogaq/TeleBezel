@@ -46,7 +46,7 @@ test -n "$client_id"
 issue_output_b=$("${compose[@]}" run --rm backend-api php artisan telebezel:api-client-issue integration-second)
 token_b=$(printf '%s\n' "$issue_output_b" | awk '/^tb_[A-Za-z0-9_-]+$/ {print; exit}')
 test -n "$token_b"
-"${compose[@]}" up "${up_args[@]}" -d backend-api
+"${compose[@]}" up "${up_args[@]}" -d backend-api ingress
 ready=false
 for _ in {1..60}; do
   if curl_bounded -fsS "http://127.0.0.1:$API_PORT/healthz" >/dev/null; then ready=true; break; fi
@@ -133,7 +133,7 @@ assert all(event["context"].get("request_id") for event in events)
 assert all("authorization" not in event["context"] and "token" not in event["context"] for event in events)
 '
 "${compose[@]}" exec -T backend-tdlib touch /var/lib/telebezel/tdlib/stage0-volume-sentinel
-"${compose[@]}" up "${up_args[@]}" -d --force-recreate postgres backend-tdlib backend-api
+"${compose[@]}" up "${up_args[@]}" -d --force-recreate postgres backend-tdlib backend-api ingress
 test "$("${compose[@]}" exec -T backend-tdlib sh -c 'test -f /var/lib/telebezel/tdlib/stage0-volume-sentinel && echo yes')" = yes
 ready=false
 for _ in {1..30}; do

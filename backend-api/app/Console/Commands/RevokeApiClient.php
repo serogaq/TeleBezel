@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\ApiClient;
+use App\Services\AdministrationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 
@@ -12,20 +12,18 @@ final class RevokeApiClient extends Command
 
     protected $description = 'Revoke a TeleBezel API client token';
 
-    public function handle(): int
+    public function handle(AdministrationService $service): int
     {
-        if (! Str::isUuid((string) $this->argument('id'))) {
+        if (! Str::isUuid($this->argument('id'))) {
             $this->error('Client ID must be a UUID.');
 
             return self::FAILURE;
         }
-        $client = ApiClient::query()->find($this->argument('id'));
-        if ($client === null) {
+        if (! $service->revoke($this->argument('id'))) {
             $this->error('API client not found.');
 
             return self::FAILURE;
         }
-        $client->forceFill(['revoked_at' => now()])->save();
         $this->info('API client revoked.');
 
         return self::SUCCESS;

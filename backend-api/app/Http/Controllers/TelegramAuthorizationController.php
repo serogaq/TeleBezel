@@ -1,34 +1,25 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Http\Controllers;
 
+use App\Http\RequestContext;
 use App\Http\Requests\AuthorizationActionRequest;
-use App\Services\TdlibGateway;
-use App\Services\TelegramAccountService;
+use App\Http\Resources\AuthorizationResource;
+use App\Services\TelegramAuthorizationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 final class TelegramAuthorizationController extends Controller
 {
-    public function show(string $uuid, Request $request, TelegramAccountService $accounts, TdlibGateway $tdlib): JsonResponse
+    public function show(string $uuid, Request $request, TelegramAuthorizationService $service): JsonResponse
     {
-        $accounts->find($uuid, false, $this->requestId($request));
-        $data = $tdlib->snapshot($uuid, $this->requestId($request));
-        $authorization = $data['authorization'] ?? [];
-
-        return response()->json(['data' => is_array($authorization) ? $authorization : [], 'request_id' => $this->requestId($request)], 200, ['Cache-Control' => 'no-store']);
+        return (new AuthorizationResource($service->show($uuid, RequestContext::requestId($request))))->respond(RequestContext::requestId($request));
     }
 
-    public function action(string $uuid, AuthorizationActionRequest $request, TelegramAccountService $accounts): JsonResponse
+    public function action(string $uuid, AuthorizationActionRequest $request, TelegramAuthorizationService $service): JsonResponse
     {
-        $data = $accounts->authorizationAction($uuid, $request->validated(), $this->requestId($request));
-        $authorization = $data['authorization'] ?? [];
-
-        return response()->json(['data' => is_array($authorization) ? $authorization : [], 'request_id' => $this->requestId($request)], 202, ['Cache-Control' => 'no-store']);
-    }
-
-    private function requestId(Request $request): string
-    {
-        return (string) $request->attributes->get('request_id');
+        return (new AuthorizationResource($service->action($uuid, $request->inputData(), RequestContext::requestId($request))))->respond(RequestContext::requestId($request), 202);
     }
 }

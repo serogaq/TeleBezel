@@ -3,28 +3,54 @@
   "author": "TeleBezel contributors",
   "version": "0.2.3",
   "description": "Modern Pebble Telegram client",
-  "keywords": ["pebble-app", "telegram"],
+  "keywords": [
+    "pebble-app",
+    "telegram"
+  ],
   "private": true,
-  "engines": {"node": "24.21.0", "npm": "11.19.0"},
+  "engines": {
+    "node": "24.21.0",
+    "npm": "11.19.0"
+  },
   "scripts": {
     "generate": "node scripts/generate.js",
     "generate:check": "node scripts/generate.js --check",
     "lint": "eslint src/pkjs tests scripts",
     "test:js": "node tests/run.js",
-    "test:c": "mkdir -p build && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_state_test.c src/c/status_state.c -o build/status_state_test && build/status_state_test",
+    "test:c": "mkdir -p build && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_state_test.c src/c/status_state.c -o build/status_state_test && build/status_state_test && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_session_test.c src/c/status_session.c src/c/status_state.c -o build/status_session_test && build/status_session_test",
     "test": "npm run generate:check && npm run lint && npm run test:js && npm run test:c"
   },
-  "dependencies": {"@rebble/clay": "1.1.0"},
-  "devDependencies": {"eslint": "10.10.0"},
+  "dependencies": {
+    "@rebble/clay": "1.1.0"
+  },
+  "devDependencies": {
+    "eslint": "10.10.0"
+  },
   "pebble": {
     "displayName": "TeleBezel",
     "uuid": "b91f715e-af74-4a90-9df4-fda0fbcd9762",
     "sdkVersion": "3",
     "enableMultiJS": true,
-    "targetPlatforms": ["diorite", "emery", "flint", "gabbro"],
-    "capabilities": ["configurable"],
-    "watchapp": {"watchface": false},
-    "messageKeys": ["REQUEST_KIND", "REQUEST_SEQ", "RESPONSE_KIND", "RESULT_CODE"],
-    "resources": {"media": []}
+    "targetPlatforms": [
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "capabilities": [
+      "configurable"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": [
+      "REQUEST_KIND",
+      "REQUEST_SEQ",
+      "RESPONSE_KIND",
+      "RESULT_CODE"
+    ],
+    "resources": {
+      "media": []
+    }
   }
 }

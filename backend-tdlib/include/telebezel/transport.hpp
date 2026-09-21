@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 #include <td/telegram/Client.h>
 #include <td/telegram/td_api.hpp>
 
@@ -12,6 +13,7 @@ struct TransportResponse {
 class TdTransport {
 public:
   virtual ~TdTransport() = default;
+  virtual std::string initialize() = 0;
   virtual std::int32_t create_client_id() = 0;
   virtual void send(std::int32_t client_id, std::uint64_t request_id,
                     td::td_api::object_ptr<td::td_api::Function> function) = 0;
@@ -19,6 +21,7 @@ public:
 };
 class NativeTdTransport final : public TdTransport {
 public:
+  std::string initialize() override;
   std::int32_t create_client_id() override;
   void send(std::int32_t client_id, std::uint64_t request_id,
             td::td_api::object_ptr<td::td_api::Function> function) override;

@@ -1,37 +1,36 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Http\Middleware;
 
+use App\Cache\RateLimitCacheKeys;
+use App\Exceptions\ApiException;
+use App\Http\RequestContext;
+use App\Support\Values;
 use Closure;
-use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
+use LogicException;
 use Symfony\Component\HttpFoundation\Response;
 
 final class RateLimitAccountOperation
 {
+    /** @param Closure(Request): Response $next */
     public function handle(Request $request, Closure $next, string $budget): Response
     {
         if ($budget === 'auth-check' && in_array($request->input('action'), ['submit_phone_number', 'submit_email_address', 'start_qr', 'resend_code'], true)) {
             $budget = 'auth-start';
         }
-        $limits = [
-            'create' => [5, 3600, (string) $request->attributes->get('api_client_id')],
-            'auth-start' => [3, 600, (string) $request->route('uuid')],
-            'auth-check' => [10, 600, (string) $request->route('uuid')],
-            'lifecycle' => [10, 600, (string) $request->route('uuid')],
-        ];
-        [$maxAttempts, $decay, $subject] = $limits[$budget] ?? throw new \LogicException('Unknown rate-limit budget.');
-        $key = "account-operation:{$budget}:{$subject}";
-        try {
-            $attempts = RateLimiter::increment($key, $decay);
-            if ($attempts > $maxAttempts) {
-                RateLimiter::decrement($key);
-
-                return response()->json(['error' => ['code' => 'rate_limit.exceeded'], 'request_id' => $request->attributes->get('request_id')], 429, ['Cache-Control' => 'no-store', 'Retry-After' => (string) RateLimiter::availableIn($key)]);
-            }
-        } catch (QueryException) {
-            return response()->json(['error' => ['code' => 'service.database_unavailable'], 'request_id' => $request->attributes->get('request_id')], 503, ['Cache-Control' => 'no-store']);
+        [$maximum, $seconds] = match ($budget) {
+            'create' => [5, 3600], 'auth-start' => [3, 600], 'auth-check', 'lifecycle' => [10, 600],
+            default => throw new LogicException('Unknown rate-limit budget.'),
+        };
+        $subject = $budget === 'create' ? RequestContext::principal($request)->id : Values::string($request->route('uuid'));
+        $key = RateLimitCacheKeys::accountOperation($budget, $subject);
+        if (RateLimiter::increment($key, $seconds) > $maximum) {
+            RateLimiter::decrement($key);
+            throw new ApiException('rate_limit.exceeded', 429, RateLimiter::availableIn($key));
         }
 
         return $next($request);

@@ -3,7 +3,7 @@
 #include <string>
 
 namespace telebezel {
-enum class ProxyMode { inherit, direct, socks5, http, mtproto };
+enum class ProxyMode : std::uint8_t { inherit, direct, socks5, http, mtproto };
 struct ProxyConfig {
   ProxyMode mode{ProxyMode::direct};
   std::string host;

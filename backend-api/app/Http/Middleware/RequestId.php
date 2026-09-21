@@ -10,6 +10,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 final class RequestId
 {
+    /** @param Closure(Request): Response $next */
     public function handle(Request $request, Closure $next): Response
     {
         $provided = $request->header('X-Request-ID');

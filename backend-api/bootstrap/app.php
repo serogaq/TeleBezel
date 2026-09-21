@@ -8,6 +8,7 @@ use App\Http\Middleware\RateLimitAccountOperation;
 use App\Http\Middleware\RateLimitApiClient;
 use App\Http\Middleware\RequestId;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Resources\ErrorResource;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -22,8 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->trustProxies(at: array_values(array_filter(array_map('trim', explode(',', (string) env('TRUSTED_PROXIES', '127.0.0.1'))))),
-            headers: Request::HEADER_X_FORWARDED_FOR | Request::HEADER_X_FORWARDED_HOST | Request::HEADER_X_FORWARDED_PORT | Request::HEADER_X_FORWARDED_PROTO);
+        $middleware->trustProxies(headers: Request::HEADER_X_FORWARDED_FOR | Request::HEADER_X_FORWARDED_HOST | Request::HEADER_X_FORWARDED_PORT | Request::HEADER_X_FORWARDED_PROTO);
         $middleware->append(RequestId::class);
         $middleware->append(SecurityHeaders::class);
         $middleware->append(LimitJsonBody::class);
@@ -43,19 +43,9 @@ return Application::configure(basePath: dirname(__DIR__))
                 return null;
             }
 
-            $requestId = $request->attributes->get('request_id');
-
-            return response()->json([
-                'error' => ['code' => 'service.database_unavailable'],
-                'request_id' => $requestId,
-            ], 503, ['Cache-Control' => 'no-store', 'X-Request-ID' => (string) $requestId]);
+            return ErrorResource::respond(new ApiException('service.database_unavailable', 503), $request);
         });
         $exceptions->render(function (ApiException $exception, Request $request) {
-            $headers = ['Cache-Control' => 'no-store', 'X-Request-ID' => (string) $request->attributes->get('request_id')];
-            if ($exception->retryAfter !== null) {
-                $headers['Retry-After'] = (string) $exception->retryAfter;
-            }
-
-            return response()->json(['error' => ['code' => $exception->errorCode], 'request_id' => $request->attributes->get('request_id')], $exception->status, $headers);
+            return ErrorResource::respond($exception, $request);
         });
     })->create();

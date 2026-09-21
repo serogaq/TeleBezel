@@ -13,7 +13,11 @@ assert set(api['networks']) == {'api-ingress', 'api-db', 'api-tdlib'}
 assert set(tdlib['networks']) == {'api-tdlib', 'tdlib-egress'}
 assert set(postgres['networks']) == {'api-db'}
 assert set(scheduler['networks']) == {'api-db', 'api-tdlib'}
-assert api['ports'][0]['host_ip'] == '127.0.0.1' and api['ports'][0]['target'] == 8080
+ingress = services['ingress']
+assert not api.get('ports')
+assert ingress['ports'][0]['host_ip'] == '127.0.0.1' and ingress['ports'][0]['target'] == 8080
+assert set(ingress['networks']) == {'api-ingress', 'integration-host'}
+assert not ingress.get('secrets')
 assert not tdlib.get('ports') and not postgres.get('ports')
 assert not api.get('volumes')
 assert not scheduler.get('volumes')

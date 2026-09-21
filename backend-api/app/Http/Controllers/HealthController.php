@@ -1,32 +1,22 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Http\Controllers;
 
-use App\Services\TdlibStatusClient;
+use App\Http\Resources\HealthResource;
+use App\Services\HealthService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\DB;
-use Throwable;
 
 final class HealthController extends Controller
 {
     public function live(): JsonResponse
     {
-        return response()->json([
-            'status' => 'ok',
-            'service' => 'backend-api',
-            'version' => config('telebezel.version'),
-        ]);
+        return HealthResource::live();
     }
 
-    public function ready(TdlibStatusClient $tdlib): JsonResponse
+    public function ready(HealthService $health): JsonResponse
     {
-        try {
-            DB::selectOne('select 1 as ready');
-            $tdlib->status();
-        } catch (Throwable) {
-            return response()->json(['status' => 'not_ready'], 503, ['Cache-Control' => 'no-store']);
-        }
-
-        return response()->json(['status' => 'ready'], 200, ['Cache-Control' => 'no-store']);
+        return HealthResource::readiness($health->ready());
     }
 }

@@ -67,7 +67,7 @@ jobs:
           extensions: pdo_pgsql, pcntl
           tools: "composer:${{ steps.toolchain.outputs.composer-version }}"
           coverage: none
-      - name: Check API against the pinned PostgreSQL image
+      - name: Check Pint, PHPStan, Pest and PostgreSQL migrations
         run: make api-check
 
   tdlib:
@@ -109,7 +109,7 @@ jobs:
           clang-format --dry-run --Werror "${sources[@]}"
           ccache --zero-stats
           cmake -S backend-tdlib -B backend-tdlib/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_BUILD_TESTS=ON
-          cmake --build backend-tdlib/build --target telebezel-tdlib telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2
+          cmake --build backend-tdlib/build --target telebezel-tdlib telebezel-tdlib-tests telebezel-tdlib-runtime-tests telebezel-tdlib-failure-tests --parallel 2
           ctest --test-dir backend-tdlib/build --output-on-failure
           ccache --show-stats
 
@@ -127,18 +127,16 @@ jobs:
           restore-keys: "tdlib-analysis-gcc-"
       - run: |
           sudo apt-get update
-          sudo apt-get install -y ccache clang clang-tidy cmake gperf libssl-dev ninja-build php-cli zlib1g-dev
+          sudo apt-get install -y ccache clang clang-tidy cppcheck cmake gperf libssl-dev ninja-build php-cli zlib1g-dev
       - name: Analyze only adapter source files
         run: |
           ccache --zero-stats
           cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
           cmake --build backend-tdlib/analysis-build --target tdapi --parallel 2
-          clang-tidy -p backend-tdlib/analysis-build -checks='clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters' backend-tdlib/src/config.cpp backend-tdlib/src/crypto.cpp backend-tdlib/src/registry.cpp backend-tdlib/src/status.cpp backend-tdlib/src/http_server.cpp backend-tdlib/src/td_runtime.cpp backend-tdlib/src/transport.cpp backend-tdlib/src/main.cpp
-      - name: Run sanitizer-instrumented adapter tests
+          python3 backend-tdlib/tests/analyse.py backend-tdlib/analysis-build
+      - name: Run GoogleTest with ASan/UBSan, TSan and standalone LSan
         run: |
-          cmake -S backend-tdlib -B backend-tdlib/sanitizer-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZERS=ON
-          cmake --build backend-tdlib/sanitizer-build --target telebezel-tdlib-tests telebezel-tdlib-runtime-tests --parallel 2
-          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir backend-tdlib/sanitizer-build --output-on-failure
+          bash backend-tdlib/tests/sanitizers.sh backend-tdlib/analysis-build cmake
           ccache --show-stats
 
   api-image:
@@ -170,6 +168,33 @@ jobs:
         with: {persist-credentials: false}
       - uses: ./.github/actions/integration-images # zizmor: ignore[self-repository]
       - run: sudo apt-get update && sudo apt-get install -y acl
+      - id: functional-toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: "${{ steps.functional-toolchain.outputs.php-version }}"
+          extensions: pdo_pgsql, pcntl
+          tools: "composer:${{ steps.functional-toolchain.outputs.composer-version }}"
+          coverage: none
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          key: "functional-tdlib-${{ hashFiles('backend-tdlib/**', 'toolchain.env') }}"
+          restore-keys: "functional-tdlib-"
+      - name: Install functional test prerequisites
+        env:
+          CMAKE_VERSION: "${{ steps.functional-toolchain.outputs.cmake-version }}"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache gperf libssl-dev ninja-build zlib1g-dev
+          python3 -m pip install "cmake==$CMAKE_VERSION"
+      - name: Test API against C++ HTTP runtime with scripted Telegram success and failures
+        env:
+          APP_ENV: testing
+          APP_KEY: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          CCACHE_COMPRESS: "1"
+          CCACHE_MAXSIZE: 1500M
+        run: make functional-test CMAKE_BIN=cmake TDLIB_CMAKE_ARGS=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - run: make integration-test
         env:
           GHCR_OWNER: "${{ github.repository_owner }}"
