@@ -12,7 +12,7 @@ final class ConfigureProxyProfilesRequest extends ApiFormRequest
     public function rules(): array
     {
         return [
-            'failure_action' => ['required', Rule::in(['direct', 'next'])],
+            'failure_action' => ['required', Rule::in(['direct', 'next', 'stay'])],
             'connect_timeout_seconds' => ['required', 'integer', 'between:3,300'],
         ];
     }

@@ -110,6 +110,12 @@ final class TdlibGateway implements TdlibGatewayContract
         return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages/{$messageId}", $query, $requestId);
     }
 
+    /** @return array<string, mixed> */
+    public function preview(string $accountId, string $chatId, string $messageId, string $previewId, string $requestId): array
+    {
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages/{$messageId}/preview/{$previewId}", [], $requestId);
+    }
+
     /** @param array<string, mixed> $query
      * @return array<string, mixed>
      */
@@ -177,7 +183,7 @@ final class TdlibGateway implements TdlibGatewayContract
                 throw new ApiException('service.tdlib_unavailable', 503);
             }
         }
-        $safeCodes = ['account.not_found', 'account.gone', 'authorization.invalid_code', 'authorization.invalid_password', 'authorization.code_expired', 'authorization.invalid_state', 'authorization.flood_wait', 'authorization.unsupported_state', 'authorization.unsupported_delivery', 'operation.conflict', 'operation.outcome_unknown', 'storage.missing', 'storage.identity_mismatch', 'storage.corrupt', 'storage.unsafe_path', 'storage.invalid_key', 'storage.io_error', 'storage.volume_in_use', 'configuration.missing', 'configuration.invalid', 'configuration.environment_mismatch', 'service.busy', 'service.stopping', 'telegram.operation_failed', 'proxy.unreachable', 'chat.not_found', 'message.not_found', 'cursor.invalid', 'cursor.unusable', 'sync.resync_required', 'read.deadline', 'interest.limit_reached'];
+        $safeCodes = ['account.not_found', 'account.gone', 'authorization.invalid_code', 'authorization.invalid_password', 'authorization.code_expired', 'authorization.invalid_state', 'authorization.flood_wait', 'authorization.unsupported_state', 'authorization.unsupported_delivery', 'operation.conflict', 'operation.outcome_unknown', 'storage.missing', 'storage.identity_mismatch', 'storage.corrupt', 'storage.unsafe_path', 'storage.invalid_key', 'storage.io_error', 'storage.volume_in_use', 'configuration.missing', 'configuration.invalid', 'configuration.environment_mismatch', 'service.busy', 'service.stopping', 'telegram.operation_failed', 'proxy.unreachable', 'chat.not_found', 'message.not_found', 'message.cache_miss', 'cursor.invalid', 'cursor.unusable', 'sync.resync_required', 'read.deadline', 'interest.limit_reached'];
         $error = $json['error'] ?? null;
         $code = is_array($error) ? $error['code'] ?? null : null;
         if (! is_string($code) || ! in_array($code, $safeCodes, true)) {

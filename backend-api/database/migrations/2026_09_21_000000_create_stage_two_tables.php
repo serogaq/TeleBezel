@@ -17,7 +17,7 @@ return new class extends Migration
             $table->text('telegram_api_hash')->nullable();
             $table->unsignedBigInteger('configuration_revision')->default(1);
             $table->uuid('active_proxy_profile_id')->nullable();
-            $table->string('proxy_failure_action', 16)->default('direct');
+            $table->string('proxy_failure_action', 16)->default('next');
             $table->unsignedSmallInteger('proxy_connect_timeout_seconds')->default(10);
             $table->timestampTz('proxy_activated_at')->nullable();
             $table->timestampTz('proxy_failure_started_at')->nullable();

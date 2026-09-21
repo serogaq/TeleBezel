@@ -1,5 +1,6 @@
 #include "fakes/fake_transport.hpp"
 #include "telebezel/registry.hpp"
+#include "telebezel/runtime/account_store.hpp"
 #include "telebezel/td_runtime.hpp"
 #include <algorithm>
 #include <atomic>
@@ -9,6 +10,7 @@
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
+#include <latch>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -30,6 +32,28 @@ template <class Predicate> void wait_until(Predicate predicate) {
   throw std::runtime_error("runtime test wait timed out");
 }
 } // namespace
+
+TEST(CacheBudgetTest, EnforcesPerChatAccountAndProcessLimits) {
+  telebezel::Config config;
+  config.cache_messages_per_chat = 2;
+  config.cache_messages_per_account = 3;
+  config.cache_messages_per_process = 4;
+  config.cache_projection_bytes = 4096;
+  telebezel::runtime::AccountStore store(config);
+  auto &first = store.accounts_["first"];
+  auto &second = store.accounts_["second"];
+  first.interest_counts[7] = 1;
+  store.put_message(first, {7, 1}, {{"date", 1}, {"id", "1"}});
+  store.put_message(first, {7, 2}, {{"date", 2}, {"id", "2"}});
+  store.put_message(first, {7, 3}, {{"date", 3}, {"id", "3"}});
+  ASSERT_FALSE(first.messages.contains({7, 1}));
+  store.put_message(first, {8, 4}, {{"date", 4}, {"id", "4"}});
+  store.put_message(second, {9, 5}, {{"date", 5}, {"id", "5"}});
+  store.put_message(second, {9, 6}, {{"date", 6}, {"id", "6"}});
+  ASSERT_EQ(first.messages.size() + second.messages.size(), 4);
+  ASSERT_TRUE(first.messages.contains({7, 2}));
+  ASSERT_FALSE(first.messages.contains({8, 4}));
+}
 
 class RuntimeTest : public ::testing::Test {
 protected:
@@ -118,6 +142,168 @@ TEST_F(RuntimeTest, MultiAccountReadsAndInterests) {
   ASSERT_TRUE((snapshots["accounts"].size() == 2));
 }
 
+TEST_F(RuntimeTest, ConcurrentLeaseOpenSharesFailedTransition) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->queue_response(td_api::openChat::ID, nullptr);
+  std::latch start(2);
+  const auto acquire = [&](const std::string &key) {
+    start.count_down();
+    start.wait();
+    return runtime->set_interest(first, 42, key, true);
+  };
+  auto first_request = std::async(std::launch::async, acquire, "device:one:view:42");
+  auto second_request = std::async(std::launch::async, acquire, "device:two:view:42");
+  ASSERT_EQ(first_request.get().value("code", ""), "telegram.operation_failed");
+  ASSERT_EQ(second_request.get().value("code", ""), "telegram.operation_failed");
+  const auto sent = transport->sent();
+  ASSERT_EQ(
+      std::count_if(sent.begin(), sent.end(), [](const auto &item) { return item.second == td_api::openChat::ID; }), 1);
+}
+
+TEST_F(RuntimeTest, ChatCursorTracksOrderAcrossMoreThanFiftyChats) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  for (std::int64_t id = 1; id <= 75; ++id) {
+    auto chat = td_api::make_object<td_api::chat>();
+    chat->id_ = id;
+    chat->title_ = "Chat " + std::to_string(id);
+    chat->type_ = td_api::make_object<td_api::chatTypePrivate>(id);
+    chat->positions_.push_back(td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListMain>(),
+                                                                         1000 - id, false, nullptr));
+    transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(chat)));
+  }
+  wait_until([&] { return runtime->chat(first, 75).contains("item"); });
+  const auto first_page = runtime->chats(first, "main", 50, "");
+  ASSERT_TRUE(first_page.value("has_more", false));
+  const auto cursor = first_page.value("next_cursor", "");
+  ASSERT_FALSE(cursor.empty());
+  const auto second_page = runtime->chats(first, "main", 50, cursor);
+  ASSERT_EQ(second_page["items"].size(), 25);
+  transport->emit_update(1, td_api::make_object<td_api::updateChatPosition>(
+                                75, td_api::make_object<td_api::chatPosition>(
+                                        td_api::make_object<td_api::chatListMain>(), 2000, false, nullptr)));
+  wait_until([&] { return runtime->chats(first, "main", 50, cursor).value("code", "") == "sync.resync_required"; });
+}
+
+TEST_F(RuntimeTest, HistoryUsesLocalResultsAndInvalidatesAfterLogout) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto history = [](std::initializer_list<std::int64_t> ids) {
+    auto result = td_api::make_object<td_api::messages>();
+    for (const auto id : ids) {
+      auto item = td_api::make_object<td_api::message>();
+      item->id_ = id;
+      item->chat_id_ = 42;
+      item->sender_id_ = td_api::make_object<td_api::messageSenderUser>(7);
+      result->messages_.push_back(std::move(item));
+    }
+    result->total_count_ = static_cast<std::int32_t>(ids.size());
+    return result;
+  };
+  transport->queue_response(td_api::getChatHistory::ID, history({100, 99}));
+  const auto page = runtime->messages(first, 42, 1, "");
+  ASSERT_EQ(page.value("source", ""), "tdlib_local");
+  ASSERT_EQ(page["items"].size(), 1);
+  ASSERT_EQ(page["items"][0].value("id", ""), "100");
+  const auto cursor = page.value("next_cursor", "");
+  ASSERT_FALSE(cursor.empty());
+  auto logout = command(first);
+  logout["revision"] = 2;
+  logout["authorization_generation"] = 2;
+  logout["lifecycle"] = "logout_pending";
+  logout["operation_id"] = "81112233-4455-4677-8899-aabbccddeeff";
+  logout["logout_operation_id"] = logout["operation_id"];
+  ASSERT_TRUE(runtime->logout(first, logout).contains("completed"));
+  ASSERT_EQ(runtime->messages(first, 42, 1, cursor).value("code", ""), "authorization.invalid_state");
+}
+
+TEST_F(RuntimeTest, PreviewRequiresCurrentMessageAndCompletedSmallFile) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto photo_message = [] {
+    auto message = td_api::make_object<td_api::message>();
+    message->id_ = 55;
+    message->chat_id_ = 42;
+    auto content = td_api::make_object<td_api::messagePhoto>();
+    content->photo_ = td_api::make_object<td_api::photo>();
+    auto size = td_api::make_object<td_api::photoSize>();
+    size->photo_ = td_api::make_object<td_api::file>();
+    size->photo_->id_ = 17;
+    size->photo_->size_ = 4;
+    content->photo_->sizes_.push_back(std::move(size));
+    message->content_ = std::move(content);
+    return message;
+  };
+  auto history = td_api::make_object<td_api::messages>();
+  history->messages_.push_back(photo_message());
+  transport->queue_response(td_api::getChatHistory::ID, std::move(history));
+  const auto page = runtime->messages(first, 42, 1, "");
+  const auto preview_id = page["items"][0]["content"].value("preview_id", "");
+  ASSERT_EQ(preview_id.size(), 64);
+  ASSERT_FALSE(page["items"][0]["content"].contains("preview_file_id"));
+  ASSERT_EQ(runtime->preview(first, 42, 55, std::string(64, '0')).value("code", ""), "message.cache_miss");
+  transport->queue_response(td_api::getMessageLocally::ID, photo_message());
+  auto file = td_api::make_object<td_api::file>();
+  file->id_ = 17;
+  file->size_ = 4;
+  file->local_ = td_api::make_object<td_api::localFile>();
+  file->local_->is_downloading_completed_ = true;
+  transport->queue_response(td_api::getFile::ID, std::move(file));
+  auto bytes = td_api::make_object<td_api::data>();
+  bytes->data_ = "test";
+  transport->queue_response(td_api::readFilePart::ID, std::move(bytes));
+  const auto preview = runtime->preview(first, 42, 55, preview_id);
+  ASSERT_EQ(preview.value("mime_type", ""), "image/jpeg");
+  ASSERT_EQ(preview.value("bytes_base64", ""), "dGVzdA==");
+}
+
+TEST_F(RuntimeTest, HistoryFillsShortLocalPagesWithoutRepeatingAnchors) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto history = [](std::initializer_list<std::int64_t> ids) {
+    auto result = td_api::make_object<td_api::messages>();
+    for (const auto id : ids) {
+      auto item = td_api::make_object<td_api::message>();
+      item->id_ = id;
+      item->chat_id_ = 42;
+      result->messages_.push_back(std::move(item));
+    }
+    result->total_count_ = static_cast<std::int32_t>(ids.size());
+    return result;
+  };
+  transport->queue_response(td_api::getChatHistory::ID, history({100}));
+  transport->queue_response(td_api::getChatHistory::ID, history({100, 99}));
+  transport->queue_response(td_api::getChatHistory::ID, history({99, 98}));
+  const auto page = runtime->messages(first, 42, 3, "");
+  ASSERT_EQ(page["items"].size(), 3);
+  ASSERT_EQ(page["items"][0].value("id", ""), "100");
+  ASSERT_EQ(page["items"][1].value("id", ""), "99");
+  ASSERT_EQ(page["items"][2].value("id", ""), "98");
+  ASSERT_FALSE(page.value("partial", true));
+}
+
+TEST_F(RuntimeTest, ExternalAuthorizationChangePersistsGeneration) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateLoggingOut>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_generation", 0) == 2; });
+  wait_until([&] { return registry->read(first)->authorization_generation == 2; });
+  auto stale = command(first);
+  stale["authorization_generation"] = 1;
+  ASSERT_THROW(runtime->reconcile(first, stale), std::runtime_error);
+  auto current = command(first);
+  current["authorization_generation"] = 2;
+  ASSERT_TRUE(runtime->reconcile(first, current).value("runtime_available", false));
+  runtime->stop();
+  auto restarted_transport = std::make_unique<FakeTransport>();
+  transport = restarted_transport.get();
+  runtime = std::make_unique<telebezel::TdRuntime>(config, *registry, std::move(restarted_transport));
+  runtime->start();
+  ASSERT_EQ(runtime->snapshot(first).value("authorization_generation", 0), 2);
+  ASSERT_FALSE(runtime->snapshot(first).value("runtime_available", true));
+}
+
 TEST_F(RuntimeTest, AuthorizationStatesAndActions) {
   auto stale_action = command(second);
   stale_action["action"] = "submit_phone_number";
@@ -190,12 +376,17 @@ TEST_F(RuntimeTest, AuthorizationStatesAndActions) {
 TEST_F(RuntimeTest, LogoutAndProxyRevisions) {
   auto logout = command(second);
   logout["revision"] = 2;
+  logout["authorization_generation"] = 2;
   logout["lifecycle"] = "logout_pending";
   logout["operation_id"] = "31112233-4455-4677-8899-aabbccddeeff";
   logout["logout_operation_id"] = logout["operation_id"];
   ASSERT_TRUE((!runtime->logout(second, logout).value("completed", false)));
+  ASSERT_EQ(runtime->snapshot(second).value("target_revision", 0), 2);
+  ASSERT_EQ(runtime->snapshot(second).value("applied_revision", 0), 1);
+  ASSERT_EQ(registry->read(second)->authorization_generation, 2);
   wait_until([&] { return runtime->snapshot(second).value("authorization_state", "") == "closed"; });
   ASSERT_TRUE((runtime->logout(second, logout).value("completed", false)));
+  ASSERT_EQ(runtime->snapshot(second).value("applied_revision", 0), 2);
   auto proxy_update = logout;
   proxy_update["revision"] = 3;
   proxy_update["effective_config_id"] = "51112233-4455-4677-8899-aabbccddeeff";
@@ -217,7 +408,14 @@ TEST_F(RuntimeTest, LogoutAndProxyRevisions) {
   direct_update["effective_config_id"] = "61112233-4455-4677-8899-aabbccddeeff";
   direct_update["operation_id"] = "61112233-4455-4677-8899-aabbccddeefe";
   direct_update["proxy"] = nlohmann::json{{"mode", "direct"}};
+  const auto sends_before = transport->sent();
+  const auto closes_before = std::count_if(sends_before.begin(), sends_before.end(),
+                                           [](const auto &sent) { return sent.second == td_api::close::ID; });
   ASSERT_TRUE((runtime->update_proxy(second, direct_update).value("completed", false)));
+  const auto sends_after = transport->sent();
+  const auto closes_after = std::count_if(sends_after.begin(), sends_after.end(),
+                                          [](const auto &sent) { return sent.second == td_api::close::ID; });
+  ASSERT_EQ(closes_after, closes_before);
   ASSERT_TRUE((runtime->snapshot(second).value("effective_config_id", "") ==
                direct_update["effective_config_id"].get<std::string>()));
   auto stale_proxy = proxy_update;

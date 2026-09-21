@@ -39,10 +39,10 @@ public:
   std::uint64_t next_id();
   td::td_api::object_ptr<td::td_api::Object> request(std::int32_t client_id,
                                                      td::td_api::object_ptr<td::td_api::Function> function,
-                                                     std::chrono::seconds timeout = std::chrono::seconds(8),
+                                                     std::chrono::milliseconds timeout = std::chrono::seconds(8),
                                                      bool recover_stalled_client = false);
   RequestHandle begin_request(std::int32_t client_id, td::td_api::object_ptr<td::td_api::Function> function);
-  td::td_api::object_ptr<td::td_api::Object> await_request(RequestHandle handle, std::chrono::seconds timeout,
+  td::td_api::object_ptr<td::td_api::Object> await_request(RequestHandle handle, std::chrono::milliseconds timeout,
                                                            bool recover_stalled_client = false);
   std::optional<std::string> request_identity(std::int32_t client_id);
   // Returns true only for a correlated identity response; the caller projects it.

@@ -39,7 +39,10 @@ AccountState &AccountLifecycleService::validated_account(const std::string &uuid
 }
 
 nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const AccountCommand &command) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
   Account *account = nullptr;
+  bool recreate_client = false;
+  bool apply_existing_proxy = false;
   const std::string fingerprint = command.fingerprint;
   {
     std::lock_guard lock(context_.mutex_);
@@ -50,7 +53,7 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
     if (revision == account->revision && !account->revision_fingerprint.empty()) {
       if (account->revision_fingerprint != fingerprint)
         return safe_error("operation.conflict", 409);
-      if (account->reconciled) {
+      if (account->reconciled && account->operation_id.empty()) {
         auto result = account_json(*account);
         result["completed"] = account->operation_id.empty();
         return result;
@@ -65,6 +68,14 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
         account->proxy.value("id", "") != requested_proxy.value("id", ""))
       return safe_error("configuration.missing", 409);
     account->busy = true;
+    const auto requested_api_id = command.telegram_api_id.value_or(config_.telegram_api_id);
+    const auto requested_api_hash = command.telegram_api_hash.value_or(config_.telegram_api_hash);
+    recreate_client =
+        account->client_id != 0 && !account->closed &&
+        (account->telegram_api_id != requested_api_id || account->telegram_api_hash != requested_api_hash);
+    apply_existing_proxy = account->client_id != 0 && !account->closed && !recreate_client &&
+                           !(requested_proxy.size() == 1 && requested_proxy.contains("id")) &&
+                           account->proxy != requested_proxy;
     account->authorization_generation = command.authorization_generation.value_or(account->authorization_generation);
     account->revision = revision;
     account->effective_config_id = command.effective_config_id;
@@ -92,24 +103,34 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
                              "",
                              ""};
     manifest.content_hash = account->revision_fingerprint;
+    manifest.applied_revision = account->applied_revision;
+    manifest.authorization_generation = account->authorization_generation;
     registry_.write(manifest, account->proxy);
     {
       std::lock_guard lock(context_.mutex_);
       context_.orphan_accounts_.erase(uuid);
     }
-    activate(*account);
+    if (recreate_client)
+      close_account(*account, false, deadline);
+    activate(*account, deadline);
+    if (apply_existing_proxy)
+      proxy_.apply_proxy(*account, deadline);
     nlohmann::json proxy;
     AccountManifest completed;
     {
       std::lock_guard lock(context_.mutex_);
       completed = manifest;
       completed.lifecycle = "active";
+      completed.operation_id.clear();
+      completed.applied_revision = account->revision;
       proxy = account->proxy;
     }
     registry_.write(completed, proxy);
     std::lock_guard lock(context_.mutex_);
     account->reconciled = true;
+    account->applied_revision = account->revision;
     account->lifecycle = "active";
+    account->operation_id.clear();
     account->last_error.clear();
     account->busy = false;
     const auto waited =
@@ -134,7 +155,7 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
   }
 }
 
-void AccountLifecycleService::activate(Account &account) {
+void AccountLifecycleService::activate(Account &account, OperationDeadline deadline) {
   std::string uuid;
   const auto telegram_api_id = account.telegram_api_id == 0 ? config_.telegram_api_id : account.telegram_api_id;
   const auto &telegram_api_hash =
@@ -163,6 +184,7 @@ void AccountLifecycleService::activate(Account &account) {
   {
     std::lock_guard lock(context_.mutex_);
     account.client_id = client;
+    account.runtime_epoch = make_request_id();
     account.closed = false;
     context_.client_accounts_[client] = uuid;
   }
@@ -173,10 +195,10 @@ void AccountLifecycleService::activate(Account &account) {
     const std::string key(reinterpret_cast<const char *>(derived.data()), derived.size());
     auto parameters = broker_.begin_request(
         client, td_api::make_object<td_api::setTdlibParameters>(
-                    config_.use_test_dc, (root / "db").string(), (root / "files").string(), key, true, true, false,
+                    config_.use_test_dc, (root / "db").string(), (root / "files").string(), key, true, true, true,
                     false, telegram_api_id, telegram_api_hash, "en", "TeleBezel", "Linux", TELEBEZEL_SERVICE_VERSION));
-    auto response = broker_.await_request(std::move(network_barrier), std::chrono::seconds(8));
-    auto parameters_response = broker_.await_request(std::move(parameters), std::chrono::seconds(8));
+    auto response = broker_.await_request(std::move(network_barrier), operation_budget(deadline));
+    auto parameters_response = broker_.await_request(std::move(parameters), operation_budget(deadline));
     throw_runtime_control_error(response);
     if (!response || response->get_id() == td_api::error::ID)
       throw std::runtime_error("configuration.invalid");
@@ -186,9 +208,10 @@ void AccountLifecycleService::activate(Account &account) {
       throw std::runtime_error("storage.invalid_key");
     if (!response || response->get_id() == td_api::error::ID)
       throw std::runtime_error("configuration.invalid");
-    proxy_.apply_proxy(account);
+    proxy_.apply_proxy(account, deadline);
     response = broker_.request(
-        client, td_api::make_object<td_api::setNetworkType>(td_api::make_object<td_api::networkTypeOther>()));
+        client, td_api::make_object<td_api::setNetworkType>(td_api::make_object<td_api::networkTypeOther>()),
+        operation_budget(deadline));
     throw_runtime_control_error(response);
     if (!response || response->get_id() == td_api::error::ID)
       throw std::runtime_error("configuration.invalid");
@@ -201,14 +224,15 @@ void AccountLifecycleService::activate(Account &account) {
     }
     transport_.send(client, broker_.next_id(), td_api::make_object<td_api::close>());
     std::unique_lock lock(context_.mutex_);
-    context_.condition_.wait_for(lock, std::chrono::seconds(8),
-                                 [&account, client] { return account.client_id != client || account.closed; });
+    context_.condition_.wait_until(lock, deadline,
+                                   [&account, client] { return account.client_id != client || account.closed; });
     lock.unlock();
     std::rethrow_exception(failure);
   }
 }
 
 nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const AccountCommand &command) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
   Account *account = nullptr;
   bool new_operation = false;
   const std::string fingerprint = command.fingerprint;
@@ -246,6 +270,18 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
       return safe_error("operation.conflict", 409);
     account->busy = true;
     account->authorization_generation = command.authorization_generation.value_or(account->authorization_generation);
+    account->reconciled = false;
+    account->chats.clear();
+    context_.clear_messages(*account);
+    account->sender_names.clear();
+    account->events.clear();
+    account->interests.clear();
+    account->interest_counts.clear();
+    account->interest_states.clear();
+    account->main_exhausted = false;
+    account->archive_exhausted = false;
+    ++account->main_order_version;
+    ++account->archive_order_version;
   }
 
   const auto persist = [&](const std::string &phase, const std::string &lifecycle,
@@ -269,6 +305,8 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
                   ""};
       manifest.content_hash = account->revision_fingerprint;
       manifest.operation_phase = phase;
+      manifest.applied_revision = phase == "" ? account->revision : account->applied_revision;
+      manifest.authorization_generation = account->authorization_generation;
       proxy = account->proxy;
     }
     registry_.write(manifest, proxy);
@@ -290,25 +328,26 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
       phase = "confirmed";
     }
     if (phase == "confirmed") {
-      activate(*account);
+      activate(*account, deadline);
       persist("", "active", "");
       std::lock_guard lock(context_.mutex_);
       account->lifecycle = "active";
+      account->applied_revision = account->revision;
       account->operation_id.clear();
       account->operation_phase.clear();
       account->reconciled = true;
       account->busy = false;
-      return {{"applied_revision", account->revision}, {"completed", true}};
+      return {{"applied_revision", account->applied_revision}, {"completed", true}};
     }
 
-    activate(*account);
+    activate(*account, deadline);
     persist("executing", "logout_pending", operation_id);
     std::int32_t client = 0;
     {
       std::lock_guard lock(context_.mutex_);
       client = account->client_id;
     }
-    const auto response = broker_.request(client, td_api::make_object<td_api::logOut>());
+    const auto response = broker_.request(client, td_api::make_object<td_api::logOut>(), operation_budget(deadline));
     if (td_error_code(response, 504)) {
       std::lock_guard lock(context_.mutex_);
       account->busy = false;
@@ -322,7 +361,7 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
     }
     std::lock_guard lock(context_.mutex_);
     account->busy = false;
-    return {{"applied_revision", account->revision}, {"completed", false}};
+    return {{"applied_revision", account->applied_revision}, {"completed", false}};
   } catch (...) {
     std::lock_guard lock(context_.mutex_);
     account->busy = false;
@@ -331,6 +370,7 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
 }
 
 nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, const AccountCommand &command) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
   Account *account = nullptr;
   const std::string fingerprint = command.fingerprint;
   AccountManifest intent_manifest;
@@ -346,9 +386,11 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
       const auto requested_proxy = command.proxy;
       if (!(requested_proxy.size() == 1 && requested_proxy.contains("id")) && account->proxy != requested_proxy)
         return safe_error("operation.conflict", 409);
-      auto result = account_json(*account);
-      result["completed"] = account->operation_id.empty();
-      return result;
+      if (account->operation_id.empty()) {
+        auto result = account_json(*account);
+        result["completed"] = true;
+        return result;
+      }
     }
     if (account->busy)
       return safe_error("operation.conflict", 409);
@@ -372,6 +414,8 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
                        "",
                        ""};
     intent_manifest.content_hash = account->revision_fingerprint;
+    intent_manifest.applied_revision = account->applied_revision;
+    intent_manifest.authorization_generation = account->authorization_generation;
     intent_proxy = account->proxy;
   }
   try {
@@ -382,8 +426,15 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
     throw;
   }
   try {
-    close_account(*account, false);
-    activate(*account);
+    bool needs_activation = false;
+    {
+      std::lock_guard lock(context_.mutex_);
+      needs_activation = account->client_id == 0 || account->closed;
+    }
+    if (needs_activation)
+      activate(*account, deadline);
+    else
+      proxy_.apply_proxy(*account, deadline);
   } catch (...) {
     std::lock_guard lock(context_.mutex_);
     account->busy = false;
@@ -391,6 +442,7 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
   }
   AccountManifest completed = intent_manifest;
   completed.operation_id.clear();
+  completed.applied_revision = account->revision;
   try {
     registry_.write(completed, intent_proxy);
   } catch (...) {
@@ -400,6 +452,7 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
   }
   std::lock_guard lock(context_.mutex_);
   account->reconciled = true;
+  account->applied_revision = account->revision;
   account->busy = false;
   account->operation_id.clear();
   auto result = account_json(*account);
@@ -408,6 +461,7 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
 }
 
 nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const AccountCommand &command) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
   Account *account = nullptr;
   const std::string fingerprint = command.fingerprint;
   const std::string operation_id = command.operation_id;
@@ -453,6 +507,13 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
     } else if (account->operation_phase.empty()) {
       account->operation_phase = "intent";
     }
+    account->reconciled = false;
+    account->chats.clear();
+    context_.clear_messages(*account);
+    account->events.clear();
+    account->interests.clear();
+    account->interest_counts.clear();
+    account->interest_states.clear();
     if (account->revision_fingerprint.empty())
       account->revision_fingerprint = fingerprint;
     intent_manifest = {1,
@@ -469,6 +530,8 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
                        ""};
     intent_manifest.content_hash = account->revision_fingerprint;
     intent_manifest.operation_phase = account->operation_phase;
+    intent_manifest.applied_revision = account->applied_revision;
+    intent_manifest.authorization_generation = account->authorization_generation;
     intent_proxy = account->proxy;
   }
   try {
@@ -480,7 +543,7 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
       intent_manifest.operation_phase = "closing";
     }
     registry_.write(intent_manifest, intent_proxy);
-    close_account(*account, true);
+    close_account(*account, true, deadline);
     registry_.remove_account_directory(uuid);
   } catch (...) {
     std::lock_guard lock(context_.mutex_);
@@ -501,6 +564,8 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
                             ""};
   tombstone.content_hash = account->revision_fingerprint;
   tombstone.operation_phase = "confirmed";
+  tombstone.applied_revision = account->revision;
+  tombstone.authorization_generation = account->authorization_generation;
   try {
     registry_.write(tombstone, nlohmann::json{{"mode", "inherit"}, {"http_only", false}});
   } catch (...) {
@@ -510,6 +575,7 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
   }
   std::lock_guard lock(context_.mutex_);
   account->closed = true;
+  account->applied_revision = account->revision;
   account->tombstone = true;
   account->reconciled = false;
   account->busy = false;
@@ -518,14 +584,14 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
   return {{"applied_revision", account->revision}, {"completed", true}};
 }
 
-void AccountLifecycleService::close_account(Account &account, bool destroy) {
+void AccountLifecycleService::close_account(Account &account, bool destroy, OperationDeadline deadline) {
   std::int32_t client = 0;
   {
     std::unique_lock lock(context_.mutex_);
     account.interests.clear();
     account.interest_counts.clear();
-    if (account.closing &&
-        !context_.condition_.wait_for(lock, std::chrono::seconds(8), [&account] { return !account.closing; }))
+    account.interest_states.clear();
+    if (account.closing && !context_.condition_.wait_until(lock, deadline, [&account] { return !account.closing; }))
       throw std::runtime_error("operation.outcome_unknown");
     if (account.client_id == 0 || account.closed)
       return;
@@ -534,13 +600,13 @@ void AccountLifecycleService::close_account(Account &account, bool destroy) {
   td_api::object_ptr<td_api::Function> function =
       destroy ? td_api::object_ptr<td_api::Function>(td_api::make_object<td_api::destroy>())
               : td_api::object_ptr<td_api::Function>(td_api::make_object<td_api::close>());
-  const auto response = broker_.request(client, std::move(function));
+  const auto response = broker_.request(client, std::move(function), operation_budget(deadline));
   if (td_error_code(response, 504))
     throw std::runtime_error("operation.outcome_unknown");
   if (!response || response->get_id() == td_api::error::ID)
     throw std::runtime_error("telegram.operation_failed");
   std::unique_lock lock(context_.mutex_);
-  if (!context_.condition_.wait_for(lock, std::chrono::seconds(8), [&account] { return account.closed; }))
+  if (!context_.condition_.wait_until(lock, deadline, [&account] { return account.closed; }))
     throw std::runtime_error("operation.outcome_unknown");
   context_.client_accounts_.erase(client);
   account.client_id = 0;

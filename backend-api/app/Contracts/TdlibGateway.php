@@ -64,6 +64,9 @@ interface TdlibGateway
      */
     public function message(string $accountId, string $chatId, string $messageId, array $query, string $requestId): array;
 
+    /** @return array<string, mixed> */
+    public function preview(string $accountId, string $chatId, string $messageId, string $previewId, string $requestId): array;
+
     /** @param array<string, mixed> $query
      * @return array<string, mixed>
      */

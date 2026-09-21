@@ -13,6 +13,7 @@ use App\Http\Requests\ReadChatRequest;
 use App\Http\Resources\TelegramReadResource;
 use App\Services\TelegramReadService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Response;
 
 final class TelegramReadController extends Controller
 {
@@ -34,6 +35,17 @@ final class TelegramReadController extends Controller
     public function message(string $uuid, string $chatId, string $messageId, ReadChatRequest $request, TelegramReadService $service): JsonResponse
     {
         return (new TelegramReadResource($service->message($uuid, $chatId, $messageId, $request->inputData(), RequestContext::principal($request), RequestContext::requestId($request)), 'message'))->respond(RequestContext::requestId($request));
+    }
+
+    public function preview(string $uuid, string $chatId, string $messageId, string $previewId, ReadChatRequest $request, TelegramReadService $service): Response
+    {
+        $preview = $service->preview($uuid, $chatId, $messageId, $previewId, RequestContext::requestId($request));
+
+        return response($preview['bytes'], 200, [
+            'Content-Type' => $preview['mime_type'],
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
     }
 
     public function updates(string $uuid, ListUpdatesRequest $request, TelegramReadService $service): JsonResponse

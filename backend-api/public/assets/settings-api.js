@@ -33,7 +33,8 @@
       }
       await ownerActivityPromise;
     };
-    return Object.freeze({request, recordOwnerActivity});
+    const authenticated = () => { lastOwnerActivityAt = now(); };
+    return Object.freeze({request, recordOwnerActivity, authenticated});
   };
   return Object.freeze({create});
 });

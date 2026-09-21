@@ -32,7 +32,7 @@ final class ProxyProfileRepository implements ProxyProfileRepositoryContract
     {
         $instance = $instanceId === null ? Instance::query()->first() : Instance::query()->findOrFail($instanceId);
 
-        return $instance === null ? null : new ProxyPolicyData($instance->id, $instance->active_proxy_profile_id, $instance->proxy_failure_action, $instance->proxy_connect_timeout_seconds, $instance->proxy_failure_started_at === null ? null : CarbonImmutable::instance($instance->proxy_failure_started_at));
+        return $instance === null ? null : new ProxyPolicyData($instance->id, $instance->active_proxy_profile_id, $instance->configuration_revision, $instance->proxy_failure_action, $instance->proxy_connect_timeout_seconds, $instance->proxy_failure_started_at === null ? null : CarbonImmutable::instance($instance->proxy_failure_started_at));
     }
 
     /** @return array<int, ProxyProfileData> */
@@ -108,42 +108,66 @@ final class ProxyProfileRepository implements ProxyProfileRepositoryContract
     {
         return DB::transaction(function () use ($instanceId, $id): array {
             $instance = Instance::query()->whereKey($instanceId)->lockForUpdate()->firstOrFail();
-            if ($id !== null) {
-                $this->find($instanceId, $id);
-            }
-            $instance->forceFill([
-                'active_proxy_profile_id' => $id,
-                'proxy_activated_at' => now(),
-                'proxy_failure_started_at' => null,
-                'configuration_revision' => $instance->configuration_revision + 1,
-            ])->save();
-            $accounts = TelegramAccount::query()->whereNull('proxy_id')->where('lifecycle', '!=', 'removed')->lockForUpdate()->get();
-            foreach ($accounts as $account) {
-                $account->forceFill([
-                    'desired_revision' => $account->desired_revision + 1,
-                    'effective_config_id' => (string) Str::uuid(),
-                    'operation_id' => (string) Str::uuid(),
-                    'last_error_code' => null,
-                    'next_reconcile_at' => null,
-                    'reconcile_blocked_revision' => null,
-                ])->save();
+
+            return $this->activateLocked($instance, $id);
+        }, 3);
+    }
+
+    public function activateObserved(ProxyPolicyData $policy, ?string $id): ?array
+    {
+        return DB::transaction(function () use ($policy, $id): ?array {
+            $instance = Instance::query()->whereKey($policy->instanceId)->lockForUpdate()->firstOrFail();
+            if ($instance->configuration_revision !== $policy->revision || $instance->active_proxy_profile_id !== $policy->activeId || $instance->proxy_failure_action !== $policy->failureAction) {
+                return null;
             }
 
-            return $accounts->map(fn (TelegramAccount $account): string => $account->id)->values()->all();
+            return $this->activateLocked($instance, $id);
         }, 3);
+    }
+
+    /** @return array<int, string> */
+    private function activateLocked(Instance $instance, ?string $id): array
+    {
+        if ($id !== null) {
+            $this->find($instance->id, $id);
+        }
+        $instance->forceFill([
+            'active_proxy_profile_id' => $id,
+            'proxy_activated_at' => now(),
+            'proxy_failure_started_at' => null,
+            'configuration_revision' => $instance->configuration_revision + 1,
+        ])->save();
+        $accounts = TelegramAccount::query()->whereNull('proxy_id')->where('lifecycle', '!=', 'removed')->lockForUpdate()->get();
+        foreach ($accounts as $account) {
+            $account->forceFill([
+                'desired_revision' => $account->desired_revision + 1,
+                'effective_config_id' => (string) Str::uuid(),
+                'operation_id' => (string) Str::uuid(),
+                'last_error_code' => null,
+                'next_reconcile_at' => null,
+                'reconcile_blocked_revision' => null,
+            ])->save();
+        }
+
+        return $accounts->map(fn (TelegramAccount $account): string => $account->id)->values()->all();
     }
 
     public function configure(string $instanceId, Input $input): void
     {
-        Instance::query()->whereKey($instanceId)->update([
-            'proxy_failure_action' => $input->string('failure_action'),
-            'proxy_connect_timeout_seconds' => $input->integer('connect_timeout_seconds'),
-        ]);
+        DB::transaction(function () use ($instanceId, $input): void {
+            $instance = Instance::query()->whereKey($instanceId)->lockForUpdate()->firstOrFail();
+            $instance->forceFill([
+                'proxy_failure_action' => $input->string('failure_action'),
+                'proxy_connect_timeout_seconds' => $input->integer('connect_timeout_seconds'),
+                'configuration_revision' => $instance->configuration_revision + 1,
+                'proxy_failure_started_at' => null,
+            ])->save();
+        }, 3);
     }
 
     public function recordFailure(ProxyPolicyData $policy, bool $failed): void
     {
-        Instance::query()->whereKey($policy->instanceId)->where('active_proxy_profile_id', $policy->activeId)->update([
+        Instance::query()->whereKey($policy->instanceId)->where('configuration_revision', $policy->revision)->where('active_proxy_profile_id', $policy->activeId)->update([
             'proxy_failure_started_at' => $failed ? now() : null,
         ]);
     }

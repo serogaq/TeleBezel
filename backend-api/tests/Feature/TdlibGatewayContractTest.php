@@ -32,7 +32,7 @@ test('gateway preserves documented errors and retry headers while discarding ups
     ['storage.missing', 409], ['storage.identity_mismatch', 409], ['storage.corrupt', 409], ['storage.unsafe_path', 409], ['storage.invalid_key', 409], ['storage.io_error', 503], ['storage.volume_in_use', 503],
     ['configuration.missing', 409], ['configuration.invalid', 409], ['configuration.environment_mismatch', 409],
     ['service.busy', 503], ['service.stopping', 503], ['telegram.operation_failed', 502], ['proxy.unreachable', 502],
-    ['chat.not_found', 404], ['message.not_found', 404], ['cursor.invalid', 409], ['cursor.unusable', 409], ['sync.resync_required', 409], ['read.deadline', 504], ['interest.limit_reached', 429],
+    ['chat.not_found', 404], ['message.not_found', 404], ['message.cache_miss', 404], ['cursor.invalid', 409], ['cursor.unusable', 409], ['sync.resync_required', 409], ['read.deadline', 504], ['interest.limit_reached', 429],
 ]);
 
 test('malformed and undocumented upstream responses become a safe unavailable error', function (mixed $body, int $status): void {

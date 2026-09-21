@@ -42,6 +42,12 @@ public:
     persisted.proxy = proxy;
     manifests_[manifest.uuid] = std::move(persisted);
   }
+  void persist_authorization_generation(const std::string &uuid, std::uint64_t generation) override {
+    std::lock_guard lock(mutex_);
+    auto found = manifests_.find(uuid);
+    if (found != manifests_.end() && !found->second.tombstone && found->second.authorization_generation < generation)
+      found->second.authorization_generation = generation;
+  }
   void ensure_account_directories(const std::string &uuid) override {
     std::lock_guard lock(mutex_);
     directories_.insert(uuid);

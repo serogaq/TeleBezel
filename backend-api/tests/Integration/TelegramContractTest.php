@@ -6,6 +6,7 @@ use App\Models\ApiClient;
 use App\Models\Instance;
 use App\Models\OwnerSession;
 use App\Models\TelegramAccount;
+use App\Services\TelegramAccountService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\Integration\TdlibProcess;
@@ -28,7 +29,8 @@ beforeEach(function (): void {
     $this->view = (string) Str::uuid();
     $this->account = $this->withHeader('Idempotency-Key', 'functional-create')->postJson('/v1/telegram/accounts', [
         'label' => 'Functional',
-    ])->assertCreated()->assertJsonPath('data.runtime.available', true)->json('data.id');
+    ])->assertAccepted()->assertJsonPath('data.lifecycle', 'provisioning')->json('data.id');
+    $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     $this->base = '/v1/telegram/accounts/'.$this->account;
     contractWaitState($this, 'awaiting_phone_number');
 });
@@ -189,7 +191,7 @@ test('chat lists paginate by signed string IDs and bind cursors to account and l
     ], (string) Str::uuid())['items']) === 2);
     $first = $this->getJson($this->base.'/chats?limit=1')->assertOk()->assertJsonPath('data.items.0.id', '9007199254740993')->assertJsonPath('data.has_more', true)->json('data');
     $cursor = urlencode($first['next_cursor']);
-    $this->getJson($this->base.'/chats?limit=1&cursor='.$cursor)->assertOk()->assertJsonPath('data.items.0.id', '42')->assertJsonPath('data.has_more', false);
+    $this->getJson($this->base.'/chats?limit=1&cursor='.$cursor)->assertOk()->assertJsonPath('data.items.0.id', '42')->assertJsonPath('data.has_more', null);
     $this->getJson($this->base.'/chats?list=archive')->assertOk()->assertJsonPath('data.items.0.id', '-100123');
     $this->getJson($this->base.'/chats?list=archive&cursor='.$cursor)->assertStatus(409)->assertJsonPath('error.code', 'cursor.unusable');
     $this->getJson($this->base.'/chats?cursor='.$cursor.'tampered')->assertStatus(409);
@@ -200,7 +202,8 @@ test('chat lists paginate by signed string IDs and bind cursors to account and l
     $this->getJson($this->base.'/chats')->assertOk()->assertJsonPath('data.partial', true)->assertJsonPath('data.source', 'tdlib_memory')->assertJsonCount(2, 'data.items');
     $second = $this->withHeader('Idempotency-Key', 'functional-second')->postJson('/v1/telegram/accounts', [
         'label' => 'Second',
-    ])->assertCreated()->assertJsonPath('data.runtime.available', true)->json('data.id');
+    ])->assertAccepted()->json('data.id');
+    $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     $this->td->control([
         'op' => 'state',
         'state' => 'ready',
@@ -211,7 +214,7 @@ test('chat lists paginate by signed string IDs and bind cursors to account and l
     $this->getJson('/v1/telegram/accounts/'.$second.'/chats')->assertOk()->assertJsonCount(0, 'data.items');
 });
 
-test('history pagination, retry cursors, local fallback and single message projection', function (): void {
+test('history reads local data first and schedules refresh', function (): void {
     contractState($this, 'ready');
     $url = $this->base.'/chats/42/messages?view_id='.$this->view.'&limit=2';
     $this->td->control([
@@ -225,7 +228,11 @@ test('history pagination, retry cursors, local fallback and single message proje
             'unsupported' => true,
         ]],
     ]);
-    $page = $this->getJson($url)->assertOk()->assertJsonPath('data.source', 'tdlib')->assertJsonPath('data.items.0.id', '9007199254740993')->assertJsonPath('data.items.0.sender.id', '9007199254740993')->assertJsonPath('data.items.1.content.kind', 'unsupported')->json('data');
+    $page = $this->getJson($url)->assertOk()->assertJsonPath('data.source', 'tdlib_local')->assertJsonPath('data.items.0.id', '9007199254740993')->assertJsonPath('data.items.0.sender.id', '9007199254740993')->assertJsonPath('data.items.1.content.kind', 'unsupported')->json('data');
+    expect($page['refresh'])->toBeIn(['queued', 'pending']);
+    contractEventually(fn () => $this->td->control([
+        'op' => 'stats',
+    ])['counts']['history'] >= 2);
     $cursor = urlencode($page['next_cursor']);
     $this->td->control([
         'op' => 'response',
@@ -237,34 +244,7 @@ test('history pagination, retry cursors, local fallback and single message proje
             'id' => '70',
         ]],
     ]);
-    $this->getJson($url.'&cursor='.$cursor)->assertOk()->assertJsonCount(1, 'data.items')->assertJsonPath('data.items.0.id', '70');
-    $this->td->control([
-        'op' => 'response',
-        'function' => 'history',
-    ]);
-    $this->td->control([
-        'op' => 'response',
-        'function' => 'history',
-        'kind' => 'history',
-        'items' => [[
-            'id' => '60',
-        ]],
-    ]);
-    $this->getJson($url.'&retry_cursor='.$cursor)->assertOk()->assertJsonPath('data.source', 'tdlib_local')->assertJsonPath('data.partial', true)->assertJsonPath('data.retry_cursor', $page['next_cursor']);
-    foreach ([1, 2] as $_) {
-        $this->td->control([
-            'op' => 'response',
-            'function' => 'history',
-        ]);
-    }
-    $this->getJson($url)->assertOk()->assertJsonPath('data.source', 'tdlib_local')->assertJsonCount(2, 'data.items');
-    foreach ([1, 2] as $_) {
-        $this->td->control([
-            'op' => 'response',
-            'function' => 'history',
-        ]);
-    }
-    $this->getJson($url.'&cursor='.$cursor)->assertOk()->assertJsonPath('data.items.0.id', '70');
+    $this->getJson($url.'&cursor='.$cursor)->assertOk()->assertJsonPath('data.source', 'tdlib_local')->assertJsonPath('data.items.0.id', '70');
     $this->getJson($url.'&cursor=broken')->assertStatus(409)->assertJsonPath('error.code', 'cursor.unusable');
     $this->td->control([
         'op' => 'response',
@@ -276,14 +256,14 @@ test('history pagination, retry cursors, local fallback and single message proje
         ],
     ]);
     $single = $this->base.'/chats/42/messages/55?view_id='.$this->view;
-    $this->getJson($single)->assertOk()->assertJsonPath('data.item.content.text', 'Fetched')->assertJsonPath('data.source', 'tdlib');
+    $this->getJson($single)->assertOk()->assertJsonPath('data.item.content.text', 'Fetched')->assertJsonPath('data.source', 'tdlib_local');
     $this->getJson($single)->assertOk()->assertJsonPath('data.source', 'tdlib_memory');
     $this->td->control([
         'op' => 'response',
         'function' => 'message',
         'code' => 404,
     ]);
-    $this->getJson($this->base.'/chats/42/messages/404?view_id='.$this->view)->assertNotFound()->assertJsonPath('error.code', 'message.not_found');
+    $this->getJson($this->base.'/chats/42/messages/404?view_id='.$this->view)->assertNotFound()->assertJsonPath('error.code', 'message.cache_miss');
 });
 
 test('chat and message updates can be consumed incrementally without leaking accounts', function (): void {
@@ -350,7 +330,7 @@ test('interest leases coalesce, enforce limits, release principals and roll back
         $this->putJson($path.Str::uuid())->assertOk();
     }
     $this->putJson($path.Str::uuid())->assertStatus(429)->assertJsonPath('error.code', 'interest.limit_reached');
-    app(TdlibGateway::class)->releasePrincipalInterests('api_client', $this->principal->id, (string) Str::uuid());
+    app(TdlibGateway::class)->releasePrincipalInterests('maintenance', $this->principal->id, (string) Str::uuid());
     $this->putJson($path.Str::uuid())->assertOk();
 });
 
@@ -366,7 +346,8 @@ test('lifecycle, idempotency, proxy application and tombstones cross both servic
         'mode' => 'socks5',
         'host' => 'proxy.test',
         'port' => 1080,
-    ])->assertAccepted()->assertJsonPath('data.applied_revision', 2);
+    ])->assertAccepted()->assertJsonPath('data.desired_revision', 2)->assertJsonPath('data.applied_revision', 1);
+    $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     $this->getJson($this->base.'/proxy')->assertOk()->assertJsonPath('data.type', 'socks5');
     $proxy = [
         'mode' => 'socks5',
@@ -374,17 +355,14 @@ test('lifecycle, idempotency, proxy application and tombstones cross both servic
         'port' => 1080,
     ];
     expect(app(TdlibGateway::class)->pingProxy($this->account, $proxy, (string) Str::uuid())['latency_ms'])->toBe(125);
-    $this->td->control([
-        'op' => 'response',
-        'function' => 'add_proxy',
-    ]);
     $this->putJson($this->base.'/proxy', [
         'desired_revision' => 2,
         'id' => (string) Str::uuid(),
         'mode' => 'http',
         'host' => 'proxy.test',
         'port' => 8080,
-    ])->assertStatus(409)->assertJsonPath('error.code', 'configuration.invalid');
+    ])->assertAccepted()->assertJsonPath('data.desired_revision', 3);
+    $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     $this->assertDatabaseHas('telegram_accounts', [
         'id' => $this->account,
         'desired_revision' => 3,
@@ -393,7 +371,7 @@ test('lifecycle, idempotency, proxy application and tombstones cross both servic
     $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     $this->deleteJson($this->base, [
         'acknowledge_remote_session_remains' => true,
-    ])->assertNoContent();
+    ])->assertAccepted();
     $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     $this->getJson($this->base)->assertGone();
     $this->deleteJson($this->base, [
@@ -445,19 +423,28 @@ test('failed lifecycle commands preserve intent and recover without duplicate re
         'function' => $function,
         'code' => 500,
     ]);
-    $this->json($method, $this->base.$suffix, $payload)->assertStatus(502)->assertJsonPath('error.code', 'telegram.operation_failed');
+    $this->json($method, $this->base.$suffix, $payload)->assertAccepted();
     $account = TelegramAccount::query()->findOrFail($this->account);
     expect($account->desired_revision)->toBe(2)->and($account->operation_id)->not->toBeNull();
     $operation = $account->operation_id;
+    $service = app(TelegramAccountService::class);
+    expect(fn () => $service->reconcile($service->find($this->account, false, (string) Str::uuid()), (string) Str::uuid()))
+        ->toThrow(ApiException::class);
+    expect($account->fresh()->operation_id)->toBe($operation);
     $retry = $this->json($method, $this->base.$suffix, $payload);
     if ($function === 'logout') {
         $retry->assertAccepted()->assertJsonPath('data.desired_revision', 2);
         expect($account->fresh()->operation_id)->toBe($operation);
+        $service->reconcile($service->find($this->account, false, (string) Str::uuid()), (string) Str::uuid());
         contractEventually(fn () => app(TdlibGateway::class)->snapshot($this->account, (string) Str::uuid())['authorization_state'] === 'closed');
-        $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
-        expect($account->fresh()->logout_completed_at)->not->toBeNull();
+        contractEventually(function () use ($service, $account): bool {
+            $service->reconcile($service->find($this->account, false, (string) Str::uuid()), (string) Str::uuid());
+
+            return $account->fresh()->logout_completed_at !== null;
+        });
     } else {
-        $retry->assertNoContent();
+        $retry->assertAccepted();
+        $service->reconcile($service->find($this->account, false, (string) Str::uuid()), (string) Str::uuid());
         $this->getJson($this->base)->assertGone();
     }
 })->with([
@@ -500,23 +487,16 @@ test('revoking one device closes only its leases and its token stops working', f
     ])['counts']['close'])->toBe(1);
 });
 
-test('history timeout falls back locally within the public HTTP deadline', function (): void {
+test('local history timeout reports an incomplete range within the public HTTP deadline', function (): void {
     contractState($this, 'ready');
     $this->td->control([
         'op' => 'response',
         'function' => 'history',
         'kind' => 'timeout',
     ]);
-    $this->td->control([
-        'op' => 'response',
-        'function' => 'history',
-        'kind' => 'history',
-        'items' => [[
-            'id' => '99',
-        ]],
-    ]);
     $started = microtime(true);
-    $this->getJson($this->base.'/chats/42/messages?view_id='.$this->view)->assertOk()->assertJsonPath('data.partial', true)->assertJsonPath('data.items.0.id', '99')->assertJsonPath('data.source', 'tdlib_local');
+    $result = $this->getJson($this->base.'/chats/42/messages?view_id='.$this->view)->assertOk()->assertJsonPath('data.partial', true)->assertJsonCount(0, 'data.items')->assertJsonPath('data.source', 'tdlib_local');
+    expect($result->json('data.retry_cursor'))->toBeString();
     expect(microtime(true) - $started)->toBeLessThan(10.0);
 });
 

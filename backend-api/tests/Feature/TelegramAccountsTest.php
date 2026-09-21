@@ -3,7 +3,10 @@
 use App\Cache\ReconciliationCacheKeys;
 use App\Enums\AccountLifecycle;
 use App\Models\ApiClient;
+use App\Models\Device;
+use App\Models\Instance;
 use App\Models\TelegramAccount;
+use App\Services\TelegramAccountService;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
@@ -42,7 +45,8 @@ test('creation is durable idempotent and does not store auth inputs', function (
         ],
     ];
     $first = $this->withToken($this->token)->withHeader('Idempotency-Key', 'create-primary-1')->postJson('/v1/telegram/accounts', $payload);
-    $first->assertCreated()->assertJsonPath('data.lifecycle', 'active')->assertJsonPath('data.runtime.authorization_state', 'awaiting_phone_number')->assertJsonPath('data.proxy.id', $proxyId)->assertJsonPath('data.proxy.server', 'proxy.example')->assertJsonPath('data.proxy.port', 8080)->assertJsonPath('data.proxy.type', 'http');
+    $first->assertAccepted()->assertJsonPath('data.lifecycle', 'provisioning')->assertJsonPath('data.applied_revision', null)->assertJsonPath('data.proxy.id', $proxyId)->assertJsonPath('data.proxy.server', 'proxy.example')->assertJsonPath('data.proxy.port', 8080)->assertJsonPath('data.proxy.type', 'http');
+    Http::assertNothingSent();
     $id = $first->json('data.id');
     $this->withToken($this->token)->withHeader('Idempotency-Key', 'create-primary-1')->postJson('/v1/telegram/accounts', $payload)->assertOk()->assertJsonPath('data.id', $id);
     $this->assertDatabaseCount('telegram_accounts', 1);
@@ -71,10 +75,78 @@ test('idempotency key rejects a different body', function (): void {
     $request = $this->withToken($this->token)->withHeader('Idempotency-Key', 'stable-create-key');
     $request->postJson('/v1/telegram/accounts', [
         'label' => 'One',
-    ])->assertCreated();
+    ])->assertAccepted();
     $this->withToken($this->token)->withHeader('Idempotency-Key', 'stable-create-key')->postJson('/v1/telegram/accounts', [
         'label' => 'Two',
     ])->assertStatus(409)->assertJsonPath('error.code', 'operation.conflict');
+});
+test('account creation accepts an inherited proxy and rejects inherited proxy details', function (): void {
+    Http::fake([
+        '*' => Http::response([
+            'data' => [
+                'applied_revision' => 1,
+            ],
+        ]),
+    ]);
+    $this->withToken($this->token)->withHeader('Idempotency-Key', 'inherit-create-key')->postJson('/v1/telegram/accounts', [
+        'label' => 'Inherited',
+        'proxy' => [
+            'mode' => 'inherit',
+        ],
+    ])->assertAccepted()->assertJsonPath('data.proxy.id', null);
+    $this->withToken($this->token)->withHeader('Idempotency-Key', 'inherit-invalid-key')->postJson('/v1/telegram/accounts', [
+        'label' => 'Invalid',
+        'proxy' => [
+            'mode' => 'inherit',
+            'host' => 'proxy.example',
+        ],
+    ])->assertStatus(422)->assertJsonPath('error.code', 'request.invalid');
+});
+test('device tokens cannot manage Telegram accounts through public routes', function (): void {
+    $instance = Instance::query()->create([]);
+    $token = 'tb_'.str_repeat('d', 43);
+    Device::query()->create([
+        'instance_id' => $instance->id,
+        'name' => 'Watch',
+        'token_prefix' => substr($token, 0, 12),
+        'token_hash' => hash('sha256', $token),
+    ]);
+    $account = telegramAccountsTestAccount();
+    $this->withToken($token)->withHeader('Idempotency-Key', 'device-create-key')->postJson('/v1/telegram/accounts', [
+        'label' => 'Forbidden',
+    ])->assertForbidden()->assertJsonPath('error.code', 'auth.insufficient_scope');
+    $this->withToken($token)->postJson("/v1/telegram/accounts/{$account->id}/logout", [])->assertForbidden();
+    $this->withToken($token)->putJson("/v1/telegram/accounts/{$account->id}/proxy", [
+        'desired_revision' => 1,
+        'mode' => 'inherit',
+    ])->assertForbidden();
+    $this->withToken($token)->deleteJson("/v1/telegram/accounts/{$account->id}")->assertForbidden();
+    $this->withToken($token)->postJson("/v1/telegram/accounts/{$account->id}/authorization/actions", [])->assertForbidden();
+});
+test('runtime authorization generation advances durably and never regresses', function (): void {
+    $account = telegramAccountsTestAccount();
+    $seen = 0;
+    Http::fake(function () use ($account, &$seen) {
+        $seen++;
+
+        return Http::response([
+            'data' => [
+                'generation' => $account->storage_generation,
+                'authorization_generation' => $seen === 1 ? 3 : 2,
+                'runtime_available' => true,
+            ],
+        ]);
+    });
+    $this->withToken($this->token)->getJson("/v1/telegram/accounts/{$account->id}")->assertOk();
+    $this->assertDatabaseHas('telegram_accounts', [
+        'id' => $account->id,
+        'authorization_generation' => 3,
+    ]);
+    $this->withToken($this->token)->getJson("/v1/telegram/accounts/{$account->id}")->assertOk();
+    $this->assertDatabaseHas('telegram_accounts', [
+        'id' => $account->id,
+        'authorization_generation' => 3,
+    ]);
 });
 test('unknown fields are rejected without echoing values', function (): void {
     $response = $this->withToken($this->token)->withHeader('Idempotency-Key', 'unknown-field-key')->postJson('/v1/telegram/accounts', [
@@ -120,7 +192,8 @@ test('proxy update persists desired configuration when tdlib is unavailable', fu
         'username' => 'proxy-user',
         'password' => 'proxy-secret-sentinel',
     ];
-    $this->withToken($this->token)->putJson("/v1/telegram/accounts/{$account->id}/proxy", $payload)->assertStatus(503)->assertJsonPath('error.code', 'service.tdlib_unavailable');
+    $this->withToken($this->token)->putJson("/v1/telegram/accounts/{$account->id}/proxy", $payload)->assertAccepted()->assertJsonPath('data.desired_revision', 2)->assertJsonPath('data.applied_revision', null);
+    Http::assertNothingSent();
     $this->assertDatabaseHas('telegram_accounts', [
         'id' => $account->id,
         'desired_revision' => 2,
@@ -144,7 +217,12 @@ test('late confirmation cannot acknowledge a newer intent', function (): void {
     $response = $this->withToken($this->token)->withHeader('Idempotency-Key', 'late-confirmation-key')->postJson('/v1/telegram/accounts', [
         'label' => 'Racing account',
     ]);
-    $response->assertCreated()->assertJsonPath('data.desired_revision', 2)->assertJsonPath('data.applied_revision', null);
+    $response->assertAccepted()->assertJsonPath('data.desired_revision', 1)->assertJsonPath('data.applied_revision', null);
+    $account = TelegramAccount::query()->firstOrFail();
+    $account->desired_revision = 2;
+    $account->operation_id = fake()->uuid();
+    $account->save();
+    $this->app->make(TelegramAccountService::class)->reconcile($this->app->make(TelegramAccountService::class)->find($account->id, false, 'late-confirmation'), 'late-confirmation');
     $this->assertDatabaseHas('telegram_accounts', [
         'desired_revision' => 2,
         'applied_revision' => null,
@@ -163,7 +241,9 @@ test('removal requires acknowledgement and known removed ids are gone', function
     ]);
     $this->withToken($this->token)->deleteJson("/v1/telegram/accounts/{$account->id}", [
         'acknowledge_remote_session_remains' => true,
-    ])->assertNoContent();
+    ])->assertAccepted()->assertJsonPath('data.lifecycle', 'removing');
+    $service = $this->app->make(TelegramAccountService::class);
+    $service->reconcile($service->find($account->id, false, 'remove-test'), 'remove-test');
     $this->withToken($this->token)->getJson("/v1/telegram/accounts/{$account->id}")->assertStatus(410)->assertJsonPath('error.code', 'account.gone');
     $this->withToken($this->token)->deleteJson("/v1/telegram/accounts/{$account->id}", [
         'acknowledge_remote_session_remains' => true,
@@ -402,6 +482,25 @@ test('account rate limits use separate shared authorization budgets', function (
         'value' => '001234',
     ])->assertStatus(429)->assertHeader('Retry-After');
 });
+test('preview proxy validates its identifier and returns only bounded image bytes', function (): void {
+    $account = telegramAccountsTestAccount();
+    $id = str_repeat('a', 64);
+    Http::fake([
+        '*' => Http::response([
+            'data' => [
+                'mime_type' => 'image/jpeg',
+                'bytes_base64' => base64_encode('jpeg-test'),
+            ],
+        ]),
+    ]);
+    $url = '/v1/telegram/accounts/'.$account->id.'/chats/42/messages/55/preview/';
+    $view = '?view_id=90112233-4455-4677-8899-aabbccddeeff';
+    $this->withToken($this->token)->get($url.$id.$view)
+        ->assertOk()->assertHeader('Content-Type', 'image/jpeg')->assertHeader('Cache-Control', 'no-store, private');
+    expect($this->withToken($this->token)->get($url.$id.$view)->getContent())->toBe('jpeg-test');
+    $this->withToken($this->token)->getJson($url.'bad'.$view)->assertNotFound()->assertJsonPath('error.code', 'message.cache_miss');
+});
+
 function telegramAccountsTestAccount(): TelegramAccount
 {
     return TelegramAccount::query()->create([

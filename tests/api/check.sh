@@ -45,4 +45,5 @@ export TELEBEZEL_DISPOSABLE_DB="$database" TELEBEZEL_DISPOSABLE_PORT="$port"
 
 if test -n "${TDLIB_FIXTURE_BIN:-}"; then
   "$php_bin" vendor/bin/pest tests/Integration
+  PHP_BIN="$php_bin" bash "$root/tests/browser/settings.sh"
 fi

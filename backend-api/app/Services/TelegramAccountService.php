@@ -45,9 +45,6 @@ final class TelegramAccountService
             'proxy' => $proxy,
         ]));
         [$account, $created] = $this->repository->create($owner, $scopeId, hash('sha256', $idempotencyKey), $requestHash, $input, $proxy);
-        if ($created) {
-            $this->dispatchProvision($account, $requestId, false, $proxy);
-        }
 
         return [$this->repository->find($account->id), $created];
     }
@@ -99,9 +96,8 @@ final class TelegramAccountService
     {
         $proxy = $this->normalizedProxy($input);
         $account = $this->repository->mutate($id, fn (AccountData $current): array => $this->policy->updateProxy($current, Values::integer($input['desired_revision']), $proxy));
-        $this->confirm($account, $this->tdlib->updateProxy($id, $this->command($account, $proxy), $requestId));
 
-        return $this->repository->find($account->id);
+        return $account;
     }
 
     /** @param array<string, mixed> $input
@@ -109,7 +105,7 @@ final class TelegramAccountService
      */
     public function authorizationAction(string $id, array $input, string $requestId): array
     {
-        $account = $this->find($id, false, $requestId);
+        $account = $this->find($id, true, $requestId);
         if ($account->lifecycle === AccountLifecycle::LogoutPending) {
             throw new ApiException('operation.conflict', 409);
         }
@@ -126,23 +122,7 @@ final class TelegramAccountService
 
     public function logout(string $id, string $requestId): AccountData
     {
-        $account = $this->repository->mutate($id, $this->policy->logout(...));
-        try {
-            $data = $this->tdlib->logout($id, [
-                ...$this->command($account),
-                'logout_operation_id' => $account->logout_operation_id,
-            ], $requestId);
-        } catch (ApiException $exception) {
-            if ($exception->errorCode !== 'service.tdlib_unavailable') {
-                throw $exception;
-            }
-            $this->recordDeferredError($account, $exception->errorCode);
-
-            return $this->repository->find($account->id);
-        }
-        $this->confirm($account, $data);
-
-        return $this->repository->find($account->id);
+        return $this->repository->mutate($id, $this->policy->logout(...));
     }
 
     public function remove(string $id, string $requestId): ?AccountData
@@ -150,23 +130,27 @@ final class TelegramAccountService
         if ($this->repository->isRemoved($id)) {
             return null;
         }
-        $account = $this->repository->mutate($id, $this->policy->remove(...));
-        try {
-            $data = $this->tdlib->remove($id, $this->command($account), $requestId);
-        } catch (ApiException $exception) {
-            if ($exception->errorCode !== 'service.tdlib_unavailable') {
-                throw $exception;
-            }
-            $this->recordDeferredError($account, $exception->errorCode);
 
-            return $this->repository->find($account->id);
-        }
-        $this->confirm($account, $data);
-
-        return $this->repository->isRemoved($id) ? null : $this->repository->find($id);
+        return $this->repository->mutate($id, $this->policy->remove(...));
     }
 
     public function reconcile(AccountData $account, string $requestId): void
+    {
+        try {
+            $this->reconcileIntent($account, $requestId);
+        } catch (ApiException $exception) {
+            if ($exception->errorCode !== 'operation.conflict') {
+                throw $exception;
+            }
+            $refreshed = $this->find($account->id, true, $requestId);
+            if ($refreshed->authorization_generation <= $account->authorization_generation) {
+                throw $exception;
+            }
+            $this->reconcileIntent($refreshed, $requestId);
+        }
+    }
+
+    private function reconcileIntent(AccountData $account, string $requestId): void
     {
         if ($account->lifecycle === AccountLifecycle::Removed) {
             return;
@@ -190,6 +174,7 @@ final class TelegramAccountService
     public function applyEffectiveProxy(AccountData $account, string $requestId): void
     {
         try {
+            $account = $this->find($account->id, true, $requestId);
             if ($account->lifecycle !== AccountLifecycle::Active) {
                 $this->reconcile($account, $requestId);
 
@@ -257,6 +242,9 @@ final class TelegramAccountService
             throw new ApiException('configuration.invalid', 422);
         }
         if ($mode !== 'inherit' && ($proxy['id'] ?? '') === '') {
+            throw new ApiException('configuration.invalid', 422);
+        }
+        if ($mode === 'inherit' && array_intersect(['id', 'host', 'port', 'http_only', 'username', 'password', 'secret'], array_keys($proxy)) !== []) {
             throw new ApiException('configuration.invalid', 422);
         }
         if (($proxy['password'] ?? '') !== '' && ($proxy['username'] ?? '') === '') {

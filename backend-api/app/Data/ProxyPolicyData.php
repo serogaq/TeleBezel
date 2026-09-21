@@ -8,5 +8,5 @@ use Carbon\CarbonImmutable;
 
 final readonly class ProxyPolicyData
 {
-    public function __construct(public string $instanceId, public ?string $activeId, public string $failureAction, public int $timeoutSeconds, public ?CarbonImmutable $failureStartedAt) {}
+    public function __construct(public string $instanceId, public ?string $activeId, public int $revision, public string $failureAction, public int $timeoutSeconds, public ?CarbonImmutable $failureStartedAt) {}
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -23,6 +24,12 @@ struct Config {
   std::int32_t telegram_api_id{0};
   bool use_test_dc{false};
   ProxyConfig proxy;
+  std::size_t cache_messages_per_chat{500};
+  std::size_t cache_messages_per_account{5000};
+  std::size_t cache_messages_per_process{20000};
+  std::size_t cache_projection_bytes{128ULL * 1024 * 1024};
+  std::size_t preview_max_bytes{512ULL * 1024};
+  std::size_t preview_total_bytes{256ULL * 1024 * 1024};
 };
 ProxyMode parse_proxy_mode(const std::string &value);
 Config load_config();

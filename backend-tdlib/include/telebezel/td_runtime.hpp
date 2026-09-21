@@ -31,8 +31,11 @@ public:
   nlohmann::json chat(const std::string &uuid, std::int64_t chat_id) const;
   nlohmann::json messages(const std::string &uuid, std::int64_t chat_id, std::size_t limit, const std::string &cursor);
   nlohmann::json message(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id);
+  nlohmann::json preview(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id,
+                         const std::string &preview_id);
   nlohmann::json updates(const std::string &uuid, const std::string &cursor, std::size_t limit) const;
-  nlohmann::json set_interest(const std::string &uuid, std::int64_t chat_id, const std::string &lease_key, bool active);
+  nlohmann::json set_interest(const std::string &uuid, std::int64_t chat_id, const std::string &lease_key, bool active,
+                              bool await_transition = true);
   nlohmann::json release_interests(const std::string &principal_type, const std::string &principal_id);
 
 private:

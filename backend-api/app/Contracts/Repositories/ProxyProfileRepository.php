@@ -33,6 +33,9 @@ interface ProxyProfileRepository
     /** @return array<int, string> */
     public function activate(string $instanceId, ?string $id): array;
 
+    /** @return array<int, string>|null Null when the observed policy has changed. */
+    public function activateObserved(ProxyPolicyData $policy, ?string $id): ?array;
+
     public function configure(string $instanceId, Input $input): void;
 
     public function recordFailure(ProxyPolicyData $policy, bool $failed): void;

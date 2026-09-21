@@ -87,6 +87,7 @@ final class AccountStatePolicy
         return [
             'applied_revision' => $projected->applied_revision,
             'operation_id' => $projected->operation_id,
+            'authorization_generation' => $projected->authorization_generation,
             'runtime_available' => $projected->runtime_available,
             'authorization_state' => $projected->authorization_state,
             'connection_state' => $projected->connection_state,
@@ -142,6 +143,13 @@ final class AccountStatePolicy
     /** @param array<string, mixed> $snapshot */
     public function applySnapshot(AccountData $account, array $snapshot, bool $includeIdentity = true): void
     {
+        if (isset($snapshot['generation']) && $snapshot['generation'] !== $account->storage_generation) {
+            return;
+        }
+        $authorizationGeneration = $snapshot['authorization_generation'] ?? null;
+        if (is_int($authorizationGeneration) && $authorizationGeneration > $account->authorization_generation) {
+            $account->authorization_generation = $authorizationGeneration;
+        }
         $applied = $snapshot['applied_revision'] ?? null;
         $effectiveConfigId = $snapshot['effective_config_id'] ?? null;
         if (is_int($applied) && $applied === $account->desired_revision && is_string($effectiveConfigId) && hash_equals((string) $account->effective_config_id, $effectiveConfigId)) {

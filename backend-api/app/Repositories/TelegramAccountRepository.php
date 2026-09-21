@@ -133,13 +133,14 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
 
     public function persistSnapshotState(AccountData $account): void
     {
-        TelegramAccount::query()->whereKey($account->id)->where('storage_generation', $account->storage_generation)->where('desired_revision', $account->desired_revision)->where('effective_config_id', $account->effective_config_id)->update([
+        TelegramAccount::query()->whereKey($account->id)->where('storage_generation', $account->storage_generation)->where('desired_revision', $account->desired_revision)->where('effective_config_id', $account->effective_config_id)->where('authorization_generation', '<=', $account->authorization_generation)->update([
             'applied_revision' => $account->applied_revision,
             'runtime_available' => $account->runtime_available,
             'authorization_state' => $account->authorization_state,
             'connection_state' => $account->connection_state,
             'last_error_code' => $account->last_error_code,
             'operation_id' => $account->operation_id,
+            'authorization_generation' => $account->authorization_generation,
         ]);
     }
 

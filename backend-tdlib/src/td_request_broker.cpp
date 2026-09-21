@@ -11,7 +11,8 @@ std::uint64_t TdRequestBroker::next_id() {
 
 td_api::object_ptr<td_api::Object> TdRequestBroker::request(std::int32_t client_id,
                                                             td_api::object_ptr<td_api::Function> function,
-                                                            std::chrono::seconds timeout, bool recover_stalled_client) {
+                                                            std::chrono::milliseconds timeout,
+                                                            bool recover_stalled_client) {
   return await_request(begin_request(client_id, std::move(function)), timeout, recover_stalled_client);
 }
 RequestHandle TdRequestBroker::begin_request(std::int32_t client_id, td_api::object_ptr<td_api::Function> function) {
@@ -33,8 +34,8 @@ RequestHandle TdRequestBroker::begin_request(std::int32_t client_id, td_api::obj
   }
   return {id, client_id, std::move(future), true};
 }
-td_api::object_ptr<td_api::Object> TdRequestBroker::await_request(RequestHandle handle, std::chrono::seconds timeout,
-                                                                  bool recover_stalled_client) {
+td_api::object_ptr<td_api::Object>
+TdRequestBroker::await_request(RequestHandle handle, std::chrono::milliseconds timeout, bool recover_stalled_client) {
   if (handle.future.wait_for(timeout) != std::future_status::ready) {
     std::lock_guard lock(mutex_);
     // The response may have completed between wait_for and acquiring the lock.

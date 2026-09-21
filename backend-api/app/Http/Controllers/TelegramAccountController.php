@@ -29,7 +29,7 @@ final class TelegramAccountController extends Controller
         $arguments = [RequestContext::principal($request)->id, (string) $request->header('Idempotency-Key'), $request->validated(), $this->requestId($request)];
         [$account, $created] = $request->attributes->get('principal_type') === 'owner' ? $accounts->createForOwner(...$arguments) : $accounts->create(...$arguments);
 
-        return (new TelegramAccountResource($account))->respond($request, $this->requestId($request), $created ? 201 : 200);
+        return (new TelegramAccountResource($account))->respond($request, $this->requestId($request), $created ? 202 : 200);
     }
 
     public function show(string $uuid, Request $request, TelegramAccountService $accounts): JsonResponse

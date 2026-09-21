@@ -20,6 +20,8 @@ void RuntimeEngine::start() {
       account.uuid = manifest.uuid;
       account.generation = manifest.generation;
       account.revision = manifest.revision;
+      account.applied_revision = manifest.applied_revision;
+      account.authorization_generation = manifest.authorization_generation;
       account.use_test_dc = manifest.use_test_dc;
       account.lifecycle = manifest.lifecycle;
       account.operation_id = manifest.operation_id;
@@ -54,6 +56,11 @@ void RuntimeEngine::start() {
   }
   broker_.start();
   receive_done_.store(false);
+  {
+    std::lock_guard lock(authorization_mutex_);
+    authorization_stopping_ = false;
+  }
+  authorization_thread_ = std::thread(&RuntimeEngine::persist_authorizations, this);
   receive_thread_ = std::thread(&RuntimeEngine::receive_loop, this);
 }
 
@@ -87,6 +94,41 @@ void RuntimeEngine::stop() {
   }
   receive_done_.store(true);
   receive_thread_.join();
+  {
+    std::lock_guard lock(authorization_mutex_);
+    authorization_stopping_ = true;
+  }
+  authorization_condition_.notify_all();
+  authorization_thread_.join();
+}
+
+void RuntimeEngine::persist_authorizations() {
+  while (true) {
+    std::pair<std::string, std::uint64_t> job;
+    {
+      std::unique_lock lock(authorization_mutex_);
+      authorization_condition_.wait(lock, [this] { return authorization_stopping_ || !authorization_queue_.empty(); });
+      if (authorization_queue_.empty())
+        return;
+      job = std::move(authorization_queue_.front());
+      authorization_queue_.pop_front();
+    }
+    try {
+      registry_.persist_authorization_generation(job.first, job.second);
+    } catch (const std::exception &) {
+      std::lock_guard lock(context_.mutex_);
+      if (const auto found = context_.accounts_.find(job.first);
+          found != context_.accounts_.end() && found->second.authorization_generation == job.second) {
+        found->second.reconciled = false;
+        found->second.last_error = "storage.io_error";
+      }
+      std::cerr << nlohmann::json{{"event", "authorization_generation_persist_failed"},
+                                  {"account_uuid", job.first},
+                                  {"error_code", "storage.io_error"}}
+                       .dump()
+                << '\n';
+    }
+  }
 }
 
 StatusSnapshot RuntimeEngine::status() const {
@@ -122,33 +164,9 @@ void RuntimeEngine::receive_loop() {
   auto next_reminder = std::chrono::steady_clock::now() + std::chrono::minutes(5);
   while (!receive_done_.load()) {
     const auto stalled_clients = broker_.expire(std::chrono::steady_clock::now());
-    std::vector<std::pair<std::int32_t, std::int64_t>> expired_chats;
-    {
-      std::lock_guard lock(context_.mutex_);
-      const auto now = std::chrono::steady_clock::now();
-      for (auto &[uuid, account] : context_.accounts_) {
-        static_cast<void>(uuid);
-        for (auto iterator = account.interests.begin(); iterator != account.interests.end();) {
-          if (iterator->second.second > now) {
-            ++iterator;
-            continue;
-          }
-          const auto chat_id = iterator->second.first;
-          auto &count = account.interest_counts[chat_id];
-          if (count > 0) {
-            --count;
-            if (count == 0 && account.client_id != 0)
-              expired_chats.emplace_back(account.client_id, chat_id);
-          }
-          iterator = account.interests.erase(iterator);
-        }
-      }
-    }
     for (const auto client : stalled_clients) {
       transport_.send(client, broker_.next_id(), td_api::make_object<td_api::close>());
     }
-    for (const auto &[client, chat_id] : expired_chats)
-      transport_.send(client, broker_.next_id(), td_api::make_object<td_api::closeChat>(chat_id));
     auto response = transport_.receive(0.1);
     if (!response.object) {
       if (std::chrono::steady_clock::now() >= next_reminder) {
@@ -196,6 +214,31 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   if (object.get_id() == td_api::updateAuthorizationState::ID) {
     auto &update = static_cast<td_api::updateAuthorizationState &>(object);
     const auto state_id = update.authorization_state_ ? update.authorization_state_->get_id() : 0;
+    const bool leaving_authorized_session =
+        account.authorization_state == "ready" && state_id != td_api::authorizationStateReady::ID;
+    if (leaving_authorized_session) {
+      if (account.lifecycle == "active" && !account.busy && !account.closing) {
+        ++account.authorization_generation;
+        {
+          std::lock_guard lock(authorization_mutex_);
+          authorization_queue_.emplace_back(account.uuid, account.authorization_generation);
+        }
+        authorization_condition_.notify_one();
+      }
+      account.chats.clear();
+      context_.clear_messages(account);
+      account.sender_names.clear();
+      account.events.clear();
+      account.interests.clear();
+      account.interest_counts.clear();
+      account.interest_states.clear();
+      account.telegram_identity = nullptr;
+      account.main_exhausted = false;
+      account.archive_exhausted = false;
+      ++account.main_order_version;
+      ++account.archive_order_version;
+      account.reconciled = false;
+    }
     account.authorization_state = authorization_name(state_id);
     account.authorization_version = std::to_string(broker_.next_id());
     account.qr_link.clear();
@@ -242,19 +285,39 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   } else if (object.get_id() == td_api::updateConnectionState::ID) {
     auto &update = static_cast<td_api::updateConnectionState &>(object);
     account.connection_state = update.state_ ? connection_name(update.state_->get_id()) : "unknown";
+  } else if (object.get_id() == td_api::updateUser::ID) {
+    const auto &update = static_cast<td_api::updateUser &>(object);
+    if (update.user_) {
+      const auto key = "user:" + std::to_string(update.user_->id_);
+      auto name = update.user_->first_name_;
+      if (!update.user_->last_name_.empty()) {
+        if (!name.empty())
+          name += " ";
+        name += update.user_->last_name_;
+      }
+      if (!name.empty()) {
+        account.sender_names[key] = name;
+      }
+    }
   } else if (object.get_id() == td_api::updateNewChat::ID) {
     auto &update = static_cast<td_api::updateNewChat &>(object);
     if (update.chat_) {
       account.chats[update.chat_->id_] = chat_projection(*update.chat_);
-      if (update.chat_->last_message_)
-        account.messages[{update.chat_->id_, update.chat_->last_message_->id_}] =
-            message_projection(*update.chat_->last_message_);
+      account.sender_names["chat:" + std::to_string(update.chat_->id_)] = update.chat_->title_;
+      ++account.main_order_version;
+      ++account.archive_order_version;
+      if (update.chat_->last_message_) {
+        auto projection = message_projection(*update.chat_->last_message_);
+        decorate_sender(account, projection);
+        context_.put_message(account, {update.chat_->id_, update.chat_->last_message_->id_}, std::move(projection));
+      }
       UpdateJournal::append(account, "chat_changed", update.chat_->id_);
     }
   } else if (object.get_id() == td_api::updateChatTitle::ID) {
     auto &update = static_cast<td_api::updateChatTitle &>(object);
     account.chats[update.chat_id_]["id"] = std::to_string(update.chat_id_);
     account.chats[update.chat_id_]["title"] = update.title_;
+    account.sender_names["chat:" + std::to_string(update.chat_id_)] = update.title_;
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatPosition::ID) {
     auto &update = static_cast<td_api::updateChatPosition &>(object);
@@ -262,6 +325,8 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     if (!account.chats[update.chat_id_].contains("positions"))
       account.chats[update.chat_id_]["positions"] = nlohmann::json::object();
     apply_position(account.chats[update.chat_id_], update.position_.get());
+    ++account.main_order_version;
+    ++account.archive_order_version;
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatLastMessage::ID) {
     auto &update = static_cast<td_api::updateChatLastMessage &>(object);
@@ -270,9 +335,14 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     chat["positions"] = nlohmann::json::object();
     for (const auto &position : update.positions_)
       apply_position(chat, position.get());
+    ++account.main_order_version;
+    ++account.archive_order_version;
     chat["last_message"] = update.last_message_ ? message_projection(*update.last_message_) : nlohmann::json(nullptr);
-    if (update.last_message_)
-      account.messages[{update.chat_id_, update.last_message_->id_}] = message_projection(*update.last_message_);
+    if (update.last_message_) {
+      auto projection = message_projection(*update.last_message_);
+      decorate_sender(account, projection);
+      context_.put_message(account, {update.chat_id_, update.last_message_->id_}, std::move(projection));
+    }
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatDraftMessage::ID) {
     auto &update = static_cast<td_api::updateChatDraftMessage &>(object);
@@ -281,18 +351,25 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     chat["positions"] = nlohmann::json::object();
     for (const auto &position : update.positions_)
       apply_position(chat, position.get());
+    ++account.main_order_version;
+    ++account.archive_order_version;
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateNewMessage::ID) {
     auto &update = static_cast<td_api::updateNewMessage &>(object);
     if (update.message_) {
-      account.messages[{update.message_->chat_id_, update.message_->id_}] = message_projection(*update.message_);
+      auto projection = message_projection(*update.message_);
+      decorate_sender(account, projection);
+      context_.put_message(account, {update.message_->chat_id_, update.message_->id_}, std::move(projection));
       UpdateJournal::append(account, "message_changed", update.message_->chat_id_, update.message_->id_);
     }
   } else if (object.get_id() == td_api::updateMessageContent::ID) {
     auto &update = static_cast<td_api::updateMessageContent &>(object);
     auto found = account.messages.find({update.chat_id_, update.message_id_});
-    if (found != account.messages.end())
-      found->second["content"] = message_content(update.new_content_.get());
+    if (found != account.messages.end()) {
+      auto projection = found->second;
+      projection["content"] = message_content(update.new_content_.get());
+      context_.put_message(account, {update.chat_id_, update.message_id_}, std::move(projection));
+    }
     auto &last = account.chats[update.chat_id_]["last_message"];
     if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
       last["content"] = message_content(update.new_content_.get());
@@ -302,8 +379,11 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   } else if (object.get_id() == td_api::updateMessageEdited::ID) {
     auto &update = static_cast<td_api::updateMessageEdited &>(object);
     auto found = account.messages.find({update.chat_id_, update.message_id_});
-    if (found != account.messages.end())
-      found->second["edit_date"] = update.edit_date_;
+    if (found != account.messages.end()) {
+      auto projection = found->second;
+      projection["edit_date"] = update.edit_date_;
+      context_.put_message(account, {update.chat_id_, update.message_id_}, std::move(projection));
+    }
     auto &last = account.chats[update.chat_id_]["last_message"];
     if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
       last["edit_date"] = update.edit_date_;
@@ -313,7 +393,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   } else if (object.get_id() == td_api::updateDeleteMessages::ID) {
     auto &update = static_cast<td_api::updateDeleteMessages &>(object);
     for (const auto message_id : update.message_ids_) {
-      account.messages.erase({update.chat_id_, message_id});
+      context_.erase_message(account, {update.chat_id_, message_id});
       UpdateJournal::append(account, update.from_cache_ ? "message_changed" : "message_deleted", update.chat_id_,
                             message_id);
       auto &last = account.chats[update.chat_id_]["last_message"];

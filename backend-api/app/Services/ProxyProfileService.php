@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Cache;
 
 final readonly class ProxyProfileService
 {
-    public function __construct(private ProxyProfileRepository $profiles, private TdlibGateway $tdlib, private TelegramAccountService $accounts, private TransactionManager $transactions) {}
+    public function __construct(private ProxyProfileRepository $profiles, private TdlibGateway $tdlib, private TransactionManager $transactions) {}
 
     /** @return array<int, array<string, mixed>> */
     public function all(string $instanceId): array
@@ -79,9 +79,7 @@ final readonly class ProxyProfileService
 
     public function activate(string $instanceId, ?string $id, string $requestId): void
     {
-        foreach ($this->profiles->activate($instanceId, $id) as $accountId) {
-            $this->accounts->applyEffectiveProxy($this->accounts->find($accountId, false, $requestId), $requestId);
-        }
+        $this->profiles->activate($instanceId, $id);
     }
 
     public function configure(string $instanceId, Input $input): void
@@ -127,6 +125,9 @@ final readonly class ProxyProfileService
             if ($policy->failureStartedAt->addSeconds($policy->timeoutSeconds)->isFuture()) {
                 return;
             }
+            if ($policy->failureAction === 'stay') {
+                return;
+            }
             $next = null;
             if ($policy->failureAction === 'next') {
                 $all = $this->profiles->all($policy->instanceId);
@@ -145,8 +146,14 @@ final readonly class ProxyProfileService
                         }
                     }
                 }
+                if ($next === null) {
+                    throw new ApiException('proxy.no_alternative', 409);
+                }
             }
-            $this->activate($policy->instanceId, $next, $requestId);
+            $accountIds = $this->profiles->activateObserved($policy, $next);
+            if ($accountIds === null) {
+                return;
+            }
         } finally {
             $lock->release();
         }

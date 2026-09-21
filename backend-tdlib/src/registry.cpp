@@ -195,6 +195,7 @@ std::filesystem::path Registry::checked_path(const std::filesystem::path &base, 
 }
 
 std::optional<AccountManifest> Registry::read(const std::string &uuid) const {
+  std::lock_guard lock(manifest_mutex_);
   const auto path = checked_path(registry_root_, uuid);
   const auto manifest_path = std::filesystem::path(path.string() + ".json");
   const auto status = std::filesystem::symlink_status(manifest_path);
@@ -228,6 +229,8 @@ std::optional<AccountManifest> Registry::read(const std::string &uuid) const {
     result.operation_id = json.contains("operation_id") && json["operation_id"].is_string()
                               ? json["operation_id"].get<std::string>()
                               : std::string{};
+    result.applied_revision = json.value("applied_revision", result.operation_id.empty() ? result.revision : 0ULL);
+    result.authorization_generation = json.value("authorization_generation", 1ULL);
     result.operation_phase = json.contains("operation_phase") && json["operation_phase"].is_string()
                                  ? json["operation_phase"].get<std::string>()
                                  : std::string{};
@@ -306,6 +309,7 @@ std::map<std::string, std::string> Registry::manifest_errors() const {
 }
 
 void Registry::write(const AccountManifest &manifest, const nlohmann::json &proxy) {
+  std::lock_guard lock(manifest_mutex_);
   if (!valid_uuid(manifest.uuid) || !valid_uuid(manifest.generation)) {
     throw std::runtime_error("storage.identity_mismatch");
   }
@@ -326,6 +330,8 @@ void Registry::write(const AccountManifest &manifest, const nlohmann::json &prox
       {"use_test_dc", manifest.use_test_dc},
       {"key_derivation_version", manifest.key_derivation_version},
       {"revision", manifest.revision},
+      {"applied_revision", manifest.applied_revision},
+      {"authorization_generation", manifest.authorization_generation},
       {"lifecycle", manifest.lifecycle},
       {"operation_id", manifest.operation_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(manifest.operation_id)},
       {"operation_phase",
@@ -354,6 +360,15 @@ void Registry::write(const AccountManifest &manifest, const nlohmann::json &prox
     throw std::runtime_error("storage.io_error");
   }
   sync_directory(registry_root_);
+}
+
+void Registry::persist_authorization_generation(const std::string &uuid, std::uint64_t generation) {
+  std::lock_guard lock(manifest_mutex_);
+  auto manifest = read(uuid);
+  if (!manifest || manifest->tombstone || manifest->authorization_generation >= generation)
+    return;
+  manifest->authorization_generation = generation;
+  write(*manifest, manifest->proxy);
 }
 
 void Registry::ensure_account_directories(const std::string &uuid) {

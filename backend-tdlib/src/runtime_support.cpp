@@ -27,6 +27,7 @@ std::string command_fingerprint(nlohmann::json command) {
   command.erase("mode");
   command.erase("lifecycle");
   command.erase("operation_id");
+  command.erase("authorization_generation");
   if (command.contains("proxy") && command["proxy"].is_object()) {
     const auto &proxy = command["proxy"];
     command["proxy"] = proxy.contains("id") ? nlohmann::json{{"id", proxy["id"]}}
@@ -63,6 +64,42 @@ nlohmann::json message_content(const td_api::MessageContent *content) {
     const auto &text = static_cast<const td_api::messageText &>(*content);
     return {{"kind", "text"}, {"text", text.text_ ? text.text_->text_ : std::string{}}};
   }
+  if (content != nullptr && content->get_id() == td_api::messagePhoto::ID) {
+    const auto &photo = static_cast<const td_api::messagePhoto &>(*content);
+    if (photo.is_secret_)
+      return {{"kind", "photo"}, {"fallback_key", "message.photo"}};
+    const td_api::file *candidate = nullptr;
+    if (photo.photo_)
+      for (const auto &size : photo.photo_->sizes_)
+        if (size && size->photo_ && size->photo_->size_ > 0 &&
+            (candidate == nullptr || size->photo_->size_ < candidate->size_))
+          candidate = size->photo_.get();
+    if (candidate)
+      return {{"kind", "photo"},
+              {"fallback_key", "message.photo"},
+              {"preview_file_id", candidate->id_},
+              {"preview_size", candidate->size_},
+              {"preview_mime", "image/jpeg"}};
+    return {{"kind", "photo"}, {"fallback_key", "message.photo"}};
+  }
+  if (content != nullptr && content->get_id() == td_api::messageVideo::ID) {
+    const auto &video = static_cast<const td_api::messageVideo &>(*content);
+    const auto *thumbnail = video.video_ && video.video_->thumbnail_ ? video.video_->thumbnail_.get() : nullptr;
+    if (thumbnail && thumbnail->file_ && thumbnail->format_ && thumbnail->file_->size_ > 0) {
+      const auto format = thumbnail->format_->get_id();
+      const auto mime = format == td_api::thumbnailFormatJpeg::ID   ? "image/jpeg"
+                        : format == td_api::thumbnailFormatPng::ID  ? "image/png"
+                        : format == td_api::thumbnailFormatWebp::ID ? "image/webp"
+                                                                    : "";
+      if (*mime != '\0')
+        return {{"kind", "video"},
+                {"fallback_key", "message.video"},
+                {"preview_file_id", thumbnail->file_->id_},
+                {"preview_size", thumbnail->file_->size_},
+                {"preview_mime", mime}};
+    }
+    return {{"kind", "video"}, {"fallback_key", "message.video"}};
+  }
   return {{"kind", "unsupported"}, {"fallback_key", "message.unsupported"}};
 }
 nlohmann::json message_projection(const td_api::message &message) {
@@ -75,6 +112,12 @@ nlohmann::json message_projection(const td_api::message &message) {
       sender = {{"type", "chat"},
                 {"id", std::to_string(static_cast<const td_api::messageSenderChat &>(*message.sender_id_).chat_id_)}};
   }
+  if (sender.is_object()) {
+    const auto type = sender.value("type", "user");
+    const auto id = sender.value("id", "0");
+    sender["name"] = nullptr;
+    sender["fallback"] = (type == "chat" ? "Chat " : "User ") + id;
+  }
   return {{"id", std::to_string(message.id_)},
           {"chat_id", std::to_string(message.chat_id_)},
           {"sender", sender},
@@ -83,6 +126,14 @@ nlohmann::json message_projection(const td_api::message &message) {
           {"is_outgoing", message.is_outgoing_},
           {"author_signature", message.author_signature_},
           {"content", message_content(message.content_.get())}};
+}
+void decorate_sender(const Account &account, nlohmann::json &message) {
+  if (!message.is_object() || !message.value("sender", nlohmann::json(nullptr)).is_object())
+    return;
+  auto &sender = message["sender"];
+  const auto key = sender.value("type", "") + ":" + sender.value("id", "");
+  if (const auto found = account.sender_names.find(key); found != account.sender_names.end())
+    sender["name"] = found->second;
 }
 std::string chat_type(const td_api::ChatType *type) {
   if (type == nullptr)
@@ -217,7 +268,9 @@ nlohmann::json account_json(const Account &account) {
   nlohmann::json result{
       {"uuid", account.uuid},
       {"generation", account.generation},
-      {"applied_revision", account.revision},
+      {"target_revision", account.revision},
+      {"applied_revision", account.applied_revision},
+      {"authorization_generation", account.authorization_generation},
       {"effective_config_id",
        account.effective_config_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(account.effective_config_id)},
       {"runtime_available", account.reconciled && !account.closed},

@@ -190,13 +190,15 @@ TEST(RuntimeFailure, ProjectionUpdatesAndLeaseExpiry) {
   TemporaryDirectory directory;
   telebezel::testing::FakeRegistry registry(directory.path);
   telebezel::testing::FakeTransport transport;
-  telebezel::runtime::AccountStore store;
+  telebezel::Config config;
+  telebezel::runtime::AccountStore store(config);
   telebezel::runtime::TdRequestBroker broker(transport);
   telebezel::runtime::RuntimeEngine engine(store, registry, transport, broker);
   auto &account = store.accounts_["account"];
   account.uuid = "account";
   account.client_id = 1;
   account.reconciled = true;
+  account.lifecycle = "active";
   store.client_accounts_[1] = "account";
   const auto apply = [&](api::object_ptr<api::Object> update) { engine.handle_update(1, *update); };
   auto chat = api::make_object<api::chat>();
@@ -244,6 +246,7 @@ TEST(RuntimeFailure, ProjectionUpdatesAndLeaseExpiry) {
   account.interests["expired-shared"] = {43, now - std::chrono::seconds(1)};
   account.interests["live-shared"] = {43, now + std::chrono::hours(1)};
   account.interest_counts[43] = 2;
+  telebezel::runtime::InterestLeaseManager leases(store, broker);
   engine.start();
   bool expired = false;
   for (int attempt = 0; attempt < 100; ++attempt) {
@@ -251,7 +254,9 @@ TEST(RuntimeFailure, ProjectionUpdatesAndLeaseExpiry) {
       std::lock_guard lock(store.mutex_);
       expired = account.interests.size() == 1;
     }
-    if (expired)
+    const auto current_sent = transport.sent();
+    if (expired && std::count_if(current_sent.begin(), current_sent.end(),
+                                 [](const auto &entry) { return entry.second == api::closeChat::ID; }) == 1)
       break;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }

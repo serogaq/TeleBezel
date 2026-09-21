@@ -1,9 +1,18 @@
 #pragma once
 #include "telebezel/runtime/account_state.hpp"
+#include <chrono>
+#include <stdexcept>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
 using Account = AccountState;
 namespace td_api = td::td_api;
+inline std::chrono::milliseconds operation_budget(std::chrono::steady_clock::time_point deadline) {
+  const auto remaining =
+      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+  if (remaining <= std::chrono::milliseconds(0))
+    throw std::runtime_error("operation.outcome_unknown");
+  return remaining;
+}
 bool td_error_code(const td_api::object_ptr<td_api::Object> &object, int code);
 bool td_error_message(const td_api::object_ptr<td_api::Object> &object, const std::string &message);
 void throw_runtime_control_error(const td_api::object_ptr<td_api::Object> &object);
@@ -12,6 +21,7 @@ std::string command_fingerprint(nlohmann::json command);
 std::pair<std::string, bool> delivery_method(const td_api::AuthenticationCodeType *type);
 nlohmann::json message_content(const td_api::MessageContent *content);
 nlohmann::json message_projection(const td_api::message &message);
+void decorate_sender(const Account &account, nlohmann::json &message);
 std::string chat_type(const td_api::ChatType *type);
 void apply_position(nlohmann::json &projection, const td_api::chatPosition *position);
 nlohmann::json chat_projection(const td_api::chat &chat);

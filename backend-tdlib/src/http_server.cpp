@@ -88,7 +88,7 @@ std::size_t limit_parameter(const httplib::Request &request, std::size_t fallbac
 std::string lease_key(const httplib::Request &request, const std::string &view_id) {
   const auto type = request.get_param_value("principal_type");
   const auto id = request.get_param_value("principal_id");
-  if ((type != "device" && type != "api_client") || id.empty() || !valid_uuid(view_id))
+  if ((type != "device" && type != "api_client" && type != "maintenance") || id.empty() || !valid_uuid(view_id))
     throw std::runtime_error("request.invalid");
   return type + ":" + id + ":" + view_id;
 }
@@ -213,7 +213,7 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
     try {
       const auto chat_id = std::stoll(request.matches[2]);
       const auto key = lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
-      auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true);
+      auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
       runtime_response(response,
                        interest.value("_error", false) ? interest : runtime_.chat(request.matches[1], chat_id), id);
     } catch (const std::exception &exception) {
@@ -229,7 +229,7 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
         try {
           const auto chat_id = std::stoll(request.matches[2]);
           const auto key = lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
-          auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true);
+          auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
           runtime_response(response,
                            interest.value("_error", false)
                                ? interest
@@ -249,11 +249,25 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                   const auto chat_id = std::stoll(request.matches[2]);
                   const auto key =
                       lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
-                  auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true);
+                  auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
                   runtime_response(response,
                                    interest.value("_error", false)
                                        ? interest
                                        : runtime_.message(request.matches[1], chat_id, std::stoll(request.matches[3])),
+                                   id);
+                } catch (const std::exception &exception) {
+                  runtime_response(response, exception_result(exception), id);
+                }
+              });
+  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages/(-?[0-9]+)/preview/([0-9a-f]{64}))",
+              [this](const httplib::Request &request, httplib::Response &response) {
+                const std::string id = request_id(request);
+                if (!authorize(config_, request, response, id))
+                  return;
+                try {
+                  runtime_response(response,
+                                   runtime_.preview(request.matches[1], std::stoll(request.matches[2]),
+                                                    std::stoll(request.matches[3]), request.matches[4]),
                                    id);
                 } catch (const std::exception &exception) {
                   runtime_response(response, exception_result(exception), id);
@@ -307,7 +321,8 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
           const auto payload = body(request, {"principal_type", "principal_id"}, {"principal_type", "principal_id"});
           const auto principal_type = payload.at("principal_type").get<std::string>();
           const auto principal_id = payload.at("principal_id").get<std::string>();
-          if ((principal_type != "device" && principal_type != "api_client" && principal_type != "owner") ||
+          if ((principal_type != "device" && principal_type != "api_client" && principal_type != "maintenance" &&
+               principal_type != "owner") ||
               !valid_uuid(principal_id))
             throw std::runtime_error("request.invalid");
           runtime_response(response, runtime_.release_interests(principal_type, principal_id), id);

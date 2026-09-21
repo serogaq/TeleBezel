@@ -37,7 +37,7 @@
 
   const showRecovery = code => { const output = document.getElementById('recovery'); output.hidden = false; output.textContent = `Save this recovery code now:\n${code}`; };
   const authenticated = async authData => {
-    lastOwnerActivityAt = Date.now();
+    client.authenticated();
     if (authData?.recovery_code) showRecovery(authData.recovery_code);
     await renderSettings(); status.textContent = 'Signed in. Changes are saved on this server.';
   };
@@ -112,10 +112,107 @@
     if (preparing) scheduleAccountRefresh();
     else accountRefreshDelay = 1000;
   };
-  const authorize = async id => { try { const auth = await request(`/v1/owner/telegram/accounts/${id}/authorization`); if (auth.qr_link) { status.textContent = auth.qr_link; return; } const action = auth.allowed_actions?.[0]; if (!action) { status.textContent = `Authorization: ${auth.state || 'ready'}`; return; } const value = ['start_qr', 'resend_code'].includes(action) ? null : window.prompt(`Value for ${action}`); if (value === null && !['start_qr', 'resend_code'].includes(action)) return; await request(`/v1/owner/telegram/accounts/${id}/authorization/actions`, {method: 'POST', body: JSON.stringify(flow.authorizationPayload(auth, action, value))}); await renderSettings(); } catch (error) { status.textContent = error.message; } };
-  document.getElementById('account-add').addEventListener('submit', async event => { event.preventDefault(); try { await request('/v1/owner/telegram/accounts', {method: 'POST', headers: {'Idempotency-Key': crypto.randomUUID()}, body: JSON.stringify({label: formValue(event.target, 'label'), proxy: {mode: 'inherit'}})}); event.target.reset(); await renderSettings(); } catch (error) { status.textContent = error.message; } });
+  let authorizationTimer = null;
+  const authorizationActions = {
+    submit_phone_number: ['Phone number', 'tel', 'Send phone number'],
+    submit_code: ['Login code', 'text', 'Send code'],
+    submit_password: ['Two-step password', 'password', 'Unlock'],
+    submit_email_address: ['Email address', 'email', 'Send email'],
+    submit_email_code: ['Email code', 'text', 'Send email code'],
+    start_qr: [null, null, 'Use QR login'],
+    resend_code: [null, null, 'Resend code']
+  };
+  const renderAuthorization = (id, auth) => {
+    if (authorizationTimer !== null) clearTimeout(authorizationTimer);
+    const panel = document.getElementById('authorization-panel');
+    panel.hidden = false;
+    panel.replaceChildren(node('h3', `Authorization · ${auth.state || 'unknown'}`));
+    if (auth.qr_link) panel.append(node('p', `Scan this link with Telegram: ${auth.qr_link}`));
+    (auth.allowed_actions || []).forEach(action => {
+      const definition = authorizationActions[action];
+      if (!definition) return;
+      const form = node('form', null, 'inline');
+      let input = null;
+      if (definition[0]) {
+        const label = node('label', definition[0]);
+        input = node('input'); input.type = definition[1]; input.required = true;
+        label.append(input); form.append(label);
+      }
+      const button = node('button', definition[2]); form.append(button);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        try {
+          await request(`/v1/owner/telegram/accounts/${id}/authorization/actions`, {
+            method: 'POST', body: JSON.stringify(flow.authorizationPayload(auth, action, input ? input.value : null))
+          });
+          await renderSettings();
+          await authorize(id);
+        } catch (error) { status.textContent = error.message; }
+      });
+      panel.append(form);
+    });
+    if (auth.state === 'awaiting_qr_confirmation') {
+      authorizationTimer = setTimeout(() => authorize(id), 5000);
+    }
+  };
+  const authorize = async id => {
+    try { renderAuthorization(id, await request(`/v1/owner/telegram/accounts/${id}/authorization`)); }
+    catch (error) { status.textContent = error.message; }
+  };
+  const pendingAccountKey = 'telebezel.pending-account-create';
+  document.getElementById('account-add').addEventListener('submit', async event => {
+    event.preventDefault();
+    const body = JSON.stringify({label: formValue(event.target, 'label'), proxy: {mode: 'inherit'}});
+    let pending;
+    try { pending = JSON.parse(sessionStorage.getItem(pendingAccountKey) || 'null'); } catch { pending = null; }
+    if (!pending || pending.body !== body) {
+      pending = {body, key: crypto.randomUUID()};
+      sessionStorage.setItem(pendingAccountKey, JSON.stringify(pending));
+    }
+    try {
+      await request('/v1/owner/telegram/accounts', {method: 'POST', headers: {'Idempotency-Key': pending.key}, body});
+      sessionStorage.removeItem(pendingAccountKey);
+      event.target.reset();
+      await renderSettings();
+    } catch (error) { status.textContent = error.message; }
+  });
 
-  const renderReplies = replies => { const list = document.getElementById('replies'); list.replaceChildren(); replies.forEach(reply => { const item = node('div', null, 'item'); item.append(node('p', reply.text)); const remove = node('button', 'Delete', 'danger'); remove.type = 'button'; remove.addEventListener('click', async () => { await request(`/v1/owner/quick-replies/${reply.id}`, {method: 'DELETE'}); await renderSettings(); }); item.append(remove); list.append(item); }); };
+  const renderReplies = replies => {
+    const list = document.getElementById('replies'); list.replaceChildren();
+    replies.forEach((reply, index) => {
+      const item = node('div', null, 'item'); item.append(node('p', reply.text));
+      const edit = node('button', 'Edit', 'secondary'); edit.type = 'button';
+      edit.addEventListener('click', () => {
+        const form = node('form', null, 'inline'); const input = node('input');
+        input.value = reply.text; input.maxLength = 512; input.required = true;
+        form.append(input, node('button', 'Save'));
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          try { await request(`/v1/owner/quick-replies/${reply.id}`, {method: 'PUT', body: JSON.stringify({text: input.value})}); await renderSettings(); }
+          catch (error) { status.textContent = error.message; }
+        });
+        item.replaceChildren(form);
+      });
+      item.append(edit);
+      for (const [label, offset] of [['Up', -1], ['Down', 1]]) {
+        const move = node('button', label, 'secondary'); move.type = 'button';
+        move.disabled = index + offset < 0 || index + offset >= replies.length;
+        move.addEventListener('click', async () => {
+          const ids = replies.map(value => value.id);
+          [ids[index], ids[index + offset]] = [ids[index + offset], ids[index]];
+          try { await request('/v1/owner/quick-replies/reorder', {method: 'PUT', body: JSON.stringify({ids})}); await renderSettings(); }
+          catch (error) { status.textContent = error.message; }
+        });
+        item.append(move);
+      }
+      const remove = node('button', 'Delete', 'danger'); remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        try { await request(`/v1/owner/quick-replies/${reply.id}`, {method: 'DELETE'}); await renderSettings(); }
+        catch (error) { status.textContent = error.message; }
+      });
+      item.append(remove); list.append(item);
+    });
+  };
   document.getElementById('reply-add').addEventListener('submit', async event => { event.preventDefault(); try { await request('/v1/owner/quick-replies', {method: 'POST', body: JSON.stringify({text: formValue(event.target, 'text')})}); event.target.reset(); await renderSettings(); } catch (error) { status.textContent = error.message; } });
   const renderDevices = devices => { const list = document.getElementById('devices'); list.replaceChildren(); devices.forEach(device => { const item = node('div', null, 'item'); item.append(node('p', device.name), node('p', device.revoked_at ? 'revoked' : `last seen ${device.last_seen_at || 'never'}`, 'meta')); if (!device.revoked_at) { const revoke = node('button', 'Revoke', 'danger'); revoke.type = 'button'; revoke.addEventListener('click', async () => { await request(`/v1/owner/devices/${device.id}`, {method: 'DELETE'}); await renderSettings(); }); item.append(revoke); } list.append(item); }); };
   document.getElementById('device-add').addEventListener('submit', async event => { event.preventDefault(); try { const device = await request('/v1/owner/devices', {method: 'POST', body: JSON.stringify({name: formValue(event.target, 'name')})}); const output = document.getElementById('device-token'); output.hidden = false; output.textContent = `Copy this token now; it will not be shown again:\n${device.token}`; await renderSettings(); status.textContent = 'Device token created. Paste it into the TeleBezel Clay settings.'; } catch (error) { status.textContent = error.message; } });
@@ -126,6 +223,9 @@
     if (error.status === 401) {
       document.getElementById('access').hidden = false;
       status.textContent = 'Sign in to manage this server.';
-    } else status.textContent = error.message;
+    } else {
+      document.getElementById('access').hidden = false;
+      status.textContent = `${error.message}. Sign in or recover access to retry.`;
+    }
   });
 })();

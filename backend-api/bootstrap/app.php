@@ -7,6 +7,7 @@ use App\Http\Middleware\LimitJsonBody;
 use App\Http\Middleware\RateLimitAccountOperation;
 use App\Http\Middleware\RateLimitApiClient;
 use App\Http\Middleware\RequestId;
+use App\Http\Middleware\RequireAccountManagement;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Resources\ErrorResource;
 use Illuminate\Database\QueryException;
@@ -32,6 +33,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'owner' => AuthenticateOwner::class,
             'api-client-rate-limit' => RateLimitApiClient::class,
             'account-rate-limit' => RateLimitAccountOperation::class,
+            'account-management' => RequireAccountManagement::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

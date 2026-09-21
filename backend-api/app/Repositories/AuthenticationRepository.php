@@ -17,7 +17,7 @@ final class AuthenticationRepository implements AuthenticationRepositoryContract
     {
         $client = ApiClient::query()->where('token_hash', $hash)->whereNull('revoked_at')->first();
         if ($client !== null) {
-            return new PrincipalContext('api_client', $client->id);
+            return new PrincipalContext('maintenance', $client->id);
         }
         $device = Device::query()->where('token_hash', $hash)->whereNull('revoked_at')->first();
         if ($device === null) {

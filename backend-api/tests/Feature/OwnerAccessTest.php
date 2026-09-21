@@ -186,7 +186,7 @@ test('owner manages pings and activates proxy profiles', function (): void {
     expect($raw)->toBeString();
     expect($raw)->not->toContain('dd-secret-value');
     $owner->postJson("/v1/owner/proxies/{$profile['id']}/activate")->assertOk()->assertJsonPath('data.0.active', true);
-    Http::assertSent(fn (ClientRequest $request): bool => str_ends_with($request->url(), '/proxy') && $request->method() === 'PUT');
+    Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with($request->url(), '/proxy') && $request->method() === 'PUT');
     expect($instance->fresh()->active_proxy_profile_id)->toBe($profile['id']);
     expect(TelegramAccount::query()->firstOrFail()->desired_revision)->toBe(2);
     $owner->putJson('/v1/owner/proxies/settings', [
@@ -277,6 +277,45 @@ test('proxy monitor switches to next then direct after timeout', function (): vo
     $profiles->monitor((string) Str::uuid());
     expect($instance->fresh()->active_proxy_profile_id)->toBeNull();
 });
+test('next policy keeps a failed proxy when no alternative exists', function (): void {
+    $instance = Instance::query()->create([
+        'proxy_failure_action' => 'next',
+        'proxy_connect_timeout_seconds' => 10,
+    ]);
+    $profile = ProxyProfile::query()->create([
+        'instance_id' => $instance->id,
+        'label' => 'Only profile',
+        'mode' => 'http',
+        'host' => 'proxy.example',
+        'port' => 8080,
+        'position' => 1,
+    ]);
+    $instance->forceFill([
+        'active_proxy_profile_id' => $profile->id,
+        'proxy_failure_started_at' => now()->subSeconds(11),
+    ])->save();
+    $account = TelegramAccount::query()->create([
+        'label' => 'Inherited',
+        'storage_generation' => (string) Str::uuid(),
+        'lifecycle' => AccountLifecycle::Active,
+        'desired_revision' => 1,
+        'effective_config_id' => (string) Str::uuid(),
+    ]);
+    Http::fake([
+        '*' => Http::response([
+            'data' => [
+                'accounts' => [
+                    $account->id => [
+                        'connection_state' => 'connecting_to_proxy',
+                    ],
+                ],
+            ],
+        ]),
+    ]);
+    expect(fn () => $this->app->make(ProxyProfileService::class)->monitor((string) Str::uuid()))
+        ->toThrow(ApiException::class, 'proxy.no_alternative');
+    expect($instance->fresh()->active_proxy_profile_id)->toBe($profile->id);
+});
 test('owner can idempotently create a telegram account', function (): void {
     $gateway = new FakeTdlibGateway;
     $gateway->queue('provision', [
@@ -307,7 +346,7 @@ test('owner can idempotently create a telegram account', function (): void {
             'id' => $proxyId,
             'mode' => 'direct',
         ],
-    ])->assertCreated();
+    ])->assertAccepted()->assertJsonPath('data.lifecycle', 'provisioning');
     $request->postJson('/v1/owner/telegram/accounts', [
         'label' => 'Primary',
         'proxy' => [
@@ -320,8 +359,7 @@ test('owner can idempotently create a telegram account', function (): void {
         'owner_session_id' => $ownerSessionId,
         'telegram_account_id' => $first->json('data.id'),
     ]);
-    expect($gateway->calls)->toHaveCount(1);
-    $gateway->assertDrained();
+    expect($gateway->calls)->toHaveCount(0);
 });
 test('only explicit owner activity extends the idle window', function (): void {
     $instance = Instance::query()->create([

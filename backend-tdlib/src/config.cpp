@@ -70,6 +70,20 @@ std::int32_t api_id_value(const std::string &value) {
   }
   return static_cast<std::int32_t>(result);
 }
+std::size_t limit_value(const std::string &value, std::size_t fallback) {
+  if (value.empty())
+    return fallback;
+  if (value.find_first_not_of("0123456789") != std::string::npos)
+    throw std::runtime_error("Cache limit must be a positive integer");
+  try {
+    const auto parsed = std::stoull(value);
+    if (parsed == 0 || parsed > 1'000'000'000ULL)
+      throw std::runtime_error("Cache limit is out of range");
+    return static_cast<std::size_t>(parsed);
+  } catch (const std::exception &) {
+    throw std::runtime_error("Cache limit is out of range");
+  }
+}
 } // namespace
 ProxyMode parse_proxy_mode(const std::string &value) {
   if (value == "inherit") {
@@ -102,6 +116,14 @@ Config load_config() {
   config.telegram_api_id = api_id_value(secret_value("TELEGRAM_API_ID", "TELEGRAM_API_ID_FILE"));
   config.telegram_api_hash = secret_value("TELEGRAM_API_HASH", "TELEGRAM_API_HASH_FILE");
   config.use_test_dc = bool_value(env_or("TDLIB_USE_TEST_DC"));
+  config.cache_messages_per_chat = limit_value(env_or("TDLIB_CACHE_MESSAGES_PER_CHAT"), config.cache_messages_per_chat);
+  config.cache_messages_per_account =
+      limit_value(env_or("TDLIB_CACHE_MESSAGES_PER_ACCOUNT"), config.cache_messages_per_account);
+  config.cache_messages_per_process =
+      limit_value(env_or("TDLIB_CACHE_MESSAGES_PER_PROCESS"), config.cache_messages_per_process);
+  config.cache_projection_bytes = limit_value(env_or("TDLIB_CACHE_PROJECTION_BYTES"), config.cache_projection_bytes);
+  config.preview_max_bytes = limit_value(env_or("TDLIB_PREVIEW_MAX_BYTES"), config.preview_max_bytes);
+  config.preview_total_bytes = limit_value(env_or("TDLIB_PREVIEW_TOTAL_BYTES"), config.preview_total_bytes);
   if ((config.telegram_api_id == 0) != config.telegram_api_hash.empty()) {
     throw std::runtime_error("Telegram API ID and hash must be configured together");
   }

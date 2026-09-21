@@ -7,7 +7,7 @@
 #include <iostream>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
-void ProxyService::apply_proxy(Account &account) {
+void ProxyService::apply_proxy(Account &account, OperationDeadline deadline) {
   std::int32_t client = 0;
   nlohmann::json desired;
   {
@@ -15,16 +15,18 @@ void ProxyService::apply_proxy(Account &account) {
     client = account.client_id;
     desired = account.proxy;
   }
-  const auto disabled = broker_.request(client, td_api::make_object<td_api::disableProxy>());
+  const auto disabled =
+      broker_.request(client, td_api::make_object<td_api::disableProxy>(), operation_budget(deadline));
   throw_runtime_control_error(disabled);
   if (!disabled || disabled->get_id() == td_api::error::ID)
     throw std::runtime_error("configuration.invalid");
-  auto existing = broker_.request(client, td_api::make_object<td_api::getProxies>());
+  auto existing = broker_.request(client, td_api::make_object<td_api::getProxies>(), operation_budget(deadline));
   if (existing && existing->get_id() == td_api::addedProxies::ID) {
     auto proxies = td::move_tl_object_as<td_api::addedProxies>(existing);
     for (const auto &proxy : proxies->proxies_) {
       if (proxy && proxy->comment_ == "telebezel-managed") {
-        const auto removed = broker_.request(client, td_api::make_object<td_api::removeProxy>(proxy->id_));
+        const auto removed =
+            broker_.request(client, td_api::make_object<td_api::removeProxy>(proxy->id_), operation_budget(deadline));
         throw_runtime_control_error(removed);
         if (!removed || removed->get_id() == td_api::error::ID)
           throw std::runtime_error("configuration.invalid");
@@ -70,7 +72,8 @@ void ProxyService::apply_proxy(Account &account) {
     type = td_api::make_object<td_api::proxyTypeMtproto>(selected->secret);
   auto proxy = td_api::make_object<td_api::proxy>(selected->host, selected->port, std::move(type));
   const auto response =
-      broker_.request(client, td_api::make_object<td_api::addProxy>(std::move(proxy), true, "telebezel-managed"));
+      broker_.request(client, td_api::make_object<td_api::addProxy>(std::move(proxy), true, "telebezel-managed"),
+                      operation_budget(deadline));
   throw_runtime_control_error(response);
   if (!response || response->get_id() != td_api::addedProxy::ID)
     throw std::runtime_error("configuration.invalid");

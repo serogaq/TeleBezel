@@ -13,7 +13,7 @@ final class TelegramReadResource extends ApiResource
     public function __construct(array $data, string $kind)
     {
         if ($kind === 'chat' || $kind === 'message') {
-            $data = self::pick($data, ['item', 'stale', 'partial', 'updates_cursor', 'source', 'observed_at']);
+            $data = self::pick($data, ['item', 'stale', 'partial', 'updates_cursor', 'source', 'observed_at', 'refresh', 'connection', 'fallback_reason']);
             if (is_array($data['item'] ?? null)) {
                 $item = Values::object($data['item']);
                 $data['item'] = $kind === 'chat' ? self::chat($item) : self::message($item);
@@ -21,7 +21,7 @@ final class TelegramReadResource extends ApiResource
         } elseif ($kind === 'interest') {
             $data = self::pick($data, ['active', 'expires_in', 'expires_in_seconds', 'lease_seconds', 'released', 'chat_id']);
         } else {
-            $data = self::pick($data, ['items', 'events', 'stale', 'partial', 'has_more', 'next_cursor', 'retry_cursor', 'updates_cursor', 'observed_at', 'source', 'cursor']);
+            $data = self::pick($data, ['items', 'events', 'stale', 'partial', 'has_more', 'next_cursor', 'retry_cursor', 'updates_cursor', 'observed_at', 'source', 'cursor', 'refresh', 'connection', 'local_exhausted', 'fallback_reason']);
             foreach (['items', 'events'] as $key) {
                 if (isset($data[$key]) && is_array($data[$key])) {
                     $data[$key] = array_values(array_map(function (mixed $item) use ($kind): array {
@@ -67,10 +67,10 @@ final class TelegramReadResource extends ApiResource
     {
         $value = self::pick($value, ['id', 'chat_id', 'sender', 'date', 'edit_date', 'is_outgoing', 'author_signature', 'content', 'stale', 'observed_at', 'source']);
         if (is_array($value['sender'] ?? null)) {
-            $value['sender'] = self::pick(Values::object($value['sender']), ['type', 'id']);
+            $value['sender'] = self::pick(Values::object($value['sender']), ['type', 'id', 'name', 'fallback']);
         }
         if (is_array($value['content'] ?? null)) {
-            $value['content'] = self::pick(Values::object($value['content']), ['kind', 'text', 'fallback_key']);
+            $value['content'] = self::pick(Values::object($value['content']), ['kind', 'text', 'fallback_key', 'preview_id']);
         }
 
         return $value;

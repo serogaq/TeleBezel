@@ -170,6 +170,9 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y acl
       - id: functional-toolchain
         uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "${{ steps.functional-toolchain.outputs.node-version }}"
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: "${{ steps.functional-toolchain.outputs.php-version }}"
@@ -188,13 +191,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ccache gperf libssl-dev ninja-build zlib1g-dev
           python3 -m pip install "cmake==$CMAKE_VERSION"
+          npm ci --prefix tests/browser
+          tests/browser/node_modules/.bin/agent-browser install --with-deps
       - name: Test API against C++ HTTP runtime with scripted Telegram success and failures
         env:
           APP_ENV: testing
           APP_KEY: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
           CCACHE_COMPRESS: "1"
           CCACHE_MAXSIZE: 1500M
-        run: make functional-test CMAKE_BIN=cmake TDLIB_CMAKE_ARGS=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: PATH="$PWD/tests/browser/node_modules/.bin:$PATH" make functional-test CMAKE_BIN=cmake TDLIB_CMAKE_ARGS=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - run: make integration-test
         env:
           GHCR_OWNER: "${{ github.repository_owner }}"
