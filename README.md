@@ -43,8 +43,7 @@ state, while the TDLib volume stores Telegram-owned session and cache data.
 The API exposes account lifecycle plus chats, history, individual messages,
 interest leases, and update polling under `/v1/telegram/accounts`. The dedicated
 `scheduler` service runs reconciliation; migrations remain an explicit one-shot
-deployment step. See [`docs/openapi-stage2.yaml`](docs/openapi-stage2.yaml) and
-[`docs/stage-2-acceptance.md`](docs/stage-2-acceptance.md).
+deployment step.
 
 For a standalone watch build, run `make app-build`; it writes and validates
 `app/build/app.pbw`. `make app-check` also runs the C and PebbleKit JS checks.
