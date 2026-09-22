@@ -10,7 +10,7 @@
 
 namespace telebezel::runtime {
 struct InterestChatState {
-  enum class Phase { Closed, Opening, Open, Closing } phase{Phase::Closed};
+  enum class Phase : std::uint8_t { Closed, Opening, Open, Closing } phase{Phase::Closed};
   std::uint64_t transition{0};
   std::uint64_t failed_transition{0};
   // A transition TDLib never answered. The chat is then treated as open until a
@@ -56,15 +56,22 @@ struct CachedMessageMeta {
 };
 struct AccountState {
   using MessageKey = std::pair<std::int64_t, std::int64_t>;
-  std::string uuid;
-  std::string generation;
-  std::int32_t client_id{0};
   std::uint64_t revision{0};
   std::uint64_t applied_revision{0};
   std::uint64_t authorization_generation{1};
   std::uint64_t ready_generation{0};
-  bool generation_unpersisted{false};
-  bool use_test_dc{false};
+  std::chrono::steady_clock::time_point resend_available_at{};
+  std::chrono::steady_clock::time_point discovered_at{std::chrono::steady_clock::now()};
+  std::size_t message_bytes{0};
+  std::size_t sender_bytes{0};
+  std::uint64_t event_sequence{0};
+  nlohmann::json proxy = {{"mode", "inherit"}, {"http_only", false}};
+  // What TDLib is actually running with, kept apart from the desired
+  // configuration above so a failed step is resumed on the next reconciliation.
+  nlohmann::json applied_proxy;
+  nlohmann::json telegram_identity;
+  std::string uuid;
+  std::string generation;
   std::string lifecycle{"provisioning"};
   std::string authorization_state{"awaiting_reconciliation"};
   std::string connection_state{"unknown"};
@@ -76,45 +83,38 @@ struct AccountState {
   std::string operation_phase;
   std::string revision_fingerprint;
   std::string effective_config_id;
-  std::int32_t telegram_api_id{0};
   std::string telegram_api_hash;
-  nlohmann::json proxy = {{"mode", "inherit"}, {"http_only", false}};
-  // What TDLib is actually running with, kept apart from the desired
-  // configuration above so a failed step is resumed on the next reconciliation.
-  nlohmann::json applied_proxy;
-  bool proxy_applied{false};
-  std::int32_t applied_telegram_api_id{0};
   std::string applied_telegram_api_hash;
-  nlohmann::json telegram_identity;
   std::string delivery_method;
-  bool delivery_supported{true};
-  std::chrono::steady_clock::time_point resend_available_at{};
-  bool reconciled{false};
-  bool closed{false};
-  bool closing{false};
-  bool tombstone{false};
-  bool busy{false};
-  std::chrono::steady_clock::time_point discovered_at{std::chrono::steady_clock::now()};
+  std::string runtime_epoch;
+  std::string main_load_error;
+  std::string archive_load_error;
   std::map<std::int64_t, nlohmann::json> chats;
   std::map<MessageKey, nlohmann::json> messages;
   std::map<MessageKey, CachedMessageMeta> message_meta;
   std::map<std::int64_t, std::size_t> chat_message_counts;
   std::set<std::tuple<std::int64_t, std::int64_t, std::int64_t>> message_age;
-  std::size_t message_bytes{0};
   std::map<std::string, std::string> sender_names;
-  std::deque<std::string> sender_order;
-  std::size_t sender_bytes{0};
-  std::deque<nlohmann::json> events;
-  std::uint64_t event_sequence{0};
-  std::string runtime_epoch;
-  ChatOrderLog main_orders;
-  ChatOrderLog archive_orders;
-  bool main_exhausted{false};
-  bool archive_exhausted{false};
-  std::string main_load_error;
-  std::string archive_load_error;
   std::map<std::string, std::pair<std::int64_t, std::chrono::steady_clock::time_point>> interests;
   std::map<std::int64_t, std::size_t> interest_counts;
   std::map<std::int64_t, InterestChatState> interest_states;
+  std::deque<std::string> sender_order;
+  std::deque<nlohmann::json> events;
+  ChatOrderLog main_orders;
+  ChatOrderLog archive_orders;
+  std::int32_t client_id{0};
+  std::int32_t telegram_api_id{0};
+  std::int32_t applied_telegram_api_id{0};
+  bool generation_unpersisted{false};
+  bool use_test_dc{false};
+  bool proxy_applied{false};
+  bool delivery_supported{true};
+  bool reconciled{false};
+  bool closed{false};
+  bool closing{false};
+  bool tombstone{false};
+  bool busy{false};
+  bool main_exhausted{false};
+  bool archive_exhausted{false};
 };
 } // namespace telebezel::runtime

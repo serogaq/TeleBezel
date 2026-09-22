@@ -176,7 +176,7 @@ nlohmann::json ReadModelService::preview(const std::string &uuid, std::int64_t c
   const auto opened = begin_read(uuid);
   if (!opened)
     return safe_error("authorization.invalid_state", 409);
-  const auto fence = *opened;
+  const auto &fence = *opened;
   if (preview_id.size() != 64)
     return safe_error("message.cache_miss", 404);
   const auto source = broker_.request(fence.client, td_api::make_object<td_api::getMessageLocally>(chat_id, message_id),

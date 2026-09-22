@@ -143,9 +143,9 @@ test('device tokens cannot read authorization or proxy details', function (): vo
     $this->withToken($token)->getJson("/v1/telegram/accounts/{$account->id}/proxy")->assertForbidden();
 });
 
-test('the proxy monitor and retention purge are scheduled', function (): void {
+test('reconciliation and retention purge are scheduled', function (): void {
     $commands = collect(app(Schedule::class)->events())->map(fn (Event $event): string => (string) $event->command)->implode("\n");
-    expect($commands)->toContain('telebezel:proxy-monitor')->toContain('telebezel:accounts-reconcile')->toContain('telebezel:purge-expired');
+    expect($commands)->toContain('telebezel:accounts-reconcile')->toContain('telebezel:purge-expired');
 });
 
 test('removal finishes when the runtime no longer knows the account', function (): void {

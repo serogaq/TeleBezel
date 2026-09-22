@@ -389,6 +389,7 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
       json_response(response, response.status, nlohmann::json{{"error", {{"code", code}}}, {"request_id", id}}.dump(),
                     id);
     }
+    return httplib::Server::HandlerResponse::Handled;
   });
   server_.set_logger([](const httplib::Request &request, const httplib::Response &response) {
     const std::string route = request.path == "/healthz" || request.path == "/internal/v1/status" ? request.path

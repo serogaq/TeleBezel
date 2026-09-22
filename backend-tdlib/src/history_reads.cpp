@@ -59,7 +59,7 @@ nlohmann::json ReadModelService::messages(const std::string &uuid, std::int64_t 
   const auto opened = begin_read(uuid);
   if (!opened)
     return safe_error("authorization.invalid_state", 409);
-  const auto fence = *opened;
+  const auto &fence = *opened;
   std::int64_t anchor = 0;
   const std::string prefix =
       "h:" + std::to_string(fence.authorization_generation) + ":" + fence.epoch + ":" + std::to_string(chat_id) + ":";
@@ -150,7 +150,7 @@ nlohmann::json ReadModelService::message(const std::string &uuid, std::int64_t c
   const auto opened = begin_read(uuid);
   if (!opened)
     return safe_error("authorization.invalid_state", 409);
-  const auto fence = *opened;
+  const auto &fence = *opened;
   const auto make_job = [&] {
     auto job = refresh_job(RefreshKind::message, uuid, fence, chat_id,
                            "message:" + std::to_string(chat_id) + ":" + std::to_string(message_id));

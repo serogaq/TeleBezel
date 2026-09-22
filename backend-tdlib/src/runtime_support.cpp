@@ -2,6 +2,7 @@
 #include "telebezel/parse.hpp"
 #include "telebezel/runtime/support.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <iostream>
 #include <mutex>
 #include <td/telegram/td_api.h>
@@ -19,6 +20,7 @@ void report_thread_failure(const char *thread, const char *error) noexcept {
     std::lock_guard lock(log_mutex);
     std::cerr << line << '\n';
   } catch (...) {
+    std::fputs("{\"event\":\"background_iteration_failed\"}\n", stderr);
   }
 }
 

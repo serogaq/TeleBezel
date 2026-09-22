@@ -34,7 +34,7 @@ nlohmann::json ReadModelService::chats(const std::string &uuid, const std::strin
   const auto opened = begin_read(uuid);
   if (!opened)
     return safe_error("service.busy", 503);
-  const auto fence = *opened;
+  const auto &fence = *opened;
   std::optional<ChatBoundary> boundary;
   if (!cursor.empty()) {
     const auto dot = cursor.rfind('.');
