@@ -26,8 +26,9 @@ final class TelegramAccountController extends Controller
 
     public function store(CreateTelegramAccountRequest $request, TelegramAccountService $accounts): JsonResponse
     {
-        $arguments = [RequestContext::principal($request)->id, (string) $request->header('Idempotency-Key'), $request->validated(), $this->requestId($request)];
-        [$account, $created] = $request->attributes->get('principal_type') === 'owner' ? $accounts->createForOwner(...$arguments) : $accounts->create(...$arguments);
+        $owner = $request->attributes->get('principal_type') === 'owner';
+        $arguments = [$owner ? RequestContext::instanceId($request) : RequestContext::principal($request)->id, (string) $request->header('Idempotency-Key'), $request->validated(), $this->requestId($request)];
+        [$account, $created] = $owner ? $accounts->createForOwner(...$arguments) : $accounts->create(...$arguments);
 
         return (new TelegramAccountResource($account))->respond($request, $this->requestId($request), $created ? 202 : 200);
     }

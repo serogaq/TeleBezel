@@ -5,6 +5,7 @@ namespace App\Infrastructure\Tdlib;
 use App\Contracts\TdlibGateway as TdlibGatewayContract;
 use App\Exceptions\ApiException;
 use App\Support\Values;
+use DateTimeImmutable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -12,6 +13,10 @@ use Illuminate\Support\Facades\Http;
 
 final class TdlibGateway implements TdlibGatewayContract
 {
+    private const DEFAULT_RETRY_AFTER = 5;
+
+    private const MAXIMUM_RETRY_AFTER = 86400;
+
     /** @param array<int, string> $accountIds
      * @return array<string, mixed>
      */
@@ -189,6 +194,24 @@ final class TdlibGateway implements TdlibGatewayContract
         if (! is_string($code) || ! in_array($code, $safeCodes, true)) {
             throw new ApiException('service.tdlib_unavailable', 503);
         }
-        throw new ApiException($code, in_array($response->status(), [404, 409, 410, 422, 429, 502, 503, 504], true) ? $response->status() : 502, ctype_digit($response->header('Retry-After')) ? (int) $response->header('Retry-After') : null);
+        $status = in_array($response->status(), [404, 409, 410, 422, 429, 502, 503, 504], true) ? $response->status() : 502;
+        throw new ApiException($code, $status, self::retryAfter($response->header('Retry-After')) ?? ($status === 429 ? self::DEFAULT_RETRY_AFTER : null));
+    }
+
+    public static function retryAfter(string $header): ?int
+    {
+        $header = trim($header);
+        if ($header === '') {
+            return null;
+        }
+        if (ctype_digit($header)) {
+            return min((int) $header, self::MAXIMUM_RETRY_AFTER);
+        }
+        $date = DateTimeImmutable::createFromFormat(DATE_RFC7231, $header);
+        if ($date === false) {
+            return null;
+        }
+
+        return max(0, min($date->getTimestamp() - time(), self::MAXIMUM_RETRY_AFTER));
     }
 }

@@ -376,6 +376,8 @@ void Registry::ensure_account_directories(const std::string &uuid) {
   ensure_plain_directory(account);
   ensure_plain_directory(account / "db");
   ensure_plain_directory(account / "files");
+  sync_directory(account);
+  sync_directory(accounts_root_);
 }
 
 bool Registry::account_directory_exists(const std::string &uuid) const {

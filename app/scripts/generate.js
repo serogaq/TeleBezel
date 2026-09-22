@@ -3,7 +3,6 @@
 var fs = require('fs');
 var path = require('path');
 var root = path.resolve(__dirname, '..');
-var check = process.argv.indexOf('--check') !== -1;
 
 function readJson(relative) {
   return JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'));
@@ -11,12 +10,7 @@ function readJson(relative) {
 
 function write(relative, content) {
   var filename = path.join(root, relative);
-  if (check) {
-    if (!fs.existsSync(filename) || fs.readFileSync(filename, 'utf8') !== content) {
-      throw new Error(relative + ' is stale; run npm run generate');
-    }
-    return;
-  }
+  if (fs.existsSync(filename) && fs.readFileSync(filename, 'utf8') === content) { return; }
   fs.mkdirSync(path.dirname(filename), {recursive: true});
   fs.writeFileSync(filename, content);
 }

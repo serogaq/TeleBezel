@@ -6,7 +6,10 @@ from pathlib import Path
 
 EXPECTED_UUID = "b91f715e-af74-4a90-9df4-fda0fbcd9762"
 EXPECTED_PLATFORMS = {"diorite", "emery", "flint", "gabbro"}
-EXPECTED_KEYS = {"REQUEST_KIND", "REQUEST_SEQ", "RESPONSE_KIND", "RESULT_CODE"}
+EXPECTED_KEYS = {
+    "REQUEST_KIND", "REQUEST_SEQ", "RESPONSE_KIND", "RESULT_CODE", "INBOX_SIZE", "PAYLOAD", "ENTITY_ID",
+    "CHUNK_INDEX", "CHUNK_TOTAL", "CONFIG_ADDRESS", "CONFIG_SSL", "CONFIG_TOKEN",
+}
 
 # Pebble SDK's STM32 CRC implementation is Apache-2.0 (Google LLC, 2024).
 # The bundle manifest uses this CRC, not ZIP's CRC-32.

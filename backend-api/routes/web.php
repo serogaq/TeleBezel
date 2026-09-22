@@ -12,7 +12,7 @@ Route::prefix('/v1/owner')->group(function (): void {
     Route::post('/bootstrap', [OwnerSessionController::class, 'bootstrap'])->middleware('throttle:bootstrap');
     Route::post('/login', [OwnerSessionController::class, 'login'])->middleware('throttle:login');
     Route::post('/recover', [OwnerSessionController::class, 'recover'])->middleware('throttle:recovery');
-    Route::middleware('owner')->group(function (): void {
+    Route::middleware(['owner', 'throttle:owner-mutations'])->whereUuid('id')->group(function (): void {
         Route::post('/activity', [OwnerSessionController::class, 'activity']);
         Route::post('/logout', [OwnerSessionController::class, 'logout']);
         Route::post('/recovery-code', [OwnerSessionController::class, 'rotateRecoveryCode']);
@@ -34,7 +34,7 @@ Route::prefix('/v1/owner')->group(function (): void {
         Route::put('/quick-replies/reorder', [SettingsController::class, 'reorderQuickReplies']);
         Route::put('/quick-replies/{id}', [SettingsController::class, 'updateQuickReply']);
         Route::delete('/quick-replies/{id}', [SettingsController::class, 'destroyQuickReply']);
-        Route::prefix('/telegram/accounts')->group(function (): void {
+        Route::prefix('/telegram/accounts')->whereUuid('uuid')->group(function (): void {
             Route::get('/', [TelegramAccountController::class, 'index']);
             Route::post('/', [TelegramAccountController::class, 'store']);
             Route::get('/{uuid}', [TelegramAccountController::class, 'show']);

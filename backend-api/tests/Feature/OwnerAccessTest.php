@@ -355,10 +355,29 @@ test('owner can idempotently create a telegram account', function (): void {
         ],
     ])->assertOk()->assertJsonPath('data.id', $first->json('data.id'));
     $this->assertDatabaseCount('telegram_accounts', 1);
-    $this->assertDatabaseHas('owner_account_idempotency_keys', [
-        'owner_session_id' => $ownerSessionId,
+    $this->assertDatabaseHas('instance_account_idempotency_keys', [
+        'instance_id' => $instance->id,
         'telegram_account_id' => $first->json('data.id'),
     ]);
+    $secondToken = 'tbo_'.Str::random(48);
+    DB::table('owner_sessions')->insert([
+        'id' => (string) Str::uuid(),
+        'instance_id' => $instance->id,
+        'token_hash' => hash('sha256', $secondToken),
+        'authenticated_at' => now(),
+        'last_interactive_at' => now(),
+        'expires_at' => now()->addHour(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $this->withCredentials()->withCookie('telebezel_owner', $secondToken)->withHeader('Idempotency-Key', 'owner-create-primary')->postJson('/v1/owner/telegram/accounts', [
+        'label' => 'Primary',
+        'proxy' => [
+            'id' => $proxyId,
+            'mode' => 'direct',
+        ],
+    ])->assertOk()->assertJsonPath('data.id', $first->json('data.id'));
+    $this->assertDatabaseCount('telegram_accounts', 1);
     expect($gateway->calls)->toHaveCount(0);
 });
 test('only explicit owner activity extends the idle window', function (): void {

@@ -1,4 +1,5 @@
 #include "telebezel/runtime/request_broker.hpp"
+#include <algorithm>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
 namespace td_api = td::td_api;
@@ -42,14 +43,25 @@ TdRequestBroker::await_request(RequestHandle handle, std::chrono::milliseconds t
     if (handle.future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
       return handle.future.get();
     pending_.erase(handle.request_id);
-    if (unresolved_.size() >= 1024)
-      unresolved_.erase(unresolved_.begin());
+    if (handle.pending && unresolved_.size() >= 1024)
+      evict_unresolved();
     if (handle.pending)
       unresolved_[handle.request_id] = {handle.client_id, std::chrono::steady_clock::now() + std::chrono::seconds(22),
                                         recover_stalled_client};
     return td_api::make_object<td_api::error>(504, "operation.outcome_unknown");
   }
   return handle.future.get();
+}
+void TdRequestBroker::evict_unresolved() {
+  auto victim = unresolved_.end();
+  for (auto item = unresolved_.begin(); item != unresolved_.end(); ++item) {
+    if (victim == unresolved_.end() || (victim->second.recover_client && !item->second.recover_client) ||
+        (victim->second.recover_client == item->second.recover_client &&
+         item->second.recovery_at < victim->second.recovery_at))
+      victim = item;
+  }
+  if (victim != unresolved_.end())
+    unresolved_.erase(victim);
 }
 std::optional<std::string> TdRequestBroker::request_identity(std::int32_t client_id) {
   std::lock_guard lock(mutex_);
@@ -89,12 +101,15 @@ bool TdRequestBroker::complete(TransportResponse &response) {
 std::vector<std::int32_t> TdRequestBroker::expire(std::chrono::steady_clock::time_point now) {
   std::lock_guard lock(mutex_);
   std::vector<std::int32_t> stalled;
-  for (auto &[id, item] : unresolved_) {
-    static_cast<void>(id);
-    if (item.recover_client && item.recovery_at <= now) {
-      stalled.push_back(item.client_id);
-      item.recover_client = false;
+  for (auto item = unresolved_.begin(); item != unresolved_.end();) {
+    if (item->second.recovery_at > now) {
+      ++item;
+      continue;
     }
+    if (item->second.recover_client &&
+        std::find(stalled.begin(), stalled.end(), item->second.client_id) == stalled.end())
+      stalled.push_back(item->second.client_id);
+    item = unresolved_.erase(item);
   }
   for (auto item = async_requests_.begin(); item != async_requests_.end();) {
     if (item->second.deadline <= now)

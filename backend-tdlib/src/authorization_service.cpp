@@ -56,11 +56,15 @@ nlohmann::json AuthorizationService::authorization_action(const std::string &uui
     response = broker_.request(client, std::move(function), std::chrono::seconds(8), true);
   } catch (...) {
     std::lock_guard lock(context_.mutex_);
-    context_.accounts_.at(uuid).busy = false;
+    if (const auto found = context_.accounts_.find(uuid); found != context_.accounts_.end())
+      found->second.busy = false;
     throw;
   }
   std::lock_guard lock(context_.mutex_);
-  auto &account = context_.accounts_.at(uuid);
+  const auto found = context_.accounts_.find(uuid);
+  if (found == context_.accounts_.end())
+    return safe_error("account.not_found", 404);
+  auto &account = found->second;
   account.busy = false;
   if (!response || response->get_id() == td_api::error::ID) {
     const int code =
@@ -70,15 +74,20 @@ nlohmann::json AuthorizationService::authorization_action(const std::string &uui
     const std::string message = response && response->get_id() == td_api::error::ID
                                     ? static_cast<td_api::error &>(*response).message_
                                     : std::string{};
-    const std::string error =
-        code == 429 || message.find("FLOOD_WAIT") != std::string::npos ? "authorization.flood_wait"
-        : message.find("CODE_EXPIRED") != std::string::npos            ? "authorization.code_expired"
-        : message.find("CODE_INVALID") != std::string::npos            ? "authorization.invalid_code"
-        : message.find("PASSWORD_HASH_INVALID") != std::string::npos   ? "authorization.invalid_password"
-        : action == "submit_code" || action == "submit_email_code"     ? "authorization.invalid_code"
-        : action == "submit_password"                                  ? "authorization.invalid_password"
-                                                                       : "telegram.operation_failed";
-    return safe_error(error, code == 429 ? 429 : 422);
+    if (code == 429 || message.find("FLOOD_WAIT") != std::string::npos) {
+      const auto seconds = flood_wait_seconds(message).value_or(60);
+      const auto available = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+      account.resend_available_at = std::max(account.resend_available_at, available);
+      return safe_error("authorization.flood_wait", 429, seconds);
+    }
+    const std::string error = message.find("CODE_EXPIRED") != std::string::npos   ? "authorization.code_expired"
+                              : message.find("CODE_INVALID") != std::string::npos ? "authorization.invalid_code"
+                              : message.find("PASSWORD_HASH_INVALID") != std::string::npos
+                                  ? "authorization.invalid_password"
+                              : action == "submit_code" || action == "submit_email_code" ? "authorization.invalid_code"
+                              : action == "submit_password" ? "authorization.invalid_password"
+                                                            : "telegram.operation_failed";
+    return safe_error(error, 422);
   }
   return account_json(account);
 }

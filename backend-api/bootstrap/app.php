@@ -1,6 +1,7 @@
 <?php
 
 use App\Exceptions\ApiException;
+use App\Exceptions\ExceptionEnvelope;
 use App\Http\Middleware\AuthenticateApiClient;
 use App\Http\Middleware\AuthenticateOwner;
 use App\Http\Middleware\LimitJsonBody;
@@ -10,11 +11,14 @@ use App\Http\Middleware\RequestId;
 use App\Http\Middleware\RequireAccountManagement;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Resources\ErrorResource;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -41,11 +45,16 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('v1/*') || $request->expectsJson(),
         );
         $exceptions->render(function (QueryException $exception, Request $request) {
-            if (! $request->is('v1/*')) {
-                return null;
-            }
-
-            return ErrorResource::respond(new ApiException('service.database_unavailable', 503), $request);
+            return ExceptionEnvelope::applies($request) ? ErrorResource::respond(ExceptionEnvelope::query($exception), $request) : null;
+        });
+        $exceptions->render(function (NotFoundHttpException $exception, Request $request) {
+            return ExceptionEnvelope::applies($request) ? ErrorResource::respond(ExceptionEnvelope::notFound($exception, $request), $request) : null;
+        });
+        $exceptions->render(function (MethodNotAllowedHttpException $exception, Request $request) {
+            return ExceptionEnvelope::applies($request) ? ErrorResource::respond(ExceptionEnvelope::methodNotAllowed($exception), $request) : null;
+        });
+        $exceptions->render(function (DecryptException $exception, Request $request) {
+            return ExceptionEnvelope::applies($request) ? ErrorResource::respond(ExceptionEnvelope::decrypt($exception, $request), $request) : null;
         });
         $exceptions->render(function (ApiException $exception, Request $request) {
             return ErrorResource::respond($exception, $request);

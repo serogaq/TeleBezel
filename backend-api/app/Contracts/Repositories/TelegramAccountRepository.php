@@ -36,6 +36,14 @@ interface TelegramAccountRepository
      * @return array<int, AccountData> */
     public function batch(array $lifecycles, ?string $after, ?string $through = null): array;
 
+    /** @param list<string> $lifecycles */
+    public function deferredCount(array $lifecycles): int;
+
+    public function blockedCount(): int;
+
+    /** @return list<string> */
+    public function unblock(?string $id): array;
+
     /** @return array<int, array<string, mixed>> */
     public function desired(): array;
 

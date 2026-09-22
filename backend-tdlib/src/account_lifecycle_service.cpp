@@ -7,6 +7,22 @@
 #include <iostream>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
+AccountManifest AccountLifecycleService::snapshot_manifest(const Account &account) const {
+  AccountManifest manifest;
+  manifest.uuid = account.uuid;
+  manifest.generation = account.generation;
+  manifest.use_test_dc = config_.use_test_dc;
+  manifest.revision = account.revision;
+  manifest.lifecycle = account.lifecycle;
+  manifest.operation_id = account.operation_id;
+  manifest.proxy = nullptr;
+  manifest.content_hash = account.revision_fingerprint;
+  manifest.operation_phase = account.operation_phase;
+  manifest.applied_revision = account.applied_revision;
+  manifest.authorization_generation = account.authorization_generation;
+  return manifest;
+}
+
 AccountState &AccountLifecycleService::validated_account(const std::string &uuid, const AccountCommand &command) {
   if (context_.manifest_errors_.contains(uuid))
     throw std::runtime_error(context_.manifest_errors_.at(uuid));
@@ -44,6 +60,8 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
   bool recreate_client = false;
   bool apply_existing_proxy = false;
   const std::string fingerprint = command.fingerprint;
+  AccountManifest manifest;
+  nlohmann::json intent_proxy;
   {
     std::lock_guard lock(context_.mutex_);
     account = &validated_account(uuid, command);
@@ -92,25 +110,13 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
     account->proxy = desired_proxy;
     account->operation_id = command.operation_id;
     account->revision_fingerprint = fingerprint;
+    manifest = snapshot_manifest(*account);
+    manifest.operation_phase.clear();
+    intent_proxy = account->proxy;
   }
   try {
     registry_.ensure_account_directories(uuid);
-    AccountManifest manifest{1,
-                             uuid,
-                             account->generation,
-                             config_.use_test_dc,
-                             1,
-                             account->revision,
-                             account->lifecycle,
-                             account->operation_id,
-                             false,
-                             nullptr,
-                             "",
-                             ""};
-    manifest.content_hash = account->revision_fingerprint;
-    manifest.applied_revision = account->applied_revision;
-    manifest.authorization_generation = account->authorization_generation;
-    registry_.write(manifest, account->proxy);
+    registry_.write(manifest, intent_proxy);
     {
       std::lock_guard lock(context_.mutex_);
       context_.orphan_accounts_.erase(uuid);
@@ -128,10 +134,13 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
       completed.lifecycle = "active";
       completed.operation_id.clear();
       completed.applied_revision = account->revision;
+      completed.authorization_generation = account->authorization_generation;
       proxy = account->proxy;
     }
     registry_.write(completed, proxy);
     std::lock_guard lock(context_.mutex_);
+    if (account->authorization_generation == completed.authorization_generation)
+      account->generation_unpersisted = false;
     account->reconciled = true;
     account->applied_revision = account->revision;
     account->lifecycle = "active";
@@ -162,9 +171,8 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
 
 void AccountLifecycleService::activate(Account &account, OperationDeadline deadline) {
   std::string uuid;
-  const auto telegram_api_id = account.telegram_api_id == 0 ? config_.telegram_api_id : account.telegram_api_id;
-  const auto &telegram_api_hash =
-      account.telegram_api_hash.empty() ? config_.telegram_api_hash : account.telegram_api_hash;
+  std::int32_t telegram_api_id = 0;
+  std::string telegram_api_hash;
   {
     std::lock_guard lock(context_.mutex_);
     if (account.client_id != 0 && account.closing)
@@ -172,6 +180,8 @@ void AccountLifecycleService::activate(Account &account, OperationDeadline deadl
     if (account.client_id != 0 && !account.closed)
       return;
     uuid = account.uuid;
+    telegram_api_id = account.telegram_api_id == 0 ? config_.telegram_api_id : account.telegram_api_id;
+    telegram_api_hash = account.telegram_api_hash.empty() ? config_.telegram_api_hash : account.telegram_api_hash;
   }
   if (telegram_api_id == 0 || telegram_api_hash.empty() || config_.master_key_file.empty()) {
     throw std::runtime_error("configuration.missing");
@@ -283,17 +293,7 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
     account->busy = true;
     account->authorization_generation = command.authorization_generation.value_or(account->authorization_generation);
     account->reconciled = false;
-    account->chats.clear();
-    context_.clear_messages(*account);
-    account->sender_names.clear();
-    account->events.clear();
-    account->interests.clear();
-    account->interest_counts.clear();
-    account->interest_states.clear();
-    account->main_exhausted = false;
-    account->archive_exhausted = false;
-    account->main_orders.reset();
-    account->archive_orders.reset();
+    context_.reset_session(*account);
   }
 
   const auto persist = [&](const std::string &phase, const std::string &lifecycle,
@@ -303,22 +303,10 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
     {
       std::lock_guard lock(context_.mutex_);
       account->operation_phase = phase;
-      manifest = {1,
-                  uuid,
-                  account->generation,
-                  config_.use_test_dc,
-                  1,
-                  account->revision,
-                  lifecycle,
-                  persisted_operation,
-                  false,
-                  nullptr,
-                  "",
-                  ""};
-      manifest.content_hash = account->revision_fingerprint;
-      manifest.operation_phase = phase;
+      manifest = snapshot_manifest(*account);
+      manifest.lifecycle = lifecycle;
+      manifest.operation_id = persisted_operation;
       manifest.applied_revision = phase == "" ? account->revision : account->applied_revision;
-      manifest.authorization_generation = account->authorization_generation;
       proxy = account->proxy;
     }
     registry_.write(manifest, proxy);
@@ -419,21 +407,8 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
       account->proxy = requested_proxy;
     account->operation_id = command.operation_id;
     account->revision_fingerprint = fingerprint;
-    intent_manifest = {1,
-                       uuid,
-                       account->generation,
-                       config_.use_test_dc,
-                       1,
-                       account->revision,
-                       account->lifecycle,
-                       account->operation_id,
-                       false,
-                       nullptr,
-                       "",
-                       ""};
-    intent_manifest.content_hash = account->revision_fingerprint;
-    intent_manifest.applied_revision = account->applied_revision;
-    intent_manifest.authorization_generation = account->authorization_generation;
+    intent_manifest = snapshot_manifest(*account);
+    intent_manifest.operation_phase.clear();
     intent_proxy = account->proxy;
   }
   try {
@@ -459,8 +434,12 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
     throw;
   }
   AccountManifest completed = intent_manifest;
-  completed.operation_id.clear();
-  completed.applied_revision = account->revision;
+  {
+    std::lock_guard lock(context_.mutex_);
+    completed.operation_id.clear();
+    completed.applied_revision = account->revision;
+    completed.authorization_generation = account->authorization_generation;
+  }
   try {
     registry_.write(completed, intent_proxy);
   } catch (...) {
@@ -526,30 +505,10 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
       account->operation_phase = "intent";
     }
     account->reconciled = false;
-    account->chats.clear();
-    context_.clear_messages(*account);
-    account->events.clear();
-    account->interests.clear();
-    account->interest_counts.clear();
-    account->interest_states.clear();
+    context_.reset_session(*account);
     if (account->revision_fingerprint.empty())
       account->revision_fingerprint = fingerprint;
-    intent_manifest = {1,
-                       uuid,
-                       account->generation,
-                       config_.use_test_dc,
-                       1,
-                       account->revision,
-                       account->lifecycle,
-                       account->operation_id,
-                       false,
-                       nullptr,
-                       "",
-                       ""};
-    intent_manifest.content_hash = account->revision_fingerprint;
-    intent_manifest.operation_phase = account->operation_phase;
-    intent_manifest.applied_revision = account->applied_revision;
-    intent_manifest.authorization_generation = account->authorization_generation;
+    intent_manifest = snapshot_manifest(*account);
     intent_proxy = account->proxy;
   }
   try {
@@ -568,22 +527,15 @@ nlohmann::json AccountLifecycleService::remove(const std::string &uuid, const Ac
     account->busy = false;
     throw;
   }
-  AccountManifest tombstone{1,
-                            uuid,
-                            account->generation,
-                            config_.use_test_dc,
-                            1,
-                            account->revision,
-                            "removed",
-                            account->operation_id,
-                            true,
-                            nullptr,
-                            "",
-                            ""};
-  tombstone.content_hash = account->revision_fingerprint;
+  AccountManifest tombstone;
+  {
+    std::lock_guard lock(context_.mutex_);
+    tombstone = snapshot_manifest(*account);
+  }
+  tombstone.lifecycle = "removed";
+  tombstone.tombstone = true;
   tombstone.operation_phase = "confirmed";
-  tombstone.applied_revision = account->revision;
-  tombstone.authorization_generation = account->authorization_generation;
+  tombstone.applied_revision = tombstone.revision;
   try {
     registry_.write(tombstone, nlohmann::json{{"mode", "inherit"}, {"http_only", false}});
   } catch (...) {

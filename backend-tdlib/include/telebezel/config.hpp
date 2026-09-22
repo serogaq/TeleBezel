@@ -30,7 +30,10 @@ struct Config {
   std::size_t cache_projection_bytes{128ULL * 1024 * 1024};
   std::size_t preview_max_bytes{512ULL * 1024};
   std::size_t preview_total_bytes{256ULL * 1024 * 1024};
+  std::size_t preview_failure_ttl_seconds{300};
+  std::size_t updates_wait_max_seconds{0};
 };
 ProxyMode parse_proxy_mode(const std::string &value);
+std::string read_secret_file(const std::string &path, const std::string &name);
 Config load_config();
 } // namespace telebezel

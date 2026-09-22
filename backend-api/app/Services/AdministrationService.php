@@ -8,6 +8,7 @@ use App\Contracts\Repositories\AdministrationRepository;
 use App\Contracts\Repositories\OwnerAccessRepository;
 use App\Contracts\TransactionManager;
 use App\Exceptions\ApiException;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Str;
 
 final readonly class AdministrationService
@@ -51,7 +52,11 @@ final readonly class AdministrationService
                 return 'deferred';
             }
 
-            return $owner->appKeyCheck === 'telebezel-app-key-v1:'.$owner->id ? 'valid' : 'invalid';
+            if ($owner->appKeyCheck !== 'telebezel-app-key-v1:'.$owner->id) {
+                throw new DecryptException('APP_KEY control data does not match.');
+            }
+
+            return 'valid';
         });
     }
 }

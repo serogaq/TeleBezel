@@ -4,7 +4,9 @@
 #include <deque>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
+#include <tuple>
 
 namespace telebezel::runtime {
 struct InterestChatState {
@@ -48,18 +50,26 @@ struct ChatOrderLog {
     return false;
   }
 };
+struct CachedMessageMeta {
+  std::size_t bytes{0};
+  std::int64_t date{0};
+};
 struct AccountState {
+  using MessageKey = std::pair<std::int64_t, std::int64_t>;
   std::string uuid;
   std::string generation;
   std::int32_t client_id{0};
   std::uint64_t revision{0};
   std::uint64_t applied_revision{0};
   std::uint64_t authorization_generation{1};
+  std::uint64_t ready_generation{0};
+  bool generation_unpersisted{false};
   bool use_test_dc{false};
   std::string lifecycle{"provisioning"};
   std::string authorization_state{"awaiting_reconciliation"};
   std::string connection_state{"unknown"};
   std::string authorization_version{"0"};
+  std::string authorization_fingerprint;
   std::string qr_link;
   std::string last_error;
   std::string operation_id;
@@ -86,9 +96,14 @@ struct AccountState {
   bool busy{false};
   std::chrono::steady_clock::time_point discovered_at{std::chrono::steady_clock::now()};
   std::map<std::int64_t, nlohmann::json> chats;
-  std::map<std::pair<std::int64_t, std::int64_t>, nlohmann::json> messages;
+  std::map<MessageKey, nlohmann::json> messages;
+  std::map<MessageKey, CachedMessageMeta> message_meta;
+  std::map<std::int64_t, std::size_t> chat_message_counts;
+  std::set<std::tuple<std::int64_t, std::int64_t, std::int64_t>> message_age;
   std::size_t message_bytes{0};
   std::map<std::string, std::string> sender_names;
+  std::deque<std::string> sender_order;
+  std::size_t sender_bytes{0};
   std::deque<nlohmann::json> events;
   std::uint64_t event_sequence{0};
   std::string runtime_epoch;

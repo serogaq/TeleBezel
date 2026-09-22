@@ -30,9 +30,13 @@ public:
   void stop();
 
 private:
+  static constexpr std::size_t worker_threads = 8;
+  static constexpr std::size_t reserved_threads = 2;
   const Config &config_;
   TdRuntime &runtime_;
+  AccountReadLimiter work_{worker_threads - reserved_threads};
   AccountReadLimiter reads_{2};
+  AccountReadLimiter controls_{3};
   httplib::Server server_;
 };
 } // namespace telebezel

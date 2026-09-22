@@ -18,4 +18,5 @@ var calls = 0;
 apiFactory.create(FakeXhr, settings, protocol).checkStatus(settings.load(storage), function(result) { calls++; assert.strictEqual(result.code, protocol.result.ok); });
 assert.strictEqual(calls, 1);
 require('./runtime_test');
+require('./api_test');
 process.stdout.write('PKJS tests passed\n');

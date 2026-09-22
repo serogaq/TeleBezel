@@ -47,6 +47,8 @@ test('transient provision failure is retried after backoff and never reported as
     $this->gateway->queue('provision', [
         'applied_revision' => 1,
         'runtime_available' => true,
+    ])->queue('listSnapshots', [
+        'accounts' => [],
     ])->queue('provision', [
         'applied_revision' => 1,
         'runtime_available' => true,
@@ -70,6 +72,8 @@ test('permanent failure blocks only the failing revision', function () {
     $this->gateway->queue('provision', [
         'applied_revision' => 2,
         'runtime_available' => true,
+    ])->queue('listSnapshots', [
+        'accounts' => [],
     ])->queue('provision', [
         'applied_revision' => 2,
         'runtime_available' => true,

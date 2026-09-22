@@ -61,6 +61,9 @@ jobs:
         with: {persist-credentials: false}
       - id: toolchain
         uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "${{ steps.toolchain.outputs.node-version }}"
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: "${{ steps.toolchain.outputs.php-version }}"

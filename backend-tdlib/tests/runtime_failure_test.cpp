@@ -248,6 +248,7 @@ TEST(RuntimeFailure, ProjectionUpdatesAndLeaseExpiry) {
   account.interest_counts[43] = 2;
   telebezel::runtime::InterestLeaseManager leases(store, broker);
   engine.start();
+  leases.start();
   bool expired = false;
   for (int attempt = 0; attempt < 100; ++attempt) {
     {
@@ -260,6 +261,7 @@ TEST(RuntimeFailure, ProjectionUpdatesAndLeaseExpiry) {
       break;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+  leases.stop();
   engine.stop();
   const auto sent = transport.sent();
   const auto closes =

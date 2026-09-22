@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <optional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -42,6 +43,7 @@ public:
   void close_account(AccountState &account, bool destroy, OperationDeadline deadline);
 
 private:
+  AccountManifest snapshot_manifest(const AccountState &account) const;
   AccountStore &context_;
   const Config &config_;
   AccountRegistry &registry_;
@@ -60,12 +62,23 @@ private:
   TdRequestBroker &broker_;
   AccountLifecycleService &lifecycle_;
 };
+struct ReadEnvelope {
+  std::string updates_cursor;
+  std::string connection;
+  std::int64_t observed_at{0};
+  static ReadEnvelope capture(const CursorCodec &cursors, const AccountState &account, const ReadFence &fence);
+  nlohmann::json wrap(nlohmann::json body, const char *source) const;
+};
 class ReadModelService final {
 public:
   ReadModelService(AccountStore &context, const Config &config, TdRequestBroker &broker, CursorCodec &cursors)
-      : context_(context), config_(config), broker_(broker), cursors_(cursors),
-        refresh_thread_(&ReadModelService::refresh_loop, this) {}
+      : context_(context), config_(config), broker_(broker), cursors_(cursors) {}
   ~ReadModelService();
+  ReadModelService(const ReadModelService &) = delete;
+  ReadModelService &operator=(const ReadModelService &) = delete;
+  void start();
+  void stop();
+  bool running() const;
   void cancel_account(const std::string &uuid);
   nlohmann::json chats(const std::string &uuid, const std::string &list, std::size_t limit, const std::string &cursor);
   nlohmann::json chat(const std::string &uuid, std::int64_t chat_id) const;
@@ -73,7 +86,9 @@ public:
   nlohmann::json message(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id);
   nlohmann::json preview(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id,
                          const std::string &preview_id);
-  nlohmann::json updates(const std::string &uuid, const std::string &cursor, std::size_t limit) const;
+  nlohmann::json updates(const std::string &uuid, const std::string &cursor, std::size_t limit,
+                         std::chrono::seconds wait = std::chrono::seconds(0)) const;
+  std::size_t preview_entry_count();
 
 private:
   enum class RefreshKind : std::uint8_t { history, message, preview, evict };
@@ -91,8 +106,6 @@ private:
     std::size_t preview_size{0};
     std::int32_t client{0};
   };
-  // A reservation bounds concurrent downloads; ready_bytes bounds what is on
-  // disk. They are counted separately.
   struct PreviewEntry {
     enum class State : std::uint8_t { queued, downloading, ready, failed } state{State::queued};
     std::string uuid;
@@ -114,26 +127,31 @@ private:
     bool failed{false};
     bool deadline{false};
   };
+  std::optional<ReadFence> begin_read(const std::string &uuid) const;
+  AccountState *fenced_account(const std::string &uuid, const ReadFence &fence) const;
+  RefreshJob refresh_job(RefreshKind kind, const std::string &uuid, const ReadFence &fence, std::int64_t chat_id,
+                         const std::string &suffix) const;
   HistoryPage fetch_history(std::int32_t client, std::int64_t chat_id, std::int64_t anchor, std::size_t limit,
                             bool only_local, std::chrono::steady_clock::time_point deadline);
   std::string enqueue_refresh(RefreshJob job);
+  std::string enqueue_preview(RefreshJob &job, std::chrono::steady_clock::time_point now);
+  void remember_outcome(const std::string &key, bool changed);
   void invalidate_preview(const std::string &key);
-  // reserve_preview and drop_preview require refresh_mutex_.
   bool reserve_preview(const RefreshJob &job);
   void drop_preview(const std::string &key);
+  bool trim_preview_entries(std::chrono::steady_clock::time_point now);
   void release_preview(const std::string &key, bool ready, std::size_t bytes);
-  void prepare_preview(nlohmann::json &item, const std::string &uuid, const std::string &generation,
-                       const std::string &epoch, std::uint64_t authorization_generation, std::int32_t client);
+  void prepare_preview(nlohmann::json &item, const std::string &uuid, const ReadFence &fence);
   void refresh_loop();
+  void refresh_once();
   bool run_refresh(const RefreshJob &job);
   bool publish_projections(const RefreshJob &job, const ReadFence &fence, const std::vector<nlohmann::json> &items);
   AccountStore &context_;
   const Config &config_;
   TdRequestBroker &broker_;
   CursorCodec &cursors_;
-  std::mutex refresh_mutex_;
+  mutable std::mutex refresh_mutex_;
   std::condition_variable refresh_condition_;
-  // Served round-robin so a stalled client cannot monopolise the worker.
   std::map<std::string, std::deque<RefreshJob>> refresh_queues_;
   std::deque<std::string> refresh_rotation_;
   std::set<std::string> refresh_keys_;
@@ -141,23 +159,28 @@ private:
   std::map<std::string, PreviewEntry> preview_entries_;
   std::size_t preview_reserved_bytes_{0};
   std::size_t preview_cache_bytes_{0};
-  bool refresh_stopping_{false};
+  bool refresh_stopping_{true};
   std::thread refresh_thread_;
 };
 class InterestLeaseManager final {
 public:
-  InterestLeaseManager(AccountStore &context, TdRequestBroker &broker)
-      : context_(context), broker_(broker), worker_(&InterestLeaseManager::run, this) {}
+  InterestLeaseManager(AccountStore &context, TdRequestBroker &broker) : context_(context), broker_(broker) {}
   ~InterestLeaseManager();
+  InterestLeaseManager(const InterestLeaseManager &) = delete;
+  InterestLeaseManager &operator=(const InterestLeaseManager &) = delete;
+  void start();
+  void stop();
+  bool running() const;
   nlohmann::json set_interest(const std::string &uuid, std::int64_t chat_id, const std::string &lease_key, bool active,
                               bool await_transition = true);
   nlohmann::json release_interests(const std::string &principal_type, const std::string &principal_id);
 
 private:
   void run();
+  void run_once();
   AccountStore &context_;
   TdRequestBroker &broker_;
-  std::atomic<bool> stopping_{false};
+  std::atomic<bool> stopping_{true};
   std::string rotation_cursor_;
   std::thread worker_;
 };
@@ -175,6 +198,8 @@ public:
   void handle_update(std::int32_t client_id, td::td_api::Object &object);
 
 private:
+  void receive_once(std::chrono::steady_clock::time_point &next_reminder);
+  void queue_generation_persist(const AccountState &account);
   AccountStore &context_;
   AccountRegistry &registry_;
   TdTransport &transport_;

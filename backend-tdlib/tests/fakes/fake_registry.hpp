@@ -44,6 +44,8 @@ public:
   }
   void persist_authorization_generation(const std::string &uuid, std::uint64_t generation) override {
     std::lock_guard lock(mutex_);
+    if (fail_persist_)
+      throw std::runtime_error("storage.io_error");
     auto found = manifests_.find(uuid);
     if (found != manifests_.end() && !found->second.tombstone && found->second.authorization_generation < generation)
       found->second.authorization_generation = generation;
@@ -60,6 +62,10 @@ public:
     std::lock_guard lock(mutex_);
     directories_.erase(uuid);
   }
+  void set_fail_persist(bool value) {
+    std::lock_guard lock(mutex_);
+    fail_persist_ = value;
+  }
   void fail_write_after(std::size_t count) {
     std::lock_guard lock(mutex_);
     fail_write_at_ = writes_ + count;
@@ -72,5 +78,6 @@ private:
   std::set<std::string> directories_;
   std::size_t writes_{0};
   std::size_t fail_write_at_{0};
+  bool fail_persist_{false};
 };
 } // namespace telebezel::testing

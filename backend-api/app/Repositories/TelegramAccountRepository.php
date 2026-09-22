@@ -10,12 +10,13 @@ use App\Enums\AccountLifecycle;
 use App\Exceptions\ApiException;
 use App\Models\AccountIdempotencyKey;
 use App\Models\Instance;
-use App\Models\OwnerAccountIdempotencyKey;
+use App\Models\InstanceAccountIdempotencyKey;
 use App\Models\ProxyProfile;
 use App\Models\TelegramAccount;
 use App\Support\Values;
 use Carbon\CarbonImmutable;
 use Closure;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
@@ -33,8 +34,8 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
      * @return array{AccountData, bool} */
     public function create(bool $owner, string $scopeId, string $keyHash, string $requestHash, array $input, array $proxy, int $attempt = 0): array
     {
-        $keyModel = $owner ? OwnerAccountIdempotencyKey::class : AccountIdempotencyKey::class;
-        $scopeColumn = $owner ? 'owner_session_id' : 'api_client_id';
+        $keyModel = $owner ? InstanceAccountIdempotencyKey::class : AccountIdempotencyKey::class;
+        $scopeColumn = $owner ? 'instance_id' : 'api_client_id';
         try {
             [$account, $created] = DB::transaction(function () use ($keyModel, $scopeColumn, $scopeId, $keyHash, $requestHash, $input, $proxy): array {
                 $existing = $keyModel::query()->where($scopeColumn, $scopeId)->where('key_hash', $keyHash)->lockForUpdate()->first();
@@ -184,7 +185,11 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
      * @return array<int, AccountData> */
     public function batch(array $lifecycles, ?string $after, ?string $through = null): array
     {
-        $query = TelegramAccount::withTrashed()->where('lifecycle', '!=', 'removed')->whereIn('lifecycle', $lifecycles);
+        $query = TelegramAccount::withTrashed()->whereIn('lifecycle', $lifecycles)->where(function (Builder $due): void {
+            $due->whereNull('next_reconcile_at')->orWhere('next_reconcile_at', '<=', now());
+        })->where(function (Builder $unblocked): void {
+            $unblocked->whereNull('reconcile_blocked_revision')->orWhereColumn('reconcile_blocked_revision', '!=', 'desired_revision');
+        });
         if ($after !== null) {
             $query->where('id', '>', $after);
         }
@@ -193,6 +198,38 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
         }
 
         return $query->orderBy('id')->limit(25)->get()->map($this->data(...))->values()->all();
+    }
+
+    /** @param list<string> $lifecycles */
+    public function deferredCount(array $lifecycles): int
+    {
+        return TelegramAccount::withTrashed()->whereIn('lifecycle', $lifecycles)->where(function (Builder $deferred): void {
+            $deferred->where('next_reconcile_at', '>', now())->orWhereColumn('reconcile_blocked_revision', 'desired_revision');
+        })->count();
+    }
+
+    public function blockedCount(): int
+    {
+        return TelegramAccount::query()->where('lifecycle', '!=', AccountLifecycle::Removed->value)->whereColumn('reconcile_blocked_revision', 'desired_revision')->count();
+    }
+
+    /** @return list<string> */
+    public function unblock(?string $id): array
+    {
+        $query = TelegramAccount::query()->where('lifecycle', '!=', AccountLifecycle::Removed->value)->whereNotNull('reconcile_blocked_revision');
+        if ($id !== null) {
+            $query->whereKey($id);
+        }
+        $ids = array_values($query->pluck('id')->map(fn (mixed $value): string => Values::string($value))->all());
+        if ($ids !== []) {
+            TelegramAccount::query()->whereKey($ids)->update([
+                'reconcile_blocked_revision' => null,
+                'next_reconcile_at' => null,
+                'reconcile_failures' => 0,
+            ]);
+        }
+
+        return $ids;
     }
 
     /** @return array<int, array<string, mixed>> */

@@ -14,11 +14,10 @@
   },
   "scripts": {
     "generate": "node scripts/generate.js",
-    "generate:check": "node scripts/generate.js --check",
     "lint": "eslint src/pkjs tests scripts",
     "test:js": "node tests/run.js",
-    "test:c": "mkdir -p build && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_state_test.c src/c/status_state.c -o build/status_state_test && build/status_state_test && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_session_test.c src/c/status_session.c src/c/status_state.c -o build/status_session_test && build/status_session_test",
-    "test": "npm run generate:check && npm run lint && npm run test:js && npm run test:c"
+    "test:c": "mkdir -p build && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_state_test.c src/c/status_state.c -o build/status_state_test && build/status_state_test && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/request_layer_test.c src/c/request_layer.c -o build/request_layer_test && build/request_layer_test && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_session_test.c src/c/status_session.c src/c/request_layer.c src/c/status_state.c -o build/status_session_test && build/status_session_test",
+    "test": "npm run generate && npm run lint && npm run test:js && npm run test:c"
   },
   "dependencies": {
     "@rebble/clay": "1.1.0"
@@ -47,7 +46,15 @@
       "REQUEST_KIND",
       "REQUEST_SEQ",
       "RESPONSE_KIND",
-      "RESULT_CODE"
+      "RESULT_CODE",
+      "INBOX_SIZE",
+      "PAYLOAD",
+      "ENTITY_ID",
+      "CHUNK_INDEX",
+      "CHUNK_TOTAL",
+      "CONFIG_ADDRESS",
+      "CONFIG_SSL",
+      "CONFIG_TOKEN"
     ],
     "resources": {
       "media": []

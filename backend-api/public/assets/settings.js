@@ -9,6 +9,9 @@
     onUnauthorized: () => {
       document.getElementById('configuration').hidden = true;
       document.getElementById('access').hidden = false;
+    },
+    onSessionExpired: () => {
+      status.textContent = 'This page has expired. Reload it to continue.';
     }
   });
   const request = client.request;
@@ -30,7 +33,7 @@
     document.querySelector('#proxy-policy [name="failure_action"]').value = settings.proxy_runtime.failure_action;
     document.querySelector('#proxy-policy [name="connect_timeout_seconds"]').value = settings.proxy_runtime.connect_timeout_seconds;
     const dl = document.getElementById('runtime-status'); dl.replaceChildren();
-    const values = {Instance: settings.instance_id, 'Configuration revision': revision, Scheduler: settings.scheduler?.last_result || 'not observed', 'Last scheduler tick': settings.scheduler?.last_tick_at || 'never'};
+    const values = {Instance: settings.instance_id, 'Configuration revision': revision, Scheduler: settings.scheduler?.last_result || 'not observed', 'Last scheduler tick': settings.scheduler?.last_tick_at || 'never', 'Blocked accounts': settings.scheduler?.blocked_accounts ? `${settings.scheduler.blocked_accounts} (run telebezel:accounts-unblock after fixing the cause)` : 0};
     Object.entries(values).forEach(([key, value]) => dl.append(node('dt', key), node('dd', String(value))));
     renderAccounts(accountData); renderReplies(replies); renderDevices(devices); renderProxies(proxies, settings.proxy_runtime.active_profile_id);
   };

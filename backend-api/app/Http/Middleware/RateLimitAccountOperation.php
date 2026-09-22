@@ -26,7 +26,7 @@ final class RateLimitAccountOperation
             'create' => [5, 3600], 'auth-start' => [3, 600], 'auth-check', 'lifecycle' => [10, 600],
             default => throw new LogicException('Unknown rate-limit budget.'),
         };
-        $subject = $budget === 'create' ? RequestContext::principal($request)->id : Values::string($request->route('uuid'));
+        $subject = $budget === 'create' ? RequestContext::principal($request)->id : strtolower(Values::string($request->route('uuid')));
         $key = RateLimitCacheKeys::accountOperation($budget, $subject);
         if (RateLimiter::increment($key, $seconds) > $maximum) {
             RateLimiter::decrement($key);

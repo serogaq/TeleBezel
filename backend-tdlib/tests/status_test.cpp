@@ -105,6 +105,58 @@ TEST(Config, ValidatesPortsSecretFilesAndProxyCredentials) {
   env.set("TDLIB_PROXY_MODE", std::nullopt);
   EXPECT_THROW(telebezel::load_config(), std::runtime_error);
 }
+TEST_F(RegistryTest, SecretFilesAreTrimmedAndMustBeSafe) {
+  const auto secret = root / "secret";
+  const auto write = [&](const std::string &content, std::filesystem::perms permissions) {
+    std::filesystem::remove(secret);
+    {
+      std::ofstream output(secret, std::ios::binary);
+      output << content;
+    }
+    std::filesystem::permissions(secret, permissions, std::filesystem::perm_options::replace);
+  };
+  const auto owner = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
+  write("0123456789abcdef0123456789abcdef\r\n", owner);
+  EXPECT_EQ(telebezel::read_secret_file(secret.string(), "token"), "0123456789abcdef0123456789abcdef");
+  write("\n", owner);
+  EXPECT_THROW(telebezel::read_secret_file(secret.string(), "token"), std::runtime_error);
+  write("first\nsecond\n", owner);
+  EXPECT_THROW(telebezel::read_secret_file(secret.string(), "token"), std::runtime_error);
+  write("value\n", owner | std::filesystem::perms::others_read);
+  EXPECT_THROW(telebezel::read_secret_file(secret.string(), "token"), std::runtime_error);
+  write("value\n", owner | std::filesystem::perms::group_read);
+  EXPECT_EQ(telebezel::read_secret_file(secret.string(), "token"), "value");
+  const auto link = root / "secret-link";
+  std::filesystem::create_symlink(secret, link);
+  EXPECT_THROW(telebezel::read_secret_file(link.string(), "token"), std::runtime_error);
+  EXPECT_THROW(telebezel::read_secret_file(root.string(), "token"), std::runtime_error);
+}
+TEST_F(RegistryTest, ConfigurationLimitsAndMasterKeyAreCheckedAtStartup) {
+  Environment env;
+  env.set("TDLIB_INTERNAL_TOKEN", "0123456789abcdef0123456789abcdef");
+  env.set("TDLIB_DATABASE_MASTER_KEY_FILE", master.string());
+  EXPECT_NO_THROW(telebezel::load_config());
+  env.set("TDLIB_PREVIEW_MAX_BYTES", "2048");
+  env.set("TDLIB_PREVIEW_TOTAL_BYTES", "1024");
+  EXPECT_THROW(telebezel::load_config(), std::runtime_error);
+  env.set("TDLIB_PREVIEW_MAX_BYTES", std::nullopt);
+  env.set("TDLIB_PREVIEW_TOTAL_BYTES", std::nullopt);
+  env.set("TDLIB_CACHE_MESSAGES_PER_CHAT", "600");
+  env.set("TDLIB_CACHE_MESSAGES_PER_ACCOUNT", "500");
+  EXPECT_THROW(telebezel::load_config(), std::runtime_error);
+  env.set("TDLIB_CACHE_MESSAGES_PER_CHAT", std::nullopt);
+  env.set("TDLIB_CACHE_MESSAGES_PER_ACCOUNT", "30000");
+  EXPECT_THROW(telebezel::load_config(), std::runtime_error);
+  env.set("TDLIB_CACHE_MESSAGES_PER_ACCOUNT", std::nullopt);
+  env.set("TDLIB_UPDATES_WAIT_MAX_SECONDS", "26");
+  EXPECT_THROW(telebezel::load_config(), std::runtime_error);
+  env.set("TDLIB_UPDATES_WAIT_MAX_SECONDS", "20");
+  EXPECT_EQ(telebezel::load_config().updates_wait_max_seconds, 20U);
+  std::filesystem::permissions(master, std::filesystem::perms::others_read, std::filesystem::perm_options::add);
+  EXPECT_THROW(telebezel::load_config(), std::runtime_error);
+  env.set("TDLIB_DATABASE_MASTER_KEY_FILE", (root / "missing").string());
+  EXPECT_THROW(telebezel::load_config(), std::runtime_error);
+}
 TEST_F(RegistryTest, MasterKeyPermissions) {
   EXPECT_EQ(telebezel::read_master_key(master)[0], 0);
   std::filesystem::permissions(master, std::filesystem::perms::group_read, std::filesystem::perm_options::add);

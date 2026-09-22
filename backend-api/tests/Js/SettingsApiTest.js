@@ -37,3 +37,17 @@ test('failed activity blocks mutation and permits a later retry', async () => {
   assert.deepEqual(await api.request('/v1/owner/settings', {method: 'PUT'}), {saved: true});
   assert.deepEqual(calls, ['/v1/owner/activity', '/v1/owner/activity', '/v1/owner/settings']);
 });
+
+test('expired csrf session asks for a reload instead of failing silently', async () => {
+  let expired = 0;
+  let unauthorized = 0;
+  const api = create({csrf: 'csrf', flow, onUnauthorized: () => unauthorized++, onSessionExpired: () => expired++, fetch: async () => ({ok: false, status: 419, text: async () => '{"message":"CSRF token mismatch."}'})});
+  await assert.rejects(api.request('/v1/owner/settings'), {message: 'session.expired', status: 419});
+  assert.equal(expired, 1);
+  assert.equal(unauthorized, 0);
+});
+
+test('a non-json response is reported as an invalid response', async () => {
+  const api = create({csrf: 'csrf', flow, onUnauthorized: () => {}, fetch: async () => ({ok: true, status: 200, text: async () => '<html>proxy error</html>'})});
+  await assert.rejects(api.request('/v1/owner/settings'), {message: 'response.invalid'});
+});

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Cache\HealthCacheKeys;
 use App\Contracts\Repositories\HealthRepository;
 use App\Contracts\TdlibStatusClient;
 use App\Exceptions\ApiException;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 use Throwable;
 
@@ -15,7 +17,18 @@ final readonly class HealthService
 {
     public function __construct(private HealthRepository $database, private TdlibStatusClient $tdlib) {}
 
+    public const READINESS_CACHE_SECONDS = 5;
+
     public function ready(): bool
+    {
+        try {
+            return Cache::remember(HealthCacheKeys::readiness(), self::READINESS_CACHE_SECONDS, fn (): bool => $this->probe());
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function probe(): bool
     {
         try {
             $this->status();

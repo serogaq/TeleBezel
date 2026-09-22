@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Cache\ProxyCacheKeys;
+use App\Contracts\MonotonicClock;
 use App\Contracts\Repositories\ProxyProfileRepository;
 use App\Contracts\TdlibGateway;
 use App\Contracts\TransactionManager;
@@ -16,7 +17,9 @@ use Illuminate\Support\Facades\Cache;
 
 final readonly class ProxyProfileService
 {
-    public function __construct(private ProxyProfileRepository $profiles, private TdlibGateway $tdlib, private TransactionManager $transactions) {}
+    public const PING_ALL_BUDGET_SECONDS = 20;
+
+    public function __construct(private ProxyProfileRepository $profiles, private TdlibGateway $tdlib, private TransactionManager $transactions, private MonotonicClock $clock) {}
 
     /** @return array<int, array<string, mixed>> */
     public function all(string $instanceId): array
@@ -51,10 +54,15 @@ final readonly class ProxyProfileService
         } else {
             try {
                 $result = $this->tdlib->pingProxy($accountId, $profile->definition(), $requestId);
-                $profile = $this->profiles->recordPing($profile, true, Values::integer($result['latency_ms'] ?? null), null);
             } catch (ApiException $error) {
-                $profile = $this->profiles->recordPing($profile, false, null, $error->errorCode);
+                $result = $error;
             }
+            $latency = is_array($result) ? ($result['latency_ms'] ?? null) : null;
+            $profile = match (true) {
+                $result instanceof ApiException => $this->profiles->recordPing($profile, false, null, $result->errorCode),
+                is_int($latency) && $latency >= 0 => $this->profiles->recordPing($profile, true, $latency, null),
+                default => $this->profiles->recordPing($profile, false, null, 'service.tdlib_unavailable'),
+            };
         }
 
         return $profile->publicData($this->profiles->policy($instanceId)?->activeId === $id);
@@ -63,7 +71,14 @@ final readonly class ProxyProfileService
     /** @return array<int, array<string, mixed>> */
     public function pingAll(string $instanceId, string $requestId): array
     {
-        return array_map(fn (ProxyProfileData $profile): array => $this->ping($instanceId, $profile->id, $requestId), $this->profiles->all($instanceId));
+        $deadline = $this->clock->nanoseconds() + self::PING_ALL_BUDGET_SECONDS * 1000000000;
+        $active = $this->profiles->policy($instanceId)?->activeId;
+        $results = [];
+        foreach ($this->profiles->all($instanceId) as $profile) {
+            $results[] = $this->clock->nanoseconds() < $deadline ? $this->ping($instanceId, $profile->id, $requestId) : $profile->publicData($active === $profile->id);
+        }
+
+        return $results;
     }
 
     public function delete(string $instanceId, string $id): void

@@ -8,6 +8,7 @@ pest()->extend(TestCase::class)->beforeEach(fn () => Http::preventStrayRequests(
 pest()->use(RefreshDatabase::class)->in(
     'Feature/HealthTest.php', 'Feature/ApiClientCommandTest.php', 'Feature/StatusTest.php',
     'Feature/TelegramAccountsTest.php', 'Feature/TelegramReadContractTest.php', 'Feature/OwnerAccessTest.php',
+    'Feature/AuditHardeningTest.php',
 );
 
 pest()->extend(TestCase::class)->use(RefreshDatabase::class)->in('Integration');

@@ -15,16 +15,10 @@ final class PreflightKeys extends Command
     public function handle(AdministrationService $service): int
     {
         try {
-            $status = $service->keyStatus();
-            if ($status === 'deferred') {
+            if ($service->keyStatus() === 'deferred') {
                 $this->components->info('APP_KEY check deferred until owner bootstrap.');
 
                 return self::SUCCESS;
-            }
-            if ($status !== 'valid') {
-                $this->components->error('APP_KEY control data is missing or invalid; restore the original APP_KEY.');
-
-                return self::FAILURE;
             }
         } catch (DecryptException) {
             $this->components->error('APP_KEY cannot decrypt control data; restore the original APP_KEY.');

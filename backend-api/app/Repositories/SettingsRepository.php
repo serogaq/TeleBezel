@@ -39,6 +39,7 @@ final class SettingsRepository implements SettingsRepositoryContract
                 'succeeded' => $scheduler->succeeded,
                 'failed' => $scheduler->failed,
                 'deferred' => $scheduler->deferred,
+                'blocked_accounts' => TelegramAccount::query()->where('lifecycle', '!=', 'removed')->whereColumn('reconcile_blocked_revision', 'desired_revision')->count(),
             ],
         ];
     }

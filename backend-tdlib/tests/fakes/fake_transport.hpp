@@ -37,6 +37,14 @@ public:
         history_requests_.push_back({request.chat_id_, request.from_message_id_, request.limit_, request.only_local_});
       }
     }
+    {
+      std::lock_guard lock(mutex_);
+      auto &preceding = preceding_[type];
+      while (!preceding.empty()) {
+        responses_.push({client, 0, std::move(preceding.front())});
+        preceding.pop_front();
+      }
+    }
     td_api::object_ptr<td_api::Object> scripted;
     bool has_script = false;
     {
@@ -149,10 +157,17 @@ public:
     chat_batch_ = batch;
     chat_delivered_ = 0;
   }
+  void precede_response(std::int32_t function, td_api::object_ptr<td_api::Object> update) {
+    std::lock_guard lock(mutex_);
+    preceding_[function].push_back(std::move(update));
+  }
   void fail_next_send() { fail_send_.store(true); }
+  void fail_next_receive() { fail_receive_.store(true); }
   void set_fail_add_proxy(bool value) { fail_add_proxy_.store(value); }
   void set_suppress_close_updates(bool value) { suppress_close_updates_.store(value); }
   telebezel::TransportResponse receive(double timeout) override {
+    if (fail_receive_.exchange(false))
+      throw std::runtime_error("transport.receive_failed");
     std::unique_lock lock(mutex_);
     condition_.wait_for(lock, std::chrono::duration<double>(timeout), [this] { return !responses_.empty(); });
     if (responses_.empty())
@@ -175,6 +190,8 @@ private:
   std::queue<telebezel::TransportResponse> responses_;
   std::vector<std::pair<std::int32_t, std::int32_t>> sent_;
   std::map<std::int32_t, std::deque<td_api::object_ptr<td_api::Object>>> scripted_;
+  std::map<std::int32_t, std::deque<td_api::object_ptr<td_api::Object>>> preceding_;
+  std::atomic<bool> fail_receive_{false};
   std::atomic<bool> fail_send_{false};
   std::atomic<bool> fail_add_proxy_{false};
   std::atomic<bool> suppress_close_updates_{false};

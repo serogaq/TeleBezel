@@ -22,8 +22,17 @@ struct TdRuntime::Impl {
 TdRuntime::TdRuntime(const Config &config, AccountRegistry &registry, std::unique_ptr<TdTransport> transport)
     : impl_(std::make_unique<Impl>(config, registry, std::move(transport))) {}
 TdRuntime::~TdRuntime() { stop(); }
-void TdRuntime::start() { impl_->engine.start(); }
-void TdRuntime::stop() { impl_->engine.stop(); }
+void TdRuntime::start() {
+  impl_->engine.start();
+  impl_->reads.start();
+  impl_->interests.start();
+}
+void TdRuntime::stop() {
+  impl_->broker.stop();
+  impl_->interests.stop();
+  impl_->reads.stop();
+  impl_->engine.stop();
+}
 StatusSnapshot TdRuntime::status() const { return impl_->engine.status(); }
 nlohmann::json TdRuntime::snapshots(const std::vector<std::string> &ids) const { return impl_->engine.snapshots(ids); }
 nlohmann::json TdRuntime::snapshot(const std::string &uuid) const { return impl_->engine.snapshot(uuid); }
@@ -67,8 +76,9 @@ nlohmann::json TdRuntime::preview(const std::string &uuid, std::int64_t chat_id,
                                   const std::string &preview_id) {
   return impl_->reads.preview(uuid, chat_id, message_id, preview_id);
 }
-nlohmann::json TdRuntime::updates(const std::string &uuid, const std::string &cursor, std::size_t limit) const {
-  return impl_->reads.updates(uuid, cursor, limit);
+nlohmann::json TdRuntime::updates(const std::string &uuid, const std::string &cursor, std::size_t limit,
+                                  std::chrono::seconds wait) const {
+  return impl_->reads.updates(uuid, cursor, limit, wait);
 }
 nlohmann::json TdRuntime::set_interest(const std::string &uuid, std::int64_t chat_id, const std::string &lease_key,
                                        bool active, bool await_transition) {

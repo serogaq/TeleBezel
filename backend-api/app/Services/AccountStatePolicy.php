@@ -43,6 +43,22 @@ final class AccountStatePolicy
     }
 
     /** @return array<string, mixed> */
+    public function abandonLogout(AccountData $current, AccountData $expected): array
+    {
+        if ($current->lifecycle !== AccountLifecycle::LogoutPending || $current->desired_revision !== $expected->desired_revision || $current->storage_generation !== $expected->storage_generation) {
+            return [];
+        }
+
+        return [
+            'lifecycle' => AccountLifecycle::Provisioning,
+            'desired_revision' => $current->desired_revision + 1,
+            'operation_id' => (string) Str::uuid(),
+            'logout_completed_at' => CarbonImmutable::now(),
+            'runtime_available' => false,
+        ];
+    }
+
+    /** @return array<string, mixed> */
     public function remove(AccountData $account): array
     {
         if (in_array($account->lifecycle, [AccountLifecycle::Removing, AccountLifecycle::Removed], true)) {

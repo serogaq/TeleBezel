@@ -29,7 +29,8 @@ target_compile_definitions(telebezel-core PUBLIC TELEBEZEL_SERVICE_VERSION="${PR
 add_library(telebezel-runtime STATIC
   src/td_runtime.cpp src/transport.cpp src/runtime_engine.cpp src/runtime_support.cpp src/runtime_commands.cpp
   src/td_request_broker.cpp src/account_lifecycle_service.cpp src/authorization_service.cpp
-  src/proxy_service.cpp src/read_model_service.cpp src/interest_lease_manager.cpp
+  src/proxy_service.cpp src/read_model_service.cpp src/chat_reads.cpp src/history_reads.cpp src/preview_cache.cpp
+  src/interest_lease_manager.cpp
   src/cursor_codec.cpp src/update_journal.cpp)
 target_include_directories(telebezel-runtime SYSTEM BEFORE PUBLIC
   "${tdlib_SOURCE_DIR}" "${tdlib_SOURCE_DIR}/td/generate/auto" "${json_SOURCE_DIR}/include")
@@ -48,8 +49,9 @@ if(TELEBEZEL_BUILD_TESTS)
   target_link_libraries(telebezel-tdlib-tests PRIVATE telebezel-core GTest::gtest_main)
   target_compile_definitions(telebezel-tdlib-tests PRIVATE TELEBEZEL_CONTRACT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts")
   gtest_discover_tests(telebezel-tdlib-tests DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 60)
-  add_executable(telebezel-tdlib-runtime-tests tests/runtime_test.cpp)
-  target_link_libraries(telebezel-tdlib-runtime-tests PRIVATE telebezel-runtime GTest::gmock_main)
+  add_executable(telebezel-tdlib-runtime-tests tests/runtime_test.cpp tests/runtime_hardening_test.cpp
+                                              tests/http_server_test.cpp)
+  target_link_libraries(telebezel-tdlib-runtime-tests PRIVATE telebezel-http GTest::gmock_main)
   gtest_discover_tests(telebezel-tdlib-runtime-tests DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 60)
   add_executable(telebezel-tdlib-failure-tests tests/runtime_failure_test.cpp)
   target_link_libraries(telebezel-tdlib-failure-tests PRIVATE telebezel-runtime GTest::gmock_main)

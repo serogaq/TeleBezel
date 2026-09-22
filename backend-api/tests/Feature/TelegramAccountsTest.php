@@ -389,7 +389,7 @@ test('reconciliation resumes after the persisted cursor and skips backoff accoun
         ]),
     ]);
     $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
-    $requests = Http::recorded()->map(fn ($pair) => basename(parse_url($pair[0]->url(), PHP_URL_PATH)))->all();
+    $requests = Http::recorded()->filter(fn ($pair) => $pair[0]->method() === 'PUT')->map(fn ($pair) => basename(parse_url($pair[0]->url(), PHP_URL_PATH)))->values()->all();
     expect($requests)->toBe(['30112233-4455-4677-8899-aabbccddeeff', '20112233-4455-4677-8899-aabbccddeeff']);
 });
 test('identity is transient redacted and authorization response is projected', function (): void {

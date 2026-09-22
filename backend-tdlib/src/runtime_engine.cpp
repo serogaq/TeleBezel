@@ -35,6 +35,16 @@ std::optional<std::int64_t> update_chat_id(const td_api::Object &object) {
     return static_cast<const td_api::updateChatReadOutbox &>(object).chat_id_;
   case td_api::updateChatIsMarkedAsUnread::ID:
     return static_cast<const td_api::updateChatIsMarkedAsUnread &>(object).chat_id_;
+  case td_api::updateChatUnreadMentionCount::ID:
+    return static_cast<const td_api::updateChatUnreadMentionCount &>(object).chat_id_;
+  case td_api::updateChatUnreadReactionCount::ID:
+    return static_cast<const td_api::updateChatUnreadReactionCount &>(object).chat_id_;
+  case td_api::updateChatNotificationSettings::ID:
+    return static_cast<const td_api::updateChatNotificationSettings &>(object).chat_id_;
+  case td_api::updateMessageMentionRead::ID:
+    return static_cast<const td_api::updateMessageMentionRead &>(object).chat_id_;
+  case td_api::updateMessageUnreadReactions::ID:
+    return static_cast<const td_api::updateMessageUnreadReactions &>(object).chat_id_;
   default:
     return std::nullopt;
   }
@@ -147,7 +157,7 @@ void RuntimeEngine::stop() {
 
 void RuntimeEngine::persist_authorizations() {
   while (true) {
-    std::pair<std::string, std::uint64_t> job;
+    std::optional<std::pair<std::string, std::uint64_t>> job;
     {
       std::unique_lock lock(authorization_mutex_);
       authorization_condition_.wait(lock, [this] { return authorization_stopping_ || !authorization_queue_.empty(); });
@@ -156,22 +166,46 @@ void RuntimeEngine::persist_authorizations() {
       job = std::move(authorization_queue_.front());
       authorization_queue_.pop_front();
     }
-    try {
-      registry_.persist_authorization_generation(job.first, job.second);
-    } catch (const std::exception &) {
+    bool retry = false;
+    guarded_iteration("authorization_persistence", [&] {
+      bool failed = false;
+      try {
+        registry_.persist_authorization_generation(job->first, job->second);
+      } catch (const std::exception &) {
+        failed = true;
+        std::cerr << nlohmann::json{{"event", "authorization_generation_persist_failed"},
+                                    {"account_uuid", job->first},
+                                    {"error_code", "storage.io_error"}}
+                         .dump()
+                  << '\n';
+      }
       std::lock_guard lock(context_.mutex_);
-      if (const auto found = context_.accounts_.find(job.first);
-          found != context_.accounts_.end() && found->second.authorization_generation == job.second) {
+      const auto found = context_.accounts_.find(job->first);
+      if (found == context_.accounts_.end() || found->second.authorization_generation != job->second)
+        return;
+      if (failed) {
         found->second.reconciled = false;
         found->second.last_error = "storage.io_error";
+        retry = true;
+      } else {
+        found->second.generation_unpersisted = false;
       }
-      std::cerr << nlohmann::json{{"event", "authorization_generation_persist_failed"},
-                                  {"account_uuid", job.first},
-                                  {"error_code", "storage.io_error"}}
-                       .dump()
-                << '\n';
-    }
+    });
+    if (!retry)
+      continue;
+    std::unique_lock lock(authorization_mutex_);
+    if (authorization_condition_.wait_for(lock, std::chrono::seconds(1), [this] { return authorization_stopping_; }))
+      return;
+    authorization_queue_.push_back(std::move(*job));
   }
+}
+
+void RuntimeEngine::queue_generation_persist(const Account &account) {
+  {
+    std::lock_guard lock(authorization_mutex_);
+    authorization_queue_.emplace_back(account.uuid, account.authorization_generation);
+  }
+  authorization_condition_.notify_one();
 }
 
 StatusSnapshot RuntimeEngine::status() const {
@@ -205,46 +239,61 @@ nlohmann::json RuntimeEngine::snapshot(const std::string &uuid) const {
 
 void RuntimeEngine::receive_loop() {
   auto next_reminder = std::chrono::steady_clock::now() + std::chrono::minutes(5);
-  while (!receive_done_.load()) {
-    const auto stalled_clients = broker_.expire(std::chrono::steady_clock::now());
-    for (const auto client : stalled_clients) {
-      transport_.send(client, broker_.next_id(), td_api::make_object<td_api::close>());
-    }
-    auto response = transport_.receive(0.1);
-    if (!response.object) {
-      if (std::chrono::steady_clock::now() >= next_reminder) {
-        std::lock_guard lock(context_.mutex_);
-        for (const auto &[uuid, account] : context_.accounts_) {
-          if (!account.reconciled && !account.closed) {
-            std::cerr << nlohmann::json{{"event", "account_awaiting_reconciliation"},
-                                        {"account_uuid", uuid},
-                                        {"reason", "reconciliation_not_received"}}
-                             .dump()
-                      << '\n';
-          }
-        }
-        next_reminder = std::chrono::steady_clock::now() + std::chrono::minutes(5);
-      }
-      continue;
-    }
+  while (!receive_done_.load())
+    guarded_iteration("receive", [&] { receive_once(next_reminder); });
+}
+
+void RuntimeEngine::receive_once(std::chrono::steady_clock::time_point &next_reminder) {
+  const auto stalled_clients = broker_.expire(std::chrono::steady_clock::now());
+  if (!stalled_clients.empty()) {
     std::lock_guard lock(context_.mutex_);
-    if (response.request_id == 0) {
-      handle_update(response.client_id, *response.object);
-      continue;
-    }
-    if (broker_.complete(response) && response.object->get_id() == td_api::user::ID) {
-      const auto mapped = context_.client_accounts_.find(response.client_id);
-      if (mapped != context_.client_accounts_.end()) {
-        const auto &user = static_cast<const td_api::user &>(*response.object);
-        std::vector<std::string> usernames;
-        if (user.usernames_)
-          usernames = user.usernames_->active_usernames_;
-        context_.accounts_.at(mapped->second).telegram_identity = {{"id", std::to_string(user.id_)},
-                                                                   {"first_name", user.first_name_},
-                                                                   {"last_name", user.last_name_},
-                                                                   {"usernames", usernames},
-                                                                   {"is_premium", user.is_premium_}};
+    for (const auto client : stalled_clients) {
+      const auto mapped = context_.client_accounts_.find(client);
+      if (mapped == context_.client_accounts_.end())
+        continue;
+      auto &account = context_.accounts_.at(mapped->second);
+      if (account.client_id == client && !account.closed) {
+        account.closing = true;
+        account.reconciled = false;
       }
+    }
+  }
+  for (const auto client : stalled_clients)
+    transport_.send(client, broker_.next_id(), td_api::make_object<td_api::close>());
+  auto response = transport_.receive(0.1);
+  if (!response.object) {
+    if (std::chrono::steady_clock::now() >= next_reminder) {
+      std::lock_guard lock(context_.mutex_);
+      for (const auto &[uuid, account] : context_.accounts_) {
+        if (!account.reconciled && !account.closed) {
+          std::cerr << nlohmann::json{{"event", "account_awaiting_reconciliation"},
+                                      {"account_uuid", uuid},
+                                      {"reason", "reconciliation_not_received"}}
+                           .dump()
+                    << '\n';
+        }
+      }
+      next_reminder = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+    }
+    return;
+  }
+  std::lock_guard lock(context_.mutex_);
+  if (response.request_id == 0) {
+    handle_update(response.client_id, *response.object);
+    return;
+  }
+  if (broker_.complete(response) && response.object->get_id() == td_api::user::ID) {
+    const auto mapped = context_.client_accounts_.find(response.client_id);
+    if (mapped != context_.client_accounts_.end()) {
+      const auto &user = static_cast<const td_api::user &>(*response.object);
+      std::vector<std::string> usernames;
+      if (user.usernames_)
+        usernames = user.usernames_->active_usernames_;
+      context_.accounts_.at(mapped->second).telegram_identity = {{"id", std::to_string(user.id_)},
+                                                                 {"first_name", user.first_name_},
+                                                                 {"last_name", user.last_name_},
+                                                                 {"usernames", usernames},
+                                                                 {"is_premium", user.is_premium_}};
     }
   }
 }
@@ -260,30 +309,22 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     const bool leaving_authorized_session =
         account.authorization_state == "ready" && state_id != td_api::authorizationStateReady::ID;
     if (leaving_authorized_session) {
-      if (account.lifecycle == "active" && !account.busy && !account.closing) {
-        ++account.authorization_generation;
-        {
-          std::lock_guard lock(authorization_mutex_);
-          authorization_queue_.emplace_back(account.uuid, account.authorization_generation);
-        }
-        authorization_condition_.notify_one();
+      const bool closed_locally =
+          state_id == td_api::authorizationStateClosing::ID || state_id == td_api::authorizationStateClosed::ID;
+      if (!closed_locally) {
+        if (account.authorization_generation <= account.ready_generation)
+          ++account.authorization_generation;
+        account.generation_unpersisted = true;
+        queue_generation_persist(account);
       }
-      account.chats.clear();
-      context_.clear_messages(account);
-      account.sender_names.clear();
-      account.events.clear();
-      account.interests.clear();
-      account.interest_counts.clear();
-      account.interest_states.clear();
+      account.runtime_epoch = make_request_id();
+      context_.reset_session(account);
       account.telegram_identity = nullptr;
-      account.main_exhausted = false;
-      account.archive_exhausted = false;
-      account.main_orders.reset();
-      account.archive_orders.reset();
       account.reconciled = false;
     }
+    if (state_id == td_api::authorizationStateReady::ID)
+      account.ready_generation = account.authorization_generation;
     account.authorization_state = authorization_name(state_id);
-    account.authorization_version = std::to_string(broker_.next_id());
     account.qr_link.clear();
     account.delivery_method.clear();
     account.delivery_supported = true;
@@ -311,6 +352,12 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     if (state_id == td_api::authorizationStateWaitOtherDeviceConfirmation::ID) {
       account.qr_link =
           static_cast<td_api::authorizationStateWaitOtherDeviceConfirmation &>(*update.authorization_state_).link_;
+    }
+    auto fingerprint = account.authorization_state + "\n" + account.delivery_method + "\n" +
+                       (account.delivery_supported ? "1" : "0") + "\n" + account.qr_link;
+    if (leaving_authorized_session || fingerprint != account.authorization_fingerprint) {
+      account.authorization_fingerprint = std::move(fingerprint);
+      account.authorization_version = std::to_string(broker_.next_id());
     }
     if (state_id == td_api::authorizationStateClosed::ID) {
       account.closed = true;
@@ -342,9 +389,8 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
           name += " ";
         name += update.user_->last_name_;
       }
-      if (!name.empty()) {
-        account.sender_names[key] = name;
-      }
+      if (!name.empty())
+        context_.put_sender_name(account, key, name);
     }
   } else if (object.get_id() == td_api::updateNewChat::ID) {
     auto &update = static_cast<td_api::updateNewChat &>(object);
@@ -355,13 +401,13 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
           account, known == nullptr ? nlohmann::json::object() : known->value("positions", nlohmann::json::object()),
           projection.value("positions", nlohmann::json::object()));
       account.chats[update.chat_->id_] = std::move(projection);
-      account.sender_names["chat:" + std::to_string(update.chat_->id_)] = update.chat_->title_;
+      context_.put_sender_name(account, "chat:" + std::to_string(update.chat_->id_), update.chat_->title_);
       if (update.chat_->last_message_) {
         auto message = message_projection(*update.chat_->last_message_);
         decorate_sender(account, message);
         context_.put_message(account, {update.chat_->id_, update.chat_->last_message_->id_}, std::move(message));
       }
-      UpdateJournal::append(account, "chat_changed", update.chat_->id_);
+      UpdateJournal::append(context_, account, "chat_changed", update.chat_->id_, 0, "new");
     }
     return;
   }
@@ -379,8 +425,8 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   if (object.get_id() == td_api::updateChatTitle::ID) {
     auto &update = static_cast<td_api::updateChatTitle &>(object);
     (*chat)["title"] = update.title_;
-    account.sender_names["chat:" + std::to_string(update.chat_id_)] = update.title_;
-    UpdateJournal::append(account, "chat_changed", update.chat_id_);
+    context_.put_sender_name(account, "chat:" + std::to_string(update.chat_id_), update.title_);
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "title");
   } else if (object.get_id() == td_api::updateChatPosition::ID) {
     auto &update = static_cast<td_api::updateChatPosition &>(object);
     const auto before = chat->value("positions", nlohmann::json::object());
@@ -388,7 +434,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       (*chat)["positions"] = nlohmann::json::object();
     apply_position(*chat, update.position_.get());
     record_order_change(account, before, chat->value("positions", nlohmann::json::object()));
-    UpdateJournal::append(account, "chat_changed", update.chat_id_);
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "position");
   } else if (object.get_id() == td_api::updateChatLastMessage::ID) {
     auto &update = static_cast<td_api::updateChatLastMessage &>(object);
     const auto before = chat->value("positions", nlohmann::json::object());
@@ -403,7 +449,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       decorate_sender(account, projection);
       context_.put_message(account, {update.chat_id_, update.last_message_->id_}, std::move(projection));
     }
-    UpdateJournal::append(account, "chat_changed", update.chat_id_);
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "last_message");
   } else if (object.get_id() == td_api::updateChatDraftMessage::ID) {
     auto &update = static_cast<td_api::updateChatDraftMessage &>(object);
     const auto before = chat->value("positions", nlohmann::json::object());
@@ -411,14 +457,14 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     for (const auto &position : update.positions_)
       apply_position(*chat, position.get());
     record_order_change(account, before, chat->value("positions", nlohmann::json::object()));
-    UpdateJournal::append(account, "chat_changed", update.chat_id_);
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "draft");
   } else if (object.get_id() == td_api::updateNewMessage::ID) {
     auto &update = static_cast<td_api::updateNewMessage &>(object);
     if (update.message_) {
       auto projection = message_projection(*update.message_);
       decorate_sender(account, projection);
       context_.put_message(account, {update.message_->chat_id_, update.message_->id_}, std::move(projection));
-      UpdateJournal::append(account, "message_changed", update.message_->chat_id_, update.message_->id_);
+      UpdateJournal::append(context_, account, "message_changed", update.message_->chat_id_, update.message_->id_);
     }
   } else if (object.get_id() == td_api::updateMessageContent::ID) {
     auto &update = static_cast<td_api::updateMessageContent &>(object);
@@ -431,9 +477,9 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     auto &last = (*chat)["last_message"];
     if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
       last["content"] = message_content(update.new_content_.get());
-      UpdateJournal::append(account, "chat_changed", update.chat_id_);
+      UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "last_message");
     }
-    UpdateJournal::append(account, "message_changed", update.chat_id_, update.message_id_);
+    UpdateJournal::append(context_, account, "message_changed", update.chat_id_, update.message_id_);
   } else if (object.get_id() == td_api::updateMessageEdited::ID) {
     auto &update = static_cast<td_api::updateMessageEdited &>(object);
     auto found = account.messages.find({update.chat_id_, update.message_id_});
@@ -445,34 +491,54 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     auto &last = (*chat)["last_message"];
     if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
       last["edit_date"] = update.edit_date_;
-      UpdateJournal::append(account, "chat_changed", update.chat_id_);
+      UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "last_message");
     }
-    UpdateJournal::append(account, "message_changed", update.chat_id_, update.message_id_);
+    UpdateJournal::append(context_, account, "message_changed", update.chat_id_, update.message_id_);
   } else if (object.get_id() == td_api::updateDeleteMessages::ID) {
     auto &update = static_cast<td_api::updateDeleteMessages &>(object);
     for (const auto message_id : update.message_ids_) {
       context_.erase_message(account, {update.chat_id_, message_id});
-      UpdateJournal::append(account, update.from_cache_ ? "message_changed" : "message_deleted", update.chat_id_,
-                            message_id);
+      UpdateJournal::append(context_, account, update.from_cache_ ? "message_changed" : "message_deleted",
+                            update.chat_id_, message_id);
       auto &last = (*chat)["last_message"];
       if (last.is_object() && last.value("id", "") == std::to_string(message_id)) {
         last = nullptr;
-        UpdateJournal::append(account, "chat_changed", update.chat_id_);
+        UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "last_message");
       }
     }
   } else if (object.get_id() == td_api::updateChatReadInbox::ID) {
     auto &update = static_cast<td_api::updateChatReadInbox &>(object);
     (*chat)["last_read_inbox_message_id"] = std::to_string(update.last_read_inbox_message_id_);
     (*chat)["unread_count"] = update.unread_count_;
-    UpdateJournal::append(account, "chat_changed", update.chat_id_);
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "read_inbox");
   } else if (object.get_id() == td_api::updateChatReadOutbox::ID) {
     auto &update = static_cast<td_api::updateChatReadOutbox &>(object);
     (*chat)["last_read_outbox_message_id"] = std::to_string(update.last_read_outbox_message_id_);
-    UpdateJournal::append(account, "chat_changed", update.chat_id_);
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "read_outbox");
   } else if (object.get_id() == td_api::updateChatIsMarkedAsUnread::ID) {
     auto &update = static_cast<td_api::updateChatIsMarkedAsUnread &>(object);
     (*chat)["is_marked_unread"] = update.is_marked_as_unread_;
-    UpdateJournal::append(account, "chat_changed", update.chat_id_);
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "unread_mark");
+  } else if (object.get_id() == td_api::updateChatUnreadMentionCount::ID) {
+    auto &update = static_cast<td_api::updateChatUnreadMentionCount &>(object);
+    (*chat)["unread_mention_count"] = update.unread_mention_count_;
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "unread_mention");
+  } else if (object.get_id() == td_api::updateMessageMentionRead::ID) {
+    auto &update = static_cast<td_api::updateMessageMentionRead &>(object);
+    (*chat)["unread_mention_count"] = update.unread_mention_count_;
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "unread_mention");
+  } else if (object.get_id() == td_api::updateChatUnreadReactionCount::ID) {
+    auto &update = static_cast<td_api::updateChatUnreadReactionCount &>(object);
+    (*chat)["unread_reaction_count"] = update.unread_reaction_count_;
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "unread_reaction");
+  } else if (object.get_id() == td_api::updateMessageUnreadReactions::ID) {
+    auto &update = static_cast<td_api::updateMessageUnreadReactions &>(object);
+    (*chat)["unread_reaction_count"] = update.unread_reaction_count_;
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "unread_reaction");
+  } else if (object.get_id() == td_api::updateChatNotificationSettings::ID) {
+    auto &update = static_cast<td_api::updateChatNotificationSettings &>(object);
+    (*chat)["notifications"] = notification_projection(update.notification_settings_.get());
+    UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "notifications");
   }
 }
 

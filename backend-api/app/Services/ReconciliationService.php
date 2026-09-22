@@ -9,6 +9,7 @@ use App\Contracts\MonotonicClock;
 use App\Contracts\Repositories\SchedulerRepository;
 use App\Contracts\Repositories\TelegramAccountRepository;
 use App\Contracts\TdlibGateway;
+use App\Data\AccountData;
 use App\Exceptions\ApiException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -39,28 +40,31 @@ final readonly class ReconciliationService
         $messages = [];
         try {
             $this->scheduler->started();
+            $configuration = $this->repository->configuration();
             foreach ([['logout_pending', 'removing', 'provisioning'], ['active']] as $phase => $lifecycles) {
+                $deferred += $this->repository->deferredCount($lifecycles);
                 $key = ReconciliationCacheKeys::cursor($phase);
                 $saved = Cache::get($key);
                 $saved = is_string($saved) ? $saved : null;
                 foreach ($saved === null ? [[null, null]] : [[$saved, null], [null, $saved]] as [$after, $through]) {
                     do {
                         $batch = $this->repository->batch($lifecycles, $after, $through);
+                        $healthy = $phase === 1 ? $this->healthy($batch, $requestId) : [];
                         foreach ($batch as $account) {
                             if (($this->clock->nanoseconds() - $started) / 1000000000 >= 35) {
                                 $budgetExhausted = true;
                                 break 4;
                             }
                             $after = $account->id;
-                            Cache::forever($key, $after);
-                            if ($account->reconcile_blocked_revision === $account->desired_revision || $account->next_reconcile_at?->isFuture() === true) {
-                                $deferred++;
+                            if (isset($healthy[$account->id])) {
+                                $succeeded++;
 
                                 continue;
                             }
+                            Cache::forever($key, $after);
                             $this->repository->attempted($account);
                             try {
-                                $this->accounts->reconcile($account, $requestId);
+                                $this->accounts->reconcile($account, $requestId, $configuration);
                                 $this->repository->succeeded($account);
                                 $succeeded++;
                             } catch (ApiException $error) {
@@ -72,6 +76,9 @@ final readonly class ReconciliationService
                                 $failed++;
                                 $messages[] = $account->id.': '.$error->errorCode;
                             }
+                        }
+                        if ($batch !== []) {
+                            Cache::forever($key, $after);
                         }
                     } while (count($batch) === 25);
                 }
@@ -85,5 +92,40 @@ final readonly class ReconciliationService
         }
 
         return $messages;
+    }
+
+    /** @param array<int, AccountData> $batch
+     * @return array<string, true> */
+    private function healthy(array $batch, string $requestId): array
+    {
+        if ($batch === []) {
+            return [];
+        }
+        try {
+            $snapshots = $this->tdlib->listSnapshots(array_map(fn (AccountData $account): string => $account->id, $batch), $requestId)['accounts'] ?? [];
+        } catch (ApiException) {
+            return [];
+        }
+        if (! is_array($snapshots)) {
+            return [];
+        }
+        $healthy = [];
+        foreach ($batch as $account) {
+            $snapshot = $snapshots[$account->id] ?? null;
+            if (is_array($snapshot)
+                && ($snapshot['runtime_available'] ?? false) === true
+                && ($snapshot['generation'] ?? null) === $account->storage_generation
+                && ($snapshot['target_revision'] ?? null) === $account->desired_revision
+                && ($snapshot['applied_revision'] ?? null) === $account->desired_revision
+                && ($snapshot['authorization_generation'] ?? null) === $account->authorization_generation
+                && ($snapshot['effective_config_id'] ?? null) === $account->effective_config_id
+                && ($snapshot['operation_id'] ?? null) === null
+                && ($snapshot['last_error_code'] ?? null) === null
+                && $account->applied_revision === $account->desired_revision) {
+                $healthy[$account->id] = true;
+            }
+        }
+
+        return $healthy;
     }
 }

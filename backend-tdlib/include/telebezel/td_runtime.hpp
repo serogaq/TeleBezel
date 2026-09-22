@@ -3,6 +3,7 @@
 #include "telebezel/registry.hpp"
 #include "telebezel/status.hpp"
 #include "telebezel/transport.hpp"
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -33,7 +34,8 @@ public:
   nlohmann::json message(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id);
   nlohmann::json preview(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id,
                          const std::string &preview_id);
-  nlohmann::json updates(const std::string &uuid, const std::string &cursor, std::size_t limit) const;
+  nlohmann::json updates(const std::string &uuid, const std::string &cursor, std::size_t limit,
+                         std::chrono::seconds wait = std::chrono::seconds(0)) const;
   nlohmann::json set_interest(const std::string &uuid, std::int64_t chat_id, const std::string &lease_key, bool active,
                               bool await_transition = true);
   nlohmann::json release_interests(const std::string &principal_type, const std::string &principal_id);

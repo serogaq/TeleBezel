@@ -46,4 +46,12 @@ export TELEBEZEL_DISPOSABLE_DB="$database" TELEBEZEL_DISPOSABLE_PORT="$port"
 if test -n "${TDLIB_FIXTURE_BIN:-}"; then
   "$php_bin" vendor/bin/pest tests/Integration
   PHP_BIN="$php_bin" bash "$root/tests/browser/settings.sh"
+else
+  {
+    echo '################################################################'
+    echo 'SKIPPED: tests/Integration and the /settings browser flow.'
+    echo 'They need the C++ fixture; run make functional-test to cover them.'
+    echo '################################################################'
+  } >&2
+  if test -n "${TELEBEZEL_REQUIRE_FUNCTIONAL:-}"; then exit 1; fi
 fi

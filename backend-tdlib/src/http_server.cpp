@@ -1,6 +1,7 @@
 #include "telebezel/http_server.hpp"
 #include "telebezel/parse.hpp"
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -85,12 +86,26 @@ std::size_t limit_parameter(const httplib::Request &request, std::size_t fallbac
     throw std::runtime_error("request.invalid");
   return static_cast<std::size_t>(value);
 }
-std::string lease_key(const httplib::Request &request, const std::string &view_id) {
-  const auto type = request.get_param_value("principal_type");
-  const auto id = request.get_param_value("principal_id");
-  if ((type != "device" && type != "api_client" && type != "maintenance") || id.empty() || !valid_uuid(view_id))
+std::string principal_prefix(const std::string &type, const std::string &id) {
+  if ((type != "device" && type != "api_client" && type != "maintenance") || !valid_uuid(id))
     throw std::runtime_error("request.invalid");
-  return type + ":" + id + ":" + view_id;
+  return type + ":" + id + ":";
+}
+std::string lease_key(const std::string &type, const std::string &id, const std::string &view_id,
+                      std::int64_t chat_id) {
+  if (!valid_uuid(view_id))
+    throw std::runtime_error("request.invalid");
+  return principal_prefix(type, id) + view_id + ":" + std::to_string(chat_id);
+}
+std::string lease_key(const httplib::Request &request, std::int64_t chat_id) {
+  return lease_key(request.get_param_value("principal_type"), request.get_param_value("principal_id"),
+                   request.get_param_value("view_id"), chat_id);
+}
+std::string string_field(const nlohmann::json &payload, const char *key) {
+  const auto found = payload.find(key);
+  if (found == payload.end() || !found->is_string())
+    throw std::runtime_error("request.invalid");
+  return found->get<std::string>();
 }
 nlohmann::json exception_result(const std::exception &exception) {
   static const std::set<std::string> known{"request.invalid",
@@ -133,27 +148,28 @@ nlohmann::json exception_result(const std::exception &exception) {
                                                                                                               : 409;
   return {{"_error", true}, {"code", code}, {"status", status}};
 }
-// Holds one of an account's read slots for the lifetime of a request.
-class ReadSlot final {
+class Slot final {
 public:
-  ReadSlot(AccountReadLimiter &limiter, std::string uuid)
-      : limiter_(limiter), uuid_(std::move(uuid)), held_(limiter.acquire(uuid_)) {}
-  ~ReadSlot() {
+  Slot(AccountReadLimiter &limiter, std::string key)
+      : limiter_(limiter), key_(std::move(key)), held_(limiter.acquire(key_)) {}
+  ~Slot() {
     if (held_)
-      limiter_.release(uuid_);
+      limiter_.release(key_);
   }
-  ReadSlot(const ReadSlot &) = delete;
-  ReadSlot &operator=(const ReadSlot &) = delete;
+  Slot(const Slot &) = delete;
+  Slot &operator=(const Slot &) = delete;
   bool held() const { return held_; }
 
 private:
   AccountReadLimiter &limiter_;
-  std::string uuid_;
+  std::string key_;
   bool held_;
 };
 void runtime_response(httplib::Response &response, const nlohmann::json &result, const std::string &id,
                       int success_status = 200) {
   if (result.value("_error", false)) {
+    if (result.contains("retry_after"))
+      response.set_header("Retry-After", std::to_string(result.value("retry_after", 1)));
     json_response(
         response, result.value("status", 500),
         nlohmann::json{{"error", {{"code", result.value("code", "service.internal")}}}, {"request_id", id}}.dump(), id);
@@ -182,7 +198,7 @@ void AccountReadLimiter::release(const std::string &uuid) {
 }
 
 HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(config), runtime_(runtime) {
-  server_.new_task_queue = [] { return new httplib::ThreadPool(4, 8, 64); };
+  server_.new_task_queue = [] { return new httplib::ThreadPool(4, worker_threads, 64); };
   server_.set_payload_max_length(std::size_t{16} * 1024);
   server_.Get("/healthz", [](const httplib::Request &, httplib::Response &response) {
     json_response(response, 200, health_json(), make_request_id());
@@ -224,166 +240,84 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                   return;
                 runtime_response(response, runtime_.snapshot(request.matches[1]), id);
               });
-  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats)",
-              [this](const httplib::Request &request, httplib::Response &response) {
-                const std::string id = request_id(request);
-                if (!authorize(config_, request, response, id))
-                  return;
-                ReadSlot slot(reads_, request.matches[1]);
-                if (!slot.held()) {
-                  response.set_header("Retry-After", "1");
-                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
-                  return;
-                }
-                try {
-                  const auto list = request.get_param_value("list");
-                  if (list != "main" && list != "archive")
-                    throw std::runtime_error("request.invalid");
-                  runtime_response(response,
-                                   runtime_.chats(request.matches[1], list, limit_parameter(request, 20, 50),
-                                                  request.get_param_value("cursor")),
-                                   id);
-                } catch (const std::exception &exception) {
-                  runtime_response(response, exception_result(exception), id);
-                }
-              });
-  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+))", [this](const httplib::Request &request,
-                                                                                  httplib::Response &response) {
-    const std::string id = request_id(request);
-    if (!authorize(config_, request, response, id))
-      return;
-    ReadSlot slot(reads_, request.matches[1]);
-    if (!slot.held()) {
-      response.set_header("Retry-After", "1");
-      runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
-      return;
-    }
-    try {
-      const auto chat_id = path_integer(request.matches[2]);
-      const auto key = lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
-      auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
-      runtime_response(response,
-                       interest.value("_error", false) ? interest : runtime_.chat(request.matches[1], chat_id), id);
-    } catch (const std::exception &exception) {
-      runtime_response(response, exception_result(exception), id);
-    }
-  });
-  server_.Get(
-      R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages)",
-      [this](const httplib::Request &request, httplib::Response &response) {
-        const std::string id = request_id(request);
-        if (!authorize(config_, request, response, id))
-          return;
-        ReadSlot slot(reads_, request.matches[1]);
-        if (!slot.held()) {
-          response.set_header("Retry-After", "1");
-          runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
-          return;
-        }
-        try {
-          const auto chat_id = path_integer(request.matches[2]);
-          const auto key = lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
-          auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
-          runtime_response(response,
-                           interest.value("_error", false)
-                               ? interest
-                               : runtime_.messages(request.matches[1], chat_id, limit_parameter(request, 30, 50),
-                                                   request.get_param_value("cursor")),
-                           id);
-        } catch (const std::exception &exception) {
-          runtime_response(response, exception_result(exception), id);
-        }
-      });
+  const auto route = [this](AccountReadLimiter &limiter, int success_status,
+                            std::function<nlohmann::json(const httplib::Request &)> handler) {
+    return [this, &limiter, success_status, handler = std::move(handler)](const httplib::Request &request,
+                                                                          httplib::Response &response) {
+      const std::string id = request_id(request);
+      if (!authorize(config_, request, response, id))
+        return;
+      Slot work(work_, "*");
+      Slot account(limiter, request.matches[1]);
+      if (!work.held() || !account.held()) {
+        response.set_header("Retry-After", "1");
+        runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
+        return;
+      }
+      try {
+        runtime_response(response, handler(request), id, success_status);
+      } catch (const std::exception &exception) {
+        runtime_response(response, exception_result(exception), id);
+      }
+    };
+  };
+  const auto leased = [this](const httplib::Request &request, std::int64_t chat_id,
+                             const std::function<nlohmann::json()> &read) {
+    auto interest = runtime_.set_interest(request.matches[1], chat_id, lease_key(request, chat_id), true, false);
+    return interest.value("_error", false) ? interest : read();
+  };
+  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats)", route(reads_, 200, [this](const auto &request) {
+                const auto list = request.get_param_value("list");
+                if (list != "main" && list != "archive")
+                  throw std::runtime_error("request.invalid");
+                return runtime_.chats(request.matches[1], list, limit_parameter(request, 20, 50),
+                                      request.get_param_value("cursor"));
+              }));
+  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+))",
+              route(reads_, 200, [this, leased](const auto &request) {
+                const auto chat_id = path_integer(request.matches[2]);
+                return leased(request, chat_id, [&] { return runtime_.chat(request.matches[1], chat_id); });
+              }));
+  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages)",
+              route(reads_, 200, [this, leased](const auto &request) {
+                const auto chat_id = path_integer(request.matches[2]);
+                const auto limit = limit_parameter(request, 30, 50);
+                return leased(request, chat_id, [&] {
+                  return runtime_.messages(request.matches[1], chat_id, limit, request.get_param_value("cursor"));
+                });
+              }));
   server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages/(-?[0-9]+))",
-              [this](const httplib::Request &request, httplib::Response &response) {
-                const std::string id = request_id(request);
-                if (!authorize(config_, request, response, id))
-                  return;
-                ReadSlot slot(reads_, request.matches[1]);
-                if (!slot.held()) {
-                  response.set_header("Retry-After", "1");
-                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
-                  return;
-                }
-                try {
-                  const auto chat_id = path_integer(request.matches[2]);
-                  const auto key =
-                      lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
-                  auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
-                  runtime_response(response,
-                                   interest.value("_error", false) ? interest
-                                                                   : runtime_.message(request.matches[1], chat_id,
-                                                                                      path_integer(request.matches[3])),
-                                   id);
-                } catch (const std::exception &exception) {
-                  runtime_response(response, exception_result(exception), id);
-                }
-              });
+              route(reads_, 200, [this, leased](const auto &request) {
+                const auto chat_id = path_integer(request.matches[2]);
+                const auto message_id = path_integer(request.matches[3]);
+                return leased(request, chat_id,
+                              [&] { return runtime_.message(request.matches[1], chat_id, message_id); });
+              }));
   server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages/(-?[0-9]+)/preview/([0-9a-f]{64}))",
-              [this](const httplib::Request &request, httplib::Response &response) {
-                const std::string id = request_id(request);
-                if (!authorize(config_, request, response, id))
-                  return;
-                ReadSlot slot(reads_, request.matches[1]);
-                if (!slot.held()) {
-                  response.set_header("Retry-After", "1");
-                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
-                  return;
-                }
-                try {
-                  runtime_response(response,
-                                   runtime_.preview(request.matches[1], path_integer(request.matches[2]),
-                                                    path_integer(request.matches[3]), request.matches[4]),
-                                   id);
-                } catch (const std::exception &exception) {
-                  runtime_response(response, exception_result(exception), id);
-                }
-              });
-  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/updates)",
-              [this](const httplib::Request &request, httplib::Response &response) {
-                const std::string id = request_id(request);
-                if (!authorize(config_, request, response, id))
-                  return;
-                ReadSlot slot(reads_, request.matches[1]);
-                if (!slot.held()) {
-                  response.set_header("Retry-After", "1");
-                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
-                  return;
-                }
-                try {
-                  runtime_response(response,
-                                   runtime_.updates(request.matches[1], request.get_param_value("cursor"),
-                                                    limit_parameter(request, 100, 100)),
-                                   id);
-                } catch (const std::exception &exception) {
-                  runtime_response(response, exception_result(exception), id);
-                }
-              });
-  const auto interest_handler = [this](const httplib::Request &request, httplib::Response &response, bool active) {
-    const std::string id = request_id(request);
-    if (!authorize(config_, request, response, id))
-      return;
-    try {
+              route(reads_, 200, [this](const auto &request) {
+                return runtime_.preview(request.matches[1], path_integer(request.matches[2]),
+                                        path_integer(request.matches[3]), request.matches[4]);
+              }));
+  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/updates)", route(reads_, 200, [this](const auto &request) {
+                const auto wait = request.has_param("wait") ? integer_parameter(request, "wait") : 0;
+                if (wait < 0 || static_cast<std::uint64_t>(wait) > config_.updates_wait_max_seconds)
+                  throw std::runtime_error("request.invalid");
+                return runtime_.updates(request.matches[1], request.get_param_value("cursor"),
+                                        limit_parameter(request, 100, 100), std::chrono::seconds(wait));
+              }));
+  const auto interest = [this](bool active) {
+    return [this, active](const httplib::Request &request) {
       const auto payload = body(request, {"principal_type", "principal_id"}, {"principal_type", "principal_id"});
-      const auto view_id = request.matches[3].str();
-      if (!valid_uuid(view_id))
-        throw std::runtime_error("request.invalid");
-      const auto key = payload.at("principal_type").get<std::string>() + ":" +
-                       payload.at("principal_id").get<std::string>() + ":" + view_id + ":" + request.matches[2].str();
-      runtime_response(response,
-                       runtime_.set_interest(request.matches[1], path_integer(request.matches[2]), key, active), id);
-    } catch (const std::exception &exception) {
-      runtime_response(response, exception_result(exception), id);
-    }
+      const auto chat_id = path_integer(request.matches[2]);
+      const auto key = lease_key(string_field(payload, "principal_type"), string_field(payload, "principal_id"),
+                                 request.matches[3].str(), chat_id);
+      return runtime_.set_interest(request.matches[1], chat_id, key, active);
+    };
   };
   server_.Put(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/interests/([0-9a-f-]{36}))",
-              [interest_handler](const httplib::Request &request, httplib::Response &response) {
-                interest_handler(request, response, true);
-              });
+              route(controls_, 200, interest(true)));
   server_.Delete(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/interests/([0-9a-f-]{36}))",
-                 [interest_handler](const httplib::Request &request, httplib::Response &response) {
-                   interest_handler(request, response, false);
-                 });
+                 route(controls_, 200, interest(false)));
   server_.Delete(
       R"(/internal/v1/interests/principal)", [this](const httplib::Request &request, httplib::Response &response) {
         const std::string id = request_id(request);
@@ -391,8 +325,8 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
           return;
         try {
           const auto payload = body(request, {"principal_type", "principal_id"}, {"principal_type", "principal_id"});
-          const auto principal_type = payload.at("principal_type").get<std::string>();
-          const auto principal_id = payload.at("principal_id").get<std::string>();
+          const auto principal_type = string_field(payload, "principal_type");
+          const auto principal_id = string_field(payload, "principal_id");
           if ((principal_type != "device" && principal_type != "api_client" && principal_type != "maintenance" &&
                principal_type != "owner") ||
               !valid_uuid(principal_id))
@@ -402,109 +336,52 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
           runtime_response(response, exception_result(exception), id);
         }
       });
-  server_.Put(R"(/internal/v1/accounts/([0-9a-f-]{36}))", [this](const httplib::Request &request,
-                                                                 httplib::Response &response) {
-    const std::string id = request_id(request);
-    if (!authorize(config_, request, response, id))
-      return;
-    try {
-      runtime_response(response,
-                       runtime_.reconcile(
-                           request.matches[1],
-                           body(request,
-                                {"uuid", "generation", "authorization_generation", "revision", "effective_config_id",
-                                 "telegram_api_id", "telegram_api_hash", "operation_id", "lifecycle", "proxy", "mode"},
-                                {"uuid", "generation", "revision", "lifecycle", "proxy", "mode"})),
-                       id);
-    } catch (const std::exception &exception) {
-      runtime_response(response, exception_result(exception), id);
-    }
-  });
+  server_.Put(R"(/internal/v1/accounts/([0-9a-f-]{36}))", route(controls_, 200, [this](const auto &request) {
+                return runtime_.reconcile(
+                    request.matches[1],
+                    body(request,
+                         {"uuid", "generation", "authorization_generation", "revision", "effective_config_id",
+                          "telegram_api_id", "telegram_api_hash", "operation_id", "lifecycle", "proxy", "mode"},
+                         {"uuid", "generation", "revision", "lifecycle", "proxy", "mode"}));
+              }));
   server_.Post(R"(/internal/v1/accounts/([0-9a-f-]{36})/authorization/actions)",
-               [this](const httplib::Request &request, httplib::Response &response) {
-                 const std::string id = request_id(request);
-                 if (!authorize(config_, request, response, id))
-                   return;
-                 try {
-                   runtime_response(response,
-                                    runtime_.authorization_action(
-                                        request.matches[1],
-                                        body(request,
-                                             {"uuid", "generation", "authorization_generation", "revision", "action",
-                                              "authorization_version", "value"},
-                                             {"uuid", "generation", "revision", "action", "authorization_version"})),
-                                    id, 202);
-                 } catch (const std::exception &exception) {
-                   runtime_response(response, exception_result(exception), id);
-                 }
-               });
-  server_.Post(R"(/internal/v1/accounts/([0-9a-f-]{36})/logout)",
-               [this](const httplib::Request &request, httplib::Response &response) {
-                 const std::string id = request_id(request);
-                 if (!authorize(config_, request, response, id))
-                   return;
-                 try {
-                   runtime_response(response,
-                                    runtime_.logout(request.matches[1],
-                                                    body(request,
-                                                         {"uuid", "generation", "authorization_generation", "revision",
-                                                          "effective_config_id", "telegram_api_id", "telegram_api_hash",
-                                                          "operation_id", "logout_operation_id", "lifecycle", "proxy"},
-                                                         {"uuid", "generation", "revision", "operation_id",
-                                                          "logout_operation_id", "lifecycle", "proxy"})),
-                                    id, 202);
-                 } catch (const std::exception &exception) {
-                   runtime_response(response, exception_result(exception), id);
-                 }
-               });
-  server_.Put(R"(/internal/v1/accounts/([0-9a-f-]{36})/proxy)", [this](const httplib::Request &request,
-                                                                       httplib::Response &response) {
-    const std::string id = request_id(request);
-    if (!authorize(config_, request, response, id))
-      return;
-    try {
-      runtime_response(response,
-                       runtime_.update_proxy(
-                           request.matches[1],
-                           body(request,
-                                {"uuid", "generation", "authorization_generation", "revision", "effective_config_id",
-                                 "telegram_api_id", "telegram_api_hash", "operation_id", "lifecycle", "proxy"},
-                                {"uuid", "generation", "revision", "operation_id", "lifecycle", "proxy"})),
-                       id, 202);
-    } catch (const std::exception &exception) {
-      runtime_response(response, exception_result(exception), id);
-    }
-  });
+               route(controls_, 202, [this](const auto &request) {
+                 return runtime_.authorization_action(
+                     request.matches[1], body(request,
+                                              {"uuid", "generation", "authorization_generation", "revision", "action",
+                                               "authorization_version", "value"},
+                                              {"uuid", "generation", "revision", "action", "authorization_version"}));
+               }));
+  server_.Post(
+      R"(/internal/v1/accounts/([0-9a-f-]{36})/logout)", route(controls_, 202, [this](const auto &request) {
+        return runtime_.logout(
+            request.matches[1],
+            body(request,
+                 {"uuid", "generation", "authorization_generation", "revision", "effective_config_id",
+                  "telegram_api_id", "telegram_api_hash", "operation_id", "logout_operation_id", "lifecycle", "proxy"},
+                 {"uuid", "generation", "revision", "operation_id", "logout_operation_id", "lifecycle", "proxy"}));
+      }));
+  server_.Put(R"(/internal/v1/accounts/([0-9a-f-]{36})/proxy)", route(controls_, 202, [this](const auto &request) {
+                return runtime_.update_proxy(
+                    request.matches[1],
+                    body(request,
+                         {"uuid", "generation", "authorization_generation", "revision", "effective_config_id",
+                          "telegram_api_id", "telegram_api_hash", "operation_id", "lifecycle", "proxy"},
+                         {"uuid", "generation", "revision", "operation_id", "lifecycle", "proxy"}));
+              }));
   server_.Post(R"(/internal/v1/accounts/([0-9a-f-]{36})/proxy/ping)",
-               [this](const httplib::Request &request, httplib::Response &response) {
-                 const std::string id = request_id(request);
-                 if (!authorize(config_, request, response, id))
-                   return;
-                 try {
-                   const auto payload = body(request, {"proxy"}, {"proxy"});
-                   runtime_response(response, runtime_.ping_proxy(request.matches[1], payload.at("proxy")), id);
-                 } catch (const std::exception &exception) {
-                   runtime_response(response, exception_result(exception), id);
-                 }
-               });
-  server_.Delete(
-      R"(/internal/v1/accounts/([0-9a-f-]{36}))", [this](const httplib::Request &request, httplib::Response &response) {
-        const std::string id = request_id(request);
-        if (!authorize(config_, request, response, id))
-          return;
-        try {
-          runtime_response(
-              response,
-              runtime_.remove(request.matches[1],
-                              body(request,
-                                   {"uuid", "generation", "authorization_generation", "revision", "effective_config_id",
-                                    "telegram_api_id", "telegram_api_hash", "operation_id", "lifecycle", "proxy"},
-                                   {"uuid", "generation", "revision", "operation_id", "lifecycle", "proxy"})),
-              id, 202);
-        } catch (const std::exception &exception) {
-          runtime_response(response, exception_result(exception), id);
-        }
-      });
+               route(controls_, 200, [this](const auto &request) {
+                 const auto payload = body(request, {"proxy"}, {"proxy"});
+                 return runtime_.ping_proxy(request.matches[1], payload.at("proxy"));
+               }));
+  server_.Delete(R"(/internal/v1/accounts/([0-9a-f-]{36}))", route(controls_, 202, [this](const auto &request) {
+                   return runtime_.remove(
+                       request.matches[1],
+                       body(request,
+                            {"uuid", "generation", "authorization_generation", "revision", "effective_config_id",
+                             "telegram_api_id", "telegram_api_hash", "operation_id", "lifecycle", "proxy"},
+                            {"uuid", "generation", "revision", "operation_id", "lifecycle", "proxy"}));
+                 }));
   server_.set_error_handler([](const httplib::Request &, httplib::Response &response) {
     if (response.body.empty()) {
       const std::string id = make_request_id();

@@ -1,6 +1,7 @@
 #pragma once
 #include "telebezel/runtime/account_state.hpp"
 #include <chrono>
+#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <td/telegram/td_api.h>
@@ -13,6 +14,16 @@ inline std::chrono::milliseconds operation_budget(std::chrono::steady_clock::tim
   if (remaining <= std::chrono::milliseconds(0))
     throw std::runtime_error("operation.outcome_unknown");
   return remaining;
+}
+void report_thread_failure(const char *thread, const char *error) noexcept;
+template <class Body> void guarded_iteration(const char *thread, Body &&body) noexcept {
+  try {
+    body();
+  } catch (const std::exception &exception) {
+    report_thread_failure(thread, exception.what());
+  } catch (...) {
+    report_thread_failure(thread, "unknown");
+  }
 }
 // Identifies the session a read was served from.
 struct ReadFence {
@@ -47,5 +58,8 @@ std::string authorization_name(std::int32_t id);
 std::string connection_name(std::int32_t id);
 std::vector<std::string> allowed_actions(const Account &account);
 nlohmann::json safe_error(const std::string &code, int status);
+nlohmann::json safe_error(const std::string &code, int status, std::int64_t retry_after);
+std::optional<std::int64_t> flood_wait_seconds(const std::string &message);
+nlohmann::json notification_projection(const td_api::chatNotificationSettings *settings);
 nlohmann::json account_json(const Account &account);
 } // namespace telebezel::runtime

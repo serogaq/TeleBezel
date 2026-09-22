@@ -53,6 +53,7 @@ public:
   RequestCounts counts() const;
 
 private:
+  void evict_unresolved();
   TdTransport &transport_;
   mutable std::mutex mutex_;
   bool stopping_{false};

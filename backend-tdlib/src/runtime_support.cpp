@@ -2,12 +2,29 @@
 #include "telebezel/parse.hpp"
 #include "telebezel/runtime/support.hpp"
 #include <algorithm>
+#include <iostream>
+#include <mutex>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
 
+void report_thread_failure(const char *thread, const char *error) noexcept {
+  try {
+    static std::mutex log_mutex;
+    std::string detail(error == nullptr ? "unknown" : error);
+    if (detail.size() > 160)
+      detail.resize(160);
+    const auto line =
+        nlohmann::json{{"event", "background_iteration_failed"}, {"thread", thread}, {"error", detail}}.dump(
+            -1, ' ', false, nlohmann::json::error_handler_t::replace);
+    std::lock_guard lock(log_mutex);
+    std::cerr << line << '\n';
+  } catch (...) {
+  }
+}
+
 std::optional<ReadFence> read_fence(const AccountState &account) {
   if (!account.reconciled || account.closed || account.tombstone || account.lifecycle != "active" ||
-      account.authorization_state != "ready" || account.client_id == 0)
+      account.authorization_state != "ready" || account.client_id == 0 || account.generation_unpersisted)
     return std::nullopt;
   return ReadFence{account.generation, account.runtime_epoch, account.client_id, account.authorization_generation,
                    account.event_sequence};
@@ -185,10 +202,19 @@ nlohmann::json chat_projection(const td_api::chat &chat) {
       {"last_read_inbox_message_id", std::to_string(chat.last_read_inbox_message_id_)},
       {"last_read_outbox_message_id", std::to_string(chat.last_read_outbox_message_id_)},
       {"positions", nlohmann::json::object()},
+      {"unread_mention_count", chat.unread_mention_count_},
+      {"unread_reaction_count", chat.unread_reaction_count_},
+      {"notifications", notification_projection(chat.notification_settings_.get())},
       {"last_message", chat.last_message_ ? message_projection(*chat.last_message_) : nlohmann::json(nullptr)}};
   for (const auto &position : chat.positions_)
     apply_position(projection, position.get());
   return projection;
+}
+
+nlohmann::json notification_projection(const td_api::chatNotificationSettings *settings) {
+  if (settings == nullptr)
+    return {{"use_default_mute_for", true}, {"mute_for", 0}};
+  return {{"use_default_mute_for", settings->use_default_mute_for_}, {"mute_for", settings->mute_for_}};
 }
 
 nlohmann::json *existing_chat(Account &account, std::int64_t chat_id) {
@@ -281,6 +307,27 @@ std::vector<std::string> allowed_actions(const Account &account) {
 
 nlohmann::json safe_error(const std::string &code, int status) {
   return {{"_error", true}, {"code", code}, {"status", status}};
+}
+
+nlohmann::json safe_error(const std::string &code, int status, std::int64_t retry_after) {
+  auto error = safe_error(code, status);
+  error["retry_after"] = std::max<std::int64_t>(1, retry_after);
+  return error;
+}
+
+std::optional<std::int64_t> flood_wait_seconds(const std::string &message) {
+  for (const std::string marker : {"FLOOD_WAIT_", "retry after "}) {
+    const auto found = message.find(marker);
+    if (found == std::string::npos)
+      continue;
+    const auto start = found + marker.size();
+    auto end = start;
+    while (end < message.size() && message[end] >= '0' && message[end] <= '9')
+      ++end;
+    if (const auto seconds = parse_int64(std::string_view(message).substr(start, end - start)); seconds && *seconds > 0)
+      return std::min<std::int64_t>(*seconds, 86400);
+  }
+  return std::nullopt;
 }
 
 nlohmann::json account_json(const Account &account) {
