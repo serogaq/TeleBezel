@@ -1,0 +1,14 @@
+{
+	default_sni {$TELEBEZEL_LAN_ADDRESS}
+	skip_install_trust
+}
+
+{$TELEBEZEL_LAN_ADDRESS} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy backend-api:8080
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

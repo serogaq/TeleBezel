@@ -1,59 +1,86 @@
 cmake_minimum_required(VERSION 3.25)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" TELEBEZEL_SOURCE_VERSION LIMIT_COUNT 1)
 project(telebezel_backend_tdlib VERSION "${TELEBEZEL_SOURCE_VERSION}" LANGUAGES CXX)
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(TELEBEZEL_BUILD_TESTS "Build TeleBezel unit tests" ON)
-option(TELEBEZEL_SANITIZERS "Instrument adapter tests with ASan and UBSan" OFF)
+set(TELEBEZEL_SANITIZER "none" CACHE STRING "Sanitizer: none, address, thread, leak")
+set_property(CACHE TELEBEZEL_SANITIZER PROPERTY STRINGS none address thread leak)
+if(NOT TELEBEZEL_SANITIZER MATCHES "^(none|address|thread|leak)$")
+  message(FATAL_ERROR "Unsupported TELEBEZEL_SANITIZER=${TELEBEZEL_SANITIZER}")
+endif()
+if(TELEBEZEL_SANITIZER STREQUAL "leak" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "Standalone LSan is tested on Linux. Use make tdlib-linux-check on macOS.")
+endif()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(cmake/Dependencies.cmake)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
-add_executable(telebezel-tdlib
-  src/config.cpp
-  src/crypto.cpp
-  src/http_server.cpp
-  src/main.cpp
-  src/registry.cpp
-  src/status.cpp
-  src/td_runtime.cpp
-  src/transport.cpp)
-target_include_directories(telebezel-tdlib PRIVATE include)
-target_include_directories(telebezel-tdlib SYSTEM BEFORE PRIVATE
-  "${tdlib_SOURCE_DIR}"
-  "${tdlib_SOURCE_DIR}/td/generate/auto"
-  "${json_SOURCE_DIR}/include")
-target_link_libraries(telebezel-tdlib PRIVATE Td::TdStatic httplib::httplib nlohmann_json::nlohmann_json OpenSSL::Crypto Threads::Threads)
-target_compile_definitions(telebezel-tdlib PRIVATE TELEBEZEL_SERVICE_VERSION="${PROJECT_VERSION}")
-target_compile_options(telebezel-tdlib PRIVATE $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Werror>)
+# Compile the same implementation once for production and tests.
+add_library(telebezel-core STATIC src/config.cpp src/crypto.cpp src/registry.cpp src/status.cpp)
+target_include_directories(telebezel-core PUBLIC include)
+target_link_libraries(telebezel-core PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto)
+target_compile_definitions(telebezel-core PUBLIC TELEBEZEL_SERVICE_VERSION="${PROJECT_VERSION}")
 
+add_library(telebezel-runtime STATIC
+  src/td_runtime.cpp src/transport.cpp src/runtime_engine.cpp src/runtime_support.cpp src/runtime_commands.cpp
+  src/td_request_broker.cpp src/account_lifecycle_service.cpp src/authorization_service.cpp
+  src/proxy_service.cpp src/read_model_service.cpp src/chat_reads.cpp src/history_reads.cpp src/preview_cache.cpp
+  src/interest_lease_manager.cpp
+  src/cursor_codec.cpp src/update_journal.cpp)
+target_include_directories(telebezel-runtime SYSTEM BEFORE PUBLIC
+  "${tdlib_SOURCE_DIR}" "${tdlib_SOURCE_DIR}/td/generate/auto" "${json_SOURCE_DIR}/include")
+target_link_libraries(telebezel-runtime PUBLIC telebezel-core Td::TdStatic Threads::Threads)
+
+add_library(telebezel-http STATIC src/http_server.cpp)
+target_link_libraries(telebezel-http PUBLIC telebezel-runtime httplib::httplib)
+add_executable(telebezel-tdlib src/main.cpp)
+target_link_libraries(telebezel-tdlib PRIVATE telebezel-http)
+
+set(TELEBEZEL_TARGETS telebezel-core telebezel-runtime telebezel-http telebezel-tdlib)
 if(TELEBEZEL_BUILD_TESTS)
   enable_testing()
-  add_executable(telebezel-tdlib-tests tests/status_test.cpp src/config.cpp src/crypto.cpp src/registry.cpp src/status.cpp)
-  target_include_directories(telebezel-tdlib-tests PRIVATE include)
-  target_link_libraries(telebezel-tdlib-tests PRIVATE nlohmann_json::nlohmann_json OpenSSL::Crypto)
-  target_compile_definitions(telebezel-tdlib-tests PRIVATE TELEBEZEL_SERVICE_VERSION="${PROJECT_VERSION}")
+  include(GoogleTest)
+  add_executable(telebezel-tdlib-tests tests/status_test.cpp)
+  target_link_libraries(telebezel-tdlib-tests PRIVATE telebezel-core GTest::gtest_main)
   target_compile_definitions(telebezel-tdlib-tests PRIVATE TELEBEZEL_CONTRACT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts")
-  target_compile_options(telebezel-tdlib-tests PRIVATE $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Werror>)
-  if(TELEBEZEL_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(telebezel-tdlib-tests PRIVATE -fsanitize=address,undefined -fno-sanitize=vptr -fno-omit-frame-pointer)
-    target_link_options(telebezel-tdlib-tests PRIVATE -fsanitize=address,undefined -fno-sanitize=vptr)
+  gtest_discover_tests(telebezel-tdlib-tests DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 60)
+  add_executable(telebezel-tdlib-runtime-tests tests/runtime_test.cpp tests/runtime_hardening_test.cpp
+                                              tests/http_server_test.cpp)
+  target_link_libraries(telebezel-tdlib-runtime-tests PRIVATE telebezel-http GTest::gmock_main)
+  gtest_discover_tests(telebezel-tdlib-runtime-tests DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 60)
+  add_executable(telebezel-tdlib-failure-tests tests/runtime_failure_test.cpp)
+  target_link_libraries(telebezel-tdlib-failure-tests PRIVATE telebezel-runtime GTest::gmock_main)
+  gtest_discover_tests(telebezel-tdlib-failure-tests DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 60)
+  add_executable(telebezel-tdlib-fixture tests/http_fixture.cpp)
+  target_link_libraries(telebezel-tdlib-fixture PRIVATE telebezel-http)
+  list(APPEND TELEBEZEL_TARGETS telebezel-tdlib-fixture telebezel-tdlib-tests telebezel-tdlib-runtime-tests telebezel-tdlib-failure-tests)
+endif()
+foreach(target IN LISTS TELEBEZEL_TARGETS)
+  target_compile_options(${target} PRIVATE $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-Wall;-Wextra;-Wpedantic;-Werror>)
+endforeach()
+if(NOT TELEBEZEL_SANITIZER STREQUAL "none")
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
+    message(FATAL_ERROR "Sanitizers require Clang or GCC")
   endif()
-  add_test(NAME telebezel-tdlib-tests COMMAND telebezel-tdlib-tests)
-  add_executable(telebezel-tdlib-runtime-tests tests/runtime_test.cpp src/config.cpp src/crypto.cpp src/registry.cpp
-    src/status.cpp src/td_runtime.cpp src/transport.cpp)
-  target_include_directories(telebezel-tdlib-runtime-tests PRIVATE include)
-  target_include_directories(telebezel-tdlib-runtime-tests SYSTEM BEFORE PRIVATE
-    "${tdlib_SOURCE_DIR}" "${tdlib_SOURCE_DIR}/td/generate/auto" "${json_SOURCE_DIR}/include")
-  target_link_libraries(telebezel-tdlib-runtime-tests PRIVATE Td::TdStatic nlohmann_json::nlohmann_json OpenSSL::Crypto Threads::Threads)
-  target_compile_definitions(telebezel-tdlib-runtime-tests PRIVATE TELEBEZEL_SERVICE_VERSION="${PROJECT_VERSION}")
-  target_compile_options(telebezel-tdlib-runtime-tests PRIVATE $<$<CXX_COMPILER_ID:Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Werror>)
-  if(TELEBEZEL_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(telebezel-tdlib-runtime-tests PRIVATE -fsanitize=address,undefined -fno-sanitize=vptr -fno-omit-frame-pointer)
-    target_link_options(telebezel-tdlib-runtime-tests PRIVATE -fsanitize=address,undefined -fno-sanitize=vptr)
+  # Keep sanitizer runs unoptimized for readable stacks and avoid GCC 14
+  # false positives in libstdc++ regex internals at -O1 with -Werror.
+  set(sanitizer_flags "-fsanitize=${TELEBEZEL_SANITIZER}" -fno-omit-frame-pointer -O0 -g)
+  if(TELEBEZEL_SANITIZER STREQUAL "address")
+    set(sanitizer_flags -fsanitize=address,undefined -fno-sanitize=vptr -fno-omit-frame-pointer -O0 -g)
   endif()
-  add_test(NAME telebezel-tdlib-runtime-tests COMMAND telebezel-tdlib-runtime-tests)
+  if(TELEBEZEL_BUILD_TESTS)
+    list(APPEND TELEBEZEL_TARGETS gtest gtest_main gmock gmock_main)
+  endif()
+  foreach(target IN LISTS TELEBEZEL_TARGETS)
+    target_compile_options(${target} PRIVATE ${sanitizer_flags})
+    target_link_options(${target} PRIVATE ${sanitizer_flags})
+  endforeach()
 endif()

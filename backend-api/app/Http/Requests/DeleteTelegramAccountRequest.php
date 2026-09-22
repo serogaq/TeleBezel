@@ -12,6 +12,8 @@ final class DeleteTelegramAccountRequest extends ApiFormRequest
     /** @return array<string, mixed> */
     public function rules(): array
     {
-        return ['acknowledge_remote_session_remains' => ['required', 'accepted']];
+        return [
+            'acknowledge_remote_session_remains' => ['required', 'accepted'],
+        ];
     }
 }

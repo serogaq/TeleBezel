@@ -20,3 +20,4 @@ bool tb_status_state_apply(TbStatusState *state, uint32_t sequence, int32_t resu
   }
   return true;
 }
+void tb_status_state_set(TbStatusState *state, TbStatus status) { state->status = status; }

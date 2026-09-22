@@ -28,9 +28,10 @@ if test -f bootstrap/cache/config.php; then
   echo 'Refusing database tests with a cached Laravel configuration' >&2
   exit 1
 fi
+node --test tests/Js/*Test.js
 "$php_bin" "$composer_bin" install --no-interaction --prefer-dist
 "$php_bin" "$composer_bin" validate --strict
-"$php_bin" vendor/bin/pint --test
+"$php_bin" "$composer_bin" lint
 "$php_bin" vendor/bin/phpstan analyse --memory-limit=1G
 export APP_ENV=testing DB_CONNECTION=pgsql DB_URL= DB_HOST=127.0.0.1 DB_PORT="$port"
 export PGCONNECT_TIMEOUT=2 PGOPTIONS='-c statement_timeout=2000 -c lock_timeout=500'
@@ -38,6 +39,19 @@ export DB_DATABASE="$database" DB_USERNAME=telebezel DB_PASSWORD=telebezel_test
 export TELEBEZEL_DISPOSABLE_DB="$database" TELEBEZEL_DISPOSABLE_PORT="$port"
 "$php_bin" "$root/tests/api/assert_disposable_db.php"
 "$php_bin" artisan migrate:fresh --force --database=pgsql
-"$php_bin" artisan migrate:rollback --force --step=2 --database=pgsql
+"$php_bin" artisan migrate:reset --force --database=pgsql
 "$php_bin" artisan migrate --force --database=pgsql
-"$php_bin" artisan test
+"$php_bin" vendor/bin/pest
+
+if test -n "${TDLIB_FIXTURE_BIN:-}"; then
+  "$php_bin" vendor/bin/pest tests/Integration
+  PHP_BIN="$php_bin" bash "$root/tests/browser/settings.sh"
+else
+  {
+    echo '################################################################'
+    echo 'SKIPPED: tests/Integration and the /settings browser flow.'
+    echo 'They need the C++ fixture; run make functional-test to cover them.'
+    echo '################################################################'
+  } >&2
+  if test -n "${TELEBEZEL_REQUIRE_FUNCTIONAL:-}"; then exit 1; fi
+fi

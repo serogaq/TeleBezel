@@ -1,8 +1,12 @@
 #include "telebezel/crypto.hpp"
+#include "telebezel/file_descriptor.hpp"
 #include <cctype>
 #include <cerrno>
 #include <fcntl.h>
+#include <limits>
+#include <memory>
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
 #include <openssl/kdf.h>
 #include <openssl/sha.h>
 #include <stdexcept>
@@ -24,36 +28,38 @@ std::uint8_t nibble(char value) {
 }
 std::array<std::uint8_t, 32> derive_key(const std::array<std::uint8_t, 32> &master_key, const std::string &uuid,
                                         const char *salt, std::size_t salt_size) {
+  if (salt_size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    throw std::runtime_error("key derivation salt is too large");
+  }
   const auto info = uuid_bytes(uuid);
   std::array<std::uint8_t, 32> output{};
-  EVP_PKEY_CTX *context = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+  std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> owner(EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr),
+                                                                    EVP_PKEY_CTX_free);
+  EVP_PKEY_CTX *context = owner.get();
   if (context == nullptr || EVP_PKEY_derive_init(context) <= 0 ||
       EVP_PKEY_CTX_set_hkdf_md(context, EVP_sha256()) <= 0 ||
-      EVP_PKEY_CTX_set1_hkdf_salt(context, reinterpret_cast<const unsigned char *>(salt), salt_size) <= 0 ||
-      EVP_PKEY_CTX_set1_hkdf_key(context, master_key.data(), master_key.size()) <= 0 ||
-      EVP_PKEY_CTX_add1_hkdf_info(context, info.data(), info.size()) <= 0) {
-    EVP_PKEY_CTX_free(context);
+      EVP_PKEY_CTX_set1_hkdf_salt(context, reinterpret_cast<const unsigned char *>(salt),
+                                  static_cast<int>(salt_size)) <= 0 ||
+      EVP_PKEY_CTX_set1_hkdf_key(context, master_key.data(), static_cast<int>(master_key.size())) <= 0 ||
+      EVP_PKEY_CTX_add1_hkdf_info(context, info.data(), static_cast<int>(info.size())) <= 0) {
     throw std::runtime_error("key derivation failed");
   }
   std::size_t size = output.size();
   if (EVP_PKEY_derive(context, output.data(), &size) <= 0 || size != output.size()) {
-    EVP_PKEY_CTX_free(context);
     throw std::runtime_error("key derivation failed");
   }
-  EVP_PKEY_CTX_free(context);
   return output;
 }
 } // namespace
 
 std::array<std::uint8_t, 32> read_master_key(const std::filesystem::path &path) {
-  const int descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  FileDescriptor owner(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+  const int descriptor = owner.get();
   struct stat status{};
   // Compose bind-mounted secrets retain host ownership on native Linux. The
   // process must be able to open the file (typically through a named ACL), but
   // the key must never be writable by group/other or readable by everyone.
   if (descriptor < 0 || ::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) || (status.st_mode & 0037) != 0) {
-    if (descriptor >= 0)
-      ::close(descriptor);
     throw std::runtime_error("database master key is missing or invalid");
   }
   std::array<char, 66> buffer{};
@@ -70,7 +76,7 @@ std::array<std::uint8_t, 32> read_master_key(const std::filesystem::path &path) 
       length = buffer.size();
     break;
   }
-  ::close(descriptor);
+  owner.close();
   if (length != 64 && !(length == 65 && buffer[64] == '\n')) {
     throw std::runtime_error("database master key is missing or invalid");
   }
@@ -128,6 +134,20 @@ std::string hex_encode(const std::uint8_t *data, std::size_t size) {
 std::string sha256_hex(const std::string &value) {
   std::array<std::uint8_t, SHA256_DIGEST_LENGTH> digest{};
   SHA256(reinterpret_cast<const unsigned char *>(value.data()), value.size(), digest.data());
+  return hex_encode(digest.data(), digest.size());
+}
+std::string hmac_sha256_hex(const std::string &key, const std::string &purpose, const std::string &payload) {
+  if (key.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    throw std::runtime_error("authentication key is too large");
+  }
+  const std::string message = purpose + '\x1f' + payload;
+  std::array<std::uint8_t, SHA256_DIGEST_LENGTH> digest{};
+  unsigned int size = 0;
+  if (HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()),
+           reinterpret_cast<const unsigned char *>(message.data()), message.size(), digest.data(), &size) == nullptr ||
+      size != digest.size()) {
+    throw std::runtime_error("message authentication failed");
+  }
   return hex_encode(digest.data(), digest.size());
 }
 } // namespace telebezel

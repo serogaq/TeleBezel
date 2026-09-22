@@ -46,7 +46,7 @@ test -n "$client_id"
 issue_output_b=$("${compose[@]}" run --rm backend-api php artisan telebezel:api-client-issue integration-second)
 token_b=$(printf '%s\n' "$issue_output_b" | awk '/^tb_[A-Za-z0-9_-]+$/ {print; exit}')
 test -n "$token_b"
-"${compose[@]}" up "${up_args[@]}" -d backend-api
+"${compose[@]}" up "${up_args[@]}" -d backend-api ingress
 ready=false
 for _ in {1..60}; do
   if curl_bounded -fsS "http://127.0.0.1:$API_PORT/healthz" >/dev/null; then ready=true; break; fi
@@ -61,7 +61,7 @@ create_code=$(curl_bounded -sS -o "$work_dir/account-a.json" -w '%{http_code}' \
   -H "Authorization: Bearer $token_b" -H 'Idempotency-Key: integration-account-a' -H 'Content-Type: application/json' \
   -d '{"label":"Integration A","proxy":{"id":"91112233-4455-4677-8899-aabbccddeeff","mode":"direct"}}' \
   "http://127.0.0.1:$API_PORT/v1/telegram/accounts")
-test "$create_code" = 201
+test "$create_code" = 202
 account_a=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$work_dir/account-a.json")
 repeat_code=$(curl_bounded -sS -o "$work_dir/account-a-repeat.json" -w '%{http_code}' \
   -H "Authorization: Bearer $token_b" -H 'Idempotency-Key: integration-account-a' -H 'Content-Type: application/json' \
@@ -72,9 +72,10 @@ create_code=$(curl_bounded -sS -o "$work_dir/account-b.json" -w '%{http_code}' \
   -H "Authorization: Bearer $token_b" -H 'Idempotency-Key: integration-account-b' -H 'Content-Type: application/json' \
   -d '{"label":"Integration B"}' \
   "http://127.0.0.1:$API_PORT/v1/telegram/accounts")
-test "$create_code" = 201
+test "$create_code" = 202
 account_b=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$work_dir/account-b.json")
 test "$account_a" != "$account_b"
+"${compose[@]}" run --rm backend-api php artisan telebezel:accounts-reconcile >/dev/null
 authorization=''
 for _ in {1..15}; do
   authorization=$(curl_bounded -fsS -H "Authorization: Bearer $token_b" \
@@ -133,7 +134,7 @@ assert all(event["context"].get("request_id") for event in events)
 assert all("authorization" not in event["context"] and "token" not in event["context"] for event in events)
 '
 "${compose[@]}" exec -T backend-tdlib touch /var/lib/telebezel/tdlib/stage0-volume-sentinel
-"${compose[@]}" up "${up_args[@]}" -d --force-recreate postgres backend-tdlib backend-api
+"${compose[@]}" up "${up_args[@]}" -d --force-recreate postgres backend-tdlib backend-api ingress
 test "$("${compose[@]}" exec -T backend-tdlib sh -c 'test -f /var/lib/telebezel/tdlib/stage0-volume-sentinel && echo yes')" = yes
 ready=false
 for _ in {1..30}; do

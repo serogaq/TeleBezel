@@ -1,8 +1,11 @@
 #include "telebezel/registry.hpp"
 #include "telebezel/crypto.hpp"
+#include "telebezel/file_descriptor.hpp"
 #include <cerrno>
 #include <fcntl.h>
 #include <fstream>
+#include <limits>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -14,6 +17,12 @@
 
 namespace telebezel {
 namespace {
+int cipher_size(std::size_t size) {
+  if (size > static_cast<std::size_t>(std::numeric_limits<int>::max() - 16))
+    throw std::runtime_error("storage.corrupt");
+  return static_cast<int>(size);
+}
+
 std::vector<std::uint8_t> hex_decode(const std::string &value) {
   if (value.size() % 2 != 0)
     throw std::runtime_error("storage.corrupt");
@@ -33,34 +42,36 @@ std::vector<std::uint8_t> hex_decode(const std::string &value) {
 nlohmann::json protect_proxy(const nlohmann::json &proxy, const std::array<std::uint8_t, 32> &key,
                              const std::string &uuid) {
   const std::string plaintext = proxy.dump();
+  const int plaintext_size = cipher_size(plaintext.size());
   std::array<std::uint8_t, 12> nonce{};
   std::array<std::uint8_t, 16> tag{};
   std::vector<std::uint8_t> ciphertext(plaintext.size() + 16);
-  if (RAND_bytes(nonce.data(), nonce.size()) != 1)
+  if (RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1)
     throw std::runtime_error("storage.io_error");
-  EVP_CIPHER_CTX *context = EVP_CIPHER_CTX_new();
+  std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)> owner(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+  EVP_CIPHER_CTX *context = owner.get();
   int written = 0;
   int total = 0;
   const bool initialized =
       context != nullptr && EVP_EncryptInit_ex(context, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1 &&
-      EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_IVLEN, nonce.size(), nullptr) == 1 &&
+      EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(nonce.size()), nullptr) == 1 &&
       EVP_EncryptInit_ex(context, nullptr, nullptr, key.data(), nonce.data()) == 1 &&
       EVP_EncryptUpdate(context, nullptr, &written, reinterpret_cast<const unsigned char *>(uuid.data()),
-                        uuid.size()) == 1 &&
+                        cipher_size(uuid.size())) == 1 &&
       EVP_EncryptUpdate(context, ciphertext.data(), &written, reinterpret_cast<const unsigned char *>(plaintext.data()),
-                        plaintext.size()) == 1;
+                        plaintext_size) == 1;
   if (initialized)
     total = written;
   const bool finalized = initialized && EVP_EncryptFinal_ex(context, ciphertext.data() + total, &written) == 1;
   if (finalized)
     total += written;
-  const bool tagged = finalized && EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_GET_TAG, tag.size(), tag.data()) == 1;
-  EVP_CIPHER_CTX_free(context);
+  const bool tagged =
+      finalized && EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_GET_TAG, static_cast<int>(tag.size()), tag.data()) == 1;
   if (!tagged)
     throw std::runtime_error("storage.io_error");
   ciphertext.resize(static_cast<std::size_t>(total));
   return {{"version", 1},
-          {"nonce", hex_encode(nonce.data(), nonce.size())},
+          {"nonce", hex_encode(nonce.data(), static_cast<int>(nonce.size()))},
           {"ciphertext", hex_encode(ciphertext.data(), ciphertext.size())},
           {"tag", hex_encode(tag.data(), tag.size())}};
 }
@@ -75,25 +86,26 @@ nlohmann::json unprotect_proxy(const nlohmann::json &protected_proxy, const std:
     const auto tag = hex_decode(protected_proxy.at("tag").get<std::string>());
     if (nonce.size() != 12 || tag.size() != 16)
       throw std::runtime_error("storage.corrupt");
+    const int ciphertext_size = cipher_size(ciphertext.size());
     std::vector<std::uint8_t> plaintext(ciphertext.size() + 1);
-    EVP_CIPHER_CTX *context = EVP_CIPHER_CTX_new();
+    std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)> owner(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+    EVP_CIPHER_CTX *context = owner.get();
     int written = 0;
     int total = 0;
     const bool initialized =
         context != nullptr && EVP_DecryptInit_ex(context, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1 &&
-        EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_IVLEN, nonce.size(), nullptr) == 1 &&
+        EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(nonce.size()), nullptr) == 1 &&
         EVP_DecryptInit_ex(context, nullptr, nullptr, key.data(), nonce.data()) == 1 &&
         EVP_DecryptUpdate(context, nullptr, &written, reinterpret_cast<const unsigned char *>(uuid.data()),
-                          uuid.size()) == 1 &&
-        EVP_DecryptUpdate(context, plaintext.data(), &written, ciphertext.data(), ciphertext.size()) == 1;
+                          cipher_size(uuid.size())) == 1 &&
+        EVP_DecryptUpdate(context, plaintext.data(), &written, ciphertext.data(), ciphertext_size) == 1;
     if (initialized)
       total = written;
-    const bool tagged = initialized && EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_TAG, tag.size(),
+    const bool tagged = initialized && EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_GCM_SET_TAG, static_cast<int>(tag.size()),
                                                            const_cast<std::uint8_t *>(tag.data())) == 1;
     const bool finalized = tagged && EVP_DecryptFinal_ex(context, plaintext.data() + total, &written) == 1;
     if (finalized)
       total += written;
-    EVP_CIPHER_CTX_free(context);
     if (!finalized)
       throw std::runtime_error("storage.invalid_key");
     const auto result = nlohmann::json::parse(plaintext.begin(), plaintext.begin() + total);
@@ -126,19 +138,17 @@ void ensure_plain_directory(const std::filesystem::path &path) {
 }
 
 void sync_directory(const std::filesystem::path &path) {
-  const int descriptor = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  FileDescriptor owner(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  const int descriptor = owner.get();
   if (descriptor < 0 || ::fsync(descriptor) != 0) {
-    if (descriptor >= 0) {
-      ::close(descriptor);
-    }
     throw std::runtime_error("storage.io_error");
   }
-  ::close(descriptor);
+  owner.close();
 }
 } // namespace
 
 bool valid_uuid(const std::string &value) {
-  static const std::regex expression("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+  static const std::regex expression("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
   return std::regex_match(value, expression);
 }
 
@@ -185,6 +195,7 @@ std::filesystem::path Registry::checked_path(const std::filesystem::path &base, 
 }
 
 std::optional<AccountManifest> Registry::read(const std::string &uuid) const {
+  std::lock_guard lock(manifest_mutex_);
   const auto path = checked_path(registry_root_, uuid);
   const auto manifest_path = std::filesystem::path(path.string() + ".json");
   const auto status = std::filesystem::symlink_status(manifest_path);
@@ -218,6 +229,8 @@ std::optional<AccountManifest> Registry::read(const std::string &uuid) const {
     result.operation_id = json.contains("operation_id") && json["operation_id"].is_string()
                               ? json["operation_id"].get<std::string>()
                               : std::string{};
+    result.applied_revision = json.value("applied_revision", result.operation_id.empty() ? result.revision : 0ULL);
+    result.authorization_generation = json.value("authorization_generation", 1ULL);
     result.operation_phase = json.contains("operation_phase") && json["operation_phase"].is_string()
                                  ? json["operation_phase"].get<std::string>()
                                  : std::string{};
@@ -251,9 +264,11 @@ std::vector<AccountManifest> Registry::discover() const {
     const auto uuid = entry.path().stem().string();
     if (valid_uuid(uuid)) {
       try {
-        result.push_back(*read(uuid));
+        if (auto manifest = read(uuid))
+          result.push_back(std::move(*manifest));
       } catch (const std::exception &) {
         // The runtime reports the isolated account through manifest_errors().
+        continue;
       }
     }
   }
@@ -294,6 +309,7 @@ std::map<std::string, std::string> Registry::manifest_errors() const {
 }
 
 void Registry::write(const AccountManifest &manifest, const nlohmann::json &proxy) {
+  std::lock_guard lock(manifest_mutex_);
   if (!valid_uuid(manifest.uuid) || !valid_uuid(manifest.generation)) {
     throw std::runtime_error("storage.identity_mismatch");
   }
@@ -314,6 +330,8 @@ void Registry::write(const AccountManifest &manifest, const nlohmann::json &prox
       {"use_test_dc", manifest.use_test_dc},
       {"key_derivation_version", manifest.key_derivation_version},
       {"revision", manifest.revision},
+      {"applied_revision", manifest.applied_revision},
+      {"authorization_generation", manifest.authorization_generation},
       {"lifecycle", manifest.lifecycle},
       {"operation_id", manifest.operation_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(manifest.operation_id)},
       {"operation_phase",
@@ -323,34 +341,43 @@ void Registry::write(const AccountManifest &manifest, const nlohmann::json &prox
       {"proxy_protected",
        protect_proxy(proxy, derive_proxy_key(read_master_key(master_key_file_), manifest.uuid), manifest.uuid)}};
   const std::string encoded = json.dump();
-  const int descriptor = ::open(temporary.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0600);
+  FileDescriptor owner(::open(temporary.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0600));
+  const int descriptor = owner.get();
   if (descriptor < 0) {
     throw std::runtime_error("storage.io_error");
   }
   std::size_t written = 0;
   while (written < encoded.size()) {
     const auto amount = ::write(descriptor, encoded.data() + written, encoded.size() - written);
+    if (amount < 0 && errno == EINTR)
+      continue;
     if (amount <= 0) {
-      ::close(descriptor);
       throw std::runtime_error("storage.io_error");
     }
     written += static_cast<std::size_t>(amount);
   }
-  if (::fsync(descriptor) != 0 || ::close(descriptor) != 0 || ::rename(temporary.c_str(), destination.c_str()) != 0) {
+  if (::fsync(descriptor) != 0 || owner.close() != 0 || ::rename(temporary.c_str(), destination.c_str()) != 0) {
     throw std::runtime_error("storage.io_error");
   }
   sync_directory(registry_root_);
 }
 
+void Registry::persist_authorization_generation(const std::string &uuid, std::uint64_t generation) {
+  std::lock_guard lock(manifest_mutex_);
+  auto manifest = read(uuid);
+  if (!manifest || manifest->tombstone || manifest->authorization_generation >= generation)
+    return;
+  manifest->authorization_generation = generation;
+  write(*manifest, manifest->proxy);
+}
+
 void Registry::ensure_account_directories(const std::string &uuid) {
   const auto account = checked_path(accounts_root_, uuid);
-  if (!std::filesystem::exists(account)) {
-    ensure_plain_directory(account);
-  } else {
-    ensure_plain_directory(account);
-  }
+  ensure_plain_directory(account);
   ensure_plain_directory(account / "db");
   ensure_plain_directory(account / "files");
+  sync_directory(account);
+  sync_directory(accounts_root_);
 }
 
 bool Registry::account_directory_exists(const std::string &uuid) const {

@@ -12,6 +12,13 @@ return new class extends Migration
         Schema::create('telegram_accounts', function (Blueprint $table): void {
             $table->uuid('id')->primary();
             $table->string('label', 100)->nullable();
+            $table->unsignedBigInteger('authorization_generation')->default(1);
+            $table->uuid('effective_config_id')->nullable();
+            $table->timestampTz('last_reconcile_attempt_at')->nullable();
+            $table->timestampTz('last_reconcile_success_at')->nullable();
+            $table->timestampTz('next_reconcile_at')->nullable();
+            $table->unsignedSmallInteger('reconcile_failures')->default(0);
+            $table->unsignedBigInteger('reconcile_blocked_revision')->nullable();
             $table->uuid('storage_generation');
             $table->string('lifecycle', 32);
             $table->unsignedBigInteger('desired_revision')->default(1);

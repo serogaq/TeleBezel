@@ -1,8 +1,13 @@
 #include "telebezel/config.hpp"
+#include "telebezel/crypto.hpp"
+#include "telebezel/file_descriptor.hpp"
+#include <cerrno>
 #include <cstdlib>
-#include <fstream>
+#include <fcntl.h>
 #include <stdexcept>
 #include <string_view>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace telebezel {
 namespace {
@@ -12,15 +17,8 @@ std::string env_or(const char *name, const std::string &fallback = {}) {
 }
 std::string secret_value(const char *value_name, const char *file_name) {
   const std::string filename = env_or(file_name);
-  if (!filename.empty()) {
-    std::ifstream stream(filename);
-    if (!stream) {
-      throw std::runtime_error(std::string("Unable to read secret file for ") + value_name);
-    }
-    std::string value;
-    std::getline(stream, value);
-    return value;
-  }
+  if (!filename.empty())
+    return read_secret_file(filename, value_name);
   return env_or(value_name);
 }
 std::uint16_t port_value(const std::string &value, std::uint16_t fallback) {
@@ -70,7 +68,55 @@ std::int32_t api_id_value(const std::string &value) {
   }
   return static_cast<std::int32_t>(result);
 }
+std::size_t limit_value(const std::string &value, std::size_t fallback) {
+  if (value.empty())
+    return fallback;
+  if (value.find_first_not_of("0123456789") != std::string::npos)
+    throw std::runtime_error("Cache limit must be a positive integer");
+  try {
+    const auto parsed = std::stoull(value);
+    if (parsed == 0 || parsed > 1'000'000'000ULL)
+      throw std::runtime_error("Cache limit is out of range");
+    return static_cast<std::size_t>(parsed);
+  } catch (const std::exception &) {
+    throw std::runtime_error("Cache limit is out of range");
+  }
+}
+std::size_t seconds_value(const std::string &value, std::size_t fallback, std::size_t maximum) {
+  if (value.empty())
+    return fallback;
+  if (value.find_first_not_of("0123456789") != std::string::npos || value.size() > 9)
+    throw std::runtime_error("Duration must be a non-negative number of seconds");
+  const auto parsed = static_cast<std::size_t>(std::stoull(value));
+  if (parsed > maximum)
+    throw std::runtime_error("Duration is out of range");
+  return parsed;
+}
 } // namespace
+std::string read_secret_file(const std::string &path, const std::string &name) {
+  const auto failure = [&name] { return std::runtime_error("Secret file for " + name + " is missing or unsafe"); };
+  FileDescriptor owner(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+  struct stat status{};
+  if (owner.get() < 0 || ::fstat(owner.get(), &status) != 0 || !S_ISREG(status.st_mode) ||
+      (status.st_mode & 0037) != 0 || status.st_size > 4096)
+    throw failure();
+  std::string value(static_cast<std::size_t>(status.st_size), '\0');
+  std::size_t length = 0;
+  while (length < value.size()) {
+    const auto amount = ::read(owner.get(), value.data() + length, value.size() - length);
+    if (amount < 0 && errno == EINTR)
+      continue;
+    if (amount <= 0)
+      break;
+    length += static_cast<std::size_t>(amount);
+  }
+  value.resize(length);
+  while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
+    value.pop_back();
+  if (value.empty() || value.find_first_of("\r\n") != std::string::npos)
+    throw failure();
+  return value;
+}
 ProxyMode parse_proxy_mode(const std::string &value) {
   if (value == "inherit") {
     return ProxyMode::inherit;
@@ -102,6 +148,30 @@ Config load_config() {
   config.telegram_api_id = api_id_value(secret_value("TELEGRAM_API_ID", "TELEGRAM_API_ID_FILE"));
   config.telegram_api_hash = secret_value("TELEGRAM_API_HASH", "TELEGRAM_API_HASH_FILE");
   config.use_test_dc = bool_value(env_or("TDLIB_USE_TEST_DC"));
+  config.cache_messages_per_chat = limit_value(env_or("TDLIB_CACHE_MESSAGES_PER_CHAT"), config.cache_messages_per_chat);
+  config.cache_messages_per_account =
+      limit_value(env_or("TDLIB_CACHE_MESSAGES_PER_ACCOUNT"), config.cache_messages_per_account);
+  config.cache_messages_per_process =
+      limit_value(env_or("TDLIB_CACHE_MESSAGES_PER_PROCESS"), config.cache_messages_per_process);
+  config.cache_projection_bytes = limit_value(env_or("TDLIB_CACHE_PROJECTION_BYTES"), config.cache_projection_bytes);
+  config.preview_max_bytes = limit_value(env_or("TDLIB_PREVIEW_MAX_BYTES"), config.preview_max_bytes);
+  config.preview_total_bytes = limit_value(env_or("TDLIB_PREVIEW_TOTAL_BYTES"), config.preview_total_bytes);
+  config.preview_failure_ttl_seconds =
+      seconds_value(env_or("TDLIB_PREVIEW_FAILURE_TTL_SECONDS"), config.preview_failure_ttl_seconds, 86400);
+  config.updates_wait_max_seconds =
+      seconds_value(env_or("TDLIB_UPDATES_WAIT_MAX_SECONDS"), config.updates_wait_max_seconds, 25);
+  if (config.preview_max_bytes > config.preview_total_bytes)
+    throw std::runtime_error("TDLIB_PREVIEW_MAX_BYTES must not exceed TDLIB_PREVIEW_TOTAL_BYTES");
+  if (config.cache_messages_per_chat > config.cache_messages_per_account ||
+      config.cache_messages_per_account > config.cache_messages_per_process)
+    throw std::runtime_error("Cache limits must satisfy per-chat <= per-account <= per-process");
+  if (!config.master_key_file.empty()) {
+    try {
+      static_cast<void>(read_master_key(config.master_key_file));
+    } catch (const std::exception &) {
+      throw std::runtime_error("TDLIB_DATABASE_MASTER_KEY_FILE is missing or invalid");
+    }
+  }
   if ((config.telegram_api_id == 0) != config.telegram_api_hash.empty()) {
     throw std::runtime_error("Telegram API ID and hash must be configured together");
   }

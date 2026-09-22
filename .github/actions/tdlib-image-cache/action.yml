@@ -13,7 +13,7 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: "${{ runner.temp }}/tdlib-ccache"
-        key: "tdlib-ccache-${{ inputs.arch }}-${{ hashFiles('backend-tdlib/CMakeLists.txt', 'backend-tdlib/Dockerfile', 'backend-tdlib/cmake/**', 'backend-tdlib/include/**', 'backend-tdlib/src/**', 'backend-tdlib/tests/**', 'toolchain.env') }}"
+        key: "tdlib-ccache-${{ inputs.arch }}-${{ hashFiles('backend-tdlib/Dockerfile', 'backend-tdlib/cmake/**', 'toolchain.env') }}"
         restore-keys: "tdlib-ccache-${{ inputs.arch }}-"
     - uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
       with:

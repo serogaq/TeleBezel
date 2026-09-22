@@ -32,7 +32,9 @@ services:
       PGOPTIONS: "-c statement_timeout=2000 -c lock_timeout=500"
       CACHE_STORE: database
       QUEUE_CONNECTION: sync
-      SESSION_DRIVER: array
+      SESSION_DRIVER: database
+      SESSION_SECURE_COOKIE: "true"
+      SESSION_SAME_SITE: strict
       OCTANE_SERVER: frankenphp
       TDLIB_BASE_URL: http://backend-tdlib:8081
       TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token
@@ -74,10 +76,6 @@ services:
       TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token
       TDLIB_DATABASE_MASTER_KEY_FILE: /run/secrets/tdlib_database_master_key
       TDLIB_USE_TEST_DC: "${TDLIB_USE_TEST_DC:-false}"
-      TDLIB_PROXY_MODE: "${TDLIB_PROXY_MODE:-direct}"
-      TDLIB_PROXY_HOST: "${TDLIB_PROXY_HOST:-}"
-      TDLIB_PROXY_PORT: "${TDLIB_PROXY_PORT:-}"
-      TDLIB_PROXY_HTTP_ONLY: "${TDLIB_PROXY_HTTP_ONLY:-false}"
     secrets: [tdlib_internal_token, tdlib_database_master_key]
     volumes:
       - tdlib-data:/var/lib/telebezel/tdlib
@@ -90,6 +88,53 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+
+  scheduler:
+    build:
+      context: ./backend-api
+      args: {VERSION: "${API_VERSION:-0.2.0}"}
+    image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-api:local"
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 256m
+    command:
+      - sh
+      - -c
+      - trap 'kill 0' TERM INT; (while true; do timeout --signal=TERM --kill-after=2s 8s php artisan telebezel:proxy-monitor --no-interaction; sleep 1; done) & while true; do timeout --signal=TERM --kill-after=5s 50s php artisan schedule:run --no-interaction; sleep 60; done
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_KEY_FILE: /run/secrets/laravel_app_key
+      LOG_CHANNEL: stderr
+      LOG_STDERR_STREAM: /app/storage/logs/stderr.fifo
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: "${POSTGRES_DB:-telebezel}"
+      DB_USERNAME: "${POSTGRES_USER:-telebezel}"
+      DB_PASSWORD_FILE: /run/secrets/postgres_password
+      PGCONNECT_TIMEOUT: "2"
+      PGOPTIONS: "-c statement_timeout=2000 -c lock_timeout=500"
+      CACHE_STORE: database
+      TDLIB_BASE_URL: http://backend-tdlib:8081
+      TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token
+    secrets: [laravel_app_key, postgres_password, tdlib_internal_token]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /config:size=8m,uid=10001,gid=10001,mode=0700
+      - /data:size=8m,uid=10001,gid=10001,mode=0700
+      - /app/storage:size=16m,uid=10001,gid=10001,mode=0750
+      - /app/bootstrap/cache:size=8m,uid=10001,gid=10001,mode=0750
+    networks: [api-db, api-tdlib]
+    depends_on:
+      postgres: {condition: service_healthy}
+      backend-tdlib: {condition: service_started}
+    healthcheck:
+      disable: true
 
   postgres:
     image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
@@ -117,7 +162,8 @@ services:
       start_period: 10s
 
 networks:
-  api-ingress: {}
+  api-ingress:
+    internal: true
   api-db:
     internal: true
   api-tdlib:

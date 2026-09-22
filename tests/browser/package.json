@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "name": "telebezel-browser-tests",
+  "version": "1.0.0",
+  "devDependencies": {
+    "agent-browser": "0.34.0"
+  }
+}

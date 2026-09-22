@@ -1,0 +1,36 @@
+services:
+  backend-api:
+    environment:
+      APP_URL: "https://${TELEBEZEL_LAN_ADDRESS:?set TELEBEZEL_LAN_ADDRESS}"
+      TRUSTED_PROXIES: "${TELEBEZEL_CADDY_ADDRESS:-10.254.238.254}"
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    ports: ["443:443", "443:443/udp"]
+    environment:
+      TELEBEZEL_LAN_ADDRESS: "${TELEBEZEL_LAN_ADDRESS:?set TELEBEZEL_LAN_ADDRESS}"
+    volumes:
+      - ./deploy/Caddyfile.lan:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    networks:
+      api-ingress:
+        ipv4_address: "${TELEBEZEL_CADDY_ADDRESS:-10.254.238.254}"
+      https-ingress: {}
+    depends_on:
+      backend-api: {condition: service_healthy}
+networks:
+  api-ingress:
+    internal: true
+    ipam:
+      config: [{subnet: "${TELEBEZEL_INGRESS_SUBNET:-10.254.238.0/24}"}]
+  https-ingress: {}
+volumes:
+  caddy-data: {}
+  caddy-config: {}

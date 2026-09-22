@@ -2,6 +2,8 @@
 
 namespace App\Http\Resources;
 
+use App\Data\AccountData;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -9,10 +11,15 @@ final class TelegramAccountResource extends JsonResource
 {
     public static $wrap = null;
 
+    public function __construct(private readonly AccountData $account)
+    {
+        parent::__construct($account);
+    }
+
     /** @return array<string, mixed> */
     public function toArray(Request $request): array
     {
-        $account = $this->resource;
+        $account = $this->account;
 
         return [
             'id' => $account->id,
@@ -32,10 +39,19 @@ final class TelegramAccountResource extends JsonResource
                 'connection_state' => $account->connection_state,
             ],
             'telegram_identity' => $account->telegram_identity,
-            'operation' => $account->operation_id === null ? null : ['id' => $account->operation_id],
-            'last_error' => $account->last_error_code === null ? null : ['code' => $account->last_error_code],
+            'operation' => $account->operation_id === null ? null : [
+                'id' => $account->operation_id,
+            ],
+            'last_error' => $account->last_error_code === null ? null : [
+                'code' => $account->last_error_code,
+            ],
             'created_at' => $account->created_at?->toISOString(),
             'updated_at' => $account->updated_at?->toISOString(),
         ];
+    }
+
+    public function respond(Request $request, string $requestId, int $status = 200): JsonResponse
+    {
+        return (new ApiResource($this->toArray($request)))->respond($requestId, $status);
     }
 }

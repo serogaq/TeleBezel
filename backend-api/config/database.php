@@ -94,7 +94,9 @@ return [
             'sslmode' => env('DB_SSLMODE', 'prefer'),
             // PDO_PGSQL passes this connection deadline to libpq. PGOPTIONS
             // separately bounds server-side statements and lock waits.
-            'options' => [PDO::ATTR_TIMEOUT => 2],
+            'options' => [
+                PDO::ATTR_TIMEOUT => 2,
+            ],
         ],
 
         'sqlsrv' => [

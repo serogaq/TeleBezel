@@ -2,12 +2,24 @@
 
 namespace App\Http\Requests;
 
+use App\Data\Input;
+use App\Exceptions\ApiException;
+use App\Support\Values;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Http\Exceptions\HttpResponseException;
 
 abstract class ApiFormRequest extends FormRequest
 {
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function inputData(): Input
+    {
+        return new Input(Values::object($this->validated()));
+    }
+
     /** @return array<string, mixed> */
     abstract public function rules(): array;
 
@@ -28,9 +40,6 @@ abstract class ApiFormRequest extends FormRequest
 
     protected function failedValidation(Validator $validator): void
     {
-        throw new HttpResponseException(response()->json([
-            'error' => ['code' => 'request.invalid'],
-            'request_id' => $this->attributes->get('request_id'),
-        ], 422, ['Cache-Control' => 'no-store']));
+        throw new ApiException('request.invalid', 422);
     }
 }

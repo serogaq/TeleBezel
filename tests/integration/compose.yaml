@@ -1,12 +1,24 @@
 services:
   backend-api:
+    ports: !reset []
     # One worker makes sequential HTTP probes exercise the same Octane process.
     command: [php, artisan, octane:frankenphp, --host=0.0.0.0, --port=8080, --workers=1, --max-requests=500]
   backend-tdlib:
     environment:
       TELEGRAM_API_ID: "12345"
       TELEGRAM_API_HASH: "0123456789abcdef0123456789abcdef"
+  ingress:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    command: [caddy, reverse-proxy, --from, ':8080', --to, 'backend-api:8080']
+    ports: ['127.0.0.1:${API_PORT:-18080}:8080']
+    networks: [api-ingress, integration-host]
+    read_only: true
+    tmpfs: [/config, /data]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
 networks:
+  integration-host: {}
   tdlib-egress:
     internal: true
 secrets:

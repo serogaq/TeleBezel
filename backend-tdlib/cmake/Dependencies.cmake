@@ -26,3 +26,12 @@ set(CMAKE_CXX_STANDARD 17)
 FetchContent_MakeAvailable(tdlib)
 set(CMAKE_CXX_STANDARD "${_TELEBEZEL_CXX_STANDARD}")
 FetchContent_MakeAvailable(httplib json)
+
+if(TELEBEZEL_BUILD_TESTS)
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(googletest
+    URL "https://github.com/google/googletest/archive/${TELEBEZEL_GOOGLETEST_COMMIT}.tar.gz"
+    URL_HASH "SHA256=${TELEBEZEL_GOOGLETEST_SHA256}"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  FetchContent_MakeAvailable(googletest)
+endif()
