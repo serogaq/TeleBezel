@@ -54,10 +54,11 @@ jobs:
         with: {persist-credentials: false}
       - id: toolchain
         uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
-          key: "tdlib-scheduled-${{ hashFiles('backend-tdlib/CMakeLists.txt', 'backend-tdlib/cmake/**', 'backend-tdlib/include/**', 'backend-tdlib/src/**', 'backend-tdlib/tests/**', 'toolchain.env') }}"
+          key: "tdlib-scheduled-${{ hashFiles('backend-tdlib/cmake/**', 'toolchain.env') }}"
           restore-keys: |
             tdlib-scheduled-
             tdlib-native-gcc-
@@ -66,11 +67,22 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang clang-tidy cppcheck gperf libssl-dev ninja-build php-cli zlib1g-dev
-      - run: |
+      - id: tdlib
+        name: Build TDLib
+        run: |
           ccache --zero-stats
-          make tdlib-check TDLIB_CMAKE_ARGS=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
-          cmake --build backend-tdlib/analysis-build --target tdapi --parallel 2
+          cmake -S backend-tdlib -B backend-tdlib/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON
+          cmake --build backend-tdlib/build --target tdclient --parallel 2
+          cmake -S backend-tdlib -B backend-tdlib/analysis-build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTELEBEZEL_BUILD_TESTS=ON
+          cmake --build backend-tdlib/analysis-build --target tdclient --parallel 2
+          ccache --show-stats
+      - if: always() && steps.tdlib.outcome == 'success' && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          key: "${{ steps.ccache.outputs.cache-primary-key }}"
+      - run: |
+          make tdlib-check
           python3 backend-tdlib/tests/analyse.py backend-tdlib/analysis-build
           bash backend-tdlib/tests/sanitizers.sh backend-tdlib/analysis-build cmake
           ccache --show-stats

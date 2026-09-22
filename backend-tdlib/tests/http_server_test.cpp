@@ -1,15 +1,70 @@
 #include "fakes/fake_registry.hpp"
 #include "fakes/fake_transport.hpp"
 #include "telebezel/http_server.hpp"
+#include <arpa/inet.h>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <td/telegram/td_api.h>
 #include <thread>
+#include <unistd.h>
 
 namespace {
 namespace td_api = td::td_api;
+
+struct Reply {
+  int status{0};
+  std::string body;
+};
+
+Reply exchange(int port, const std::string &method, const std::string &target, const std::string &token,
+               const std::string &body = {}, int timeout_seconds = 15) {
+  const int descriptor = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (descriptor < 0)
+    return {};
+  const timeval timeout{timeout_seconds, 0};
+  ::setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  ::setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_port = htons(static_cast<std::uint16_t>(port));
+  ::inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+  Reply reply;
+  if (::connect(descriptor, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0) {
+    std::string request = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n";
+    if (!token.empty())
+      request += "Authorization: Bearer " + token + "\r\n";
+    if (!body.empty())
+      request += "Content-Type: application/json\r\n";
+    request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    std::size_t sent = 0;
+    while (sent < request.size()) {
+      const auto amount = ::send(descriptor, request.data() + sent, request.size() - sent, 0);
+      if (amount <= 0)
+        break;
+      sent += static_cast<std::size_t>(amount);
+    }
+    std::string response;
+    char buffer[4096];
+    while (true) {
+      const auto amount = ::recv(descriptor, buffer, sizeof(buffer), 0);
+      if (amount <= 0)
+        break;
+      response.append(buffer, static_cast<std::size_t>(amount));
+    }
+    const auto separator = response.find("\r\n\r\n");
+    if (response.starts_with("HTTP/1.1 ") && separator != std::string::npos) {
+      reply.status = std::stoi(response.substr(9, 3));
+      reply.body = response.substr(separator + 4);
+    }
+  }
+  ::close(descriptor);
+  return reply;
+}
 
 class HttpServerTest : public ::testing::Test {
 protected:
@@ -65,12 +120,6 @@ protected:
     runtime.reset();
     std::filesystem::remove_all(root);
   }
-  httplib::Client client(std::time_t timeout = 15) const {
-    httplib::Client result("127.0.0.1", port);
-    result.set_read_timeout(timeout);
-    result.set_bearer_token_auth(config.internal_token);
-    return result;
-  }
   std::string interest_path(std::int64_t chat_id) const {
     return "/internal/v1/accounts/" + uuid + "/chats/" + std::to_string(chat_id) +
            "/interests/90112233-4455-4677-8899-aabbccddeeff";
@@ -84,17 +133,13 @@ TEST_F(HttpServerTest, StalledInterestRequestsDoNotBlockHealth) {
   for (int index = 0; index < 8; ++index) {
     requests.push_back(std::async(std::launch::async, [this, index] {
       const nlohmann::json body{{"principal_type", "device"}, {"principal_id", device}};
-      const auto response = client().Put(interest_path(100 + index), body.dump(), "application/json");
-      return response ? response->status : 0;
+      return exchange(port, "PUT", interest_path(100 + index), config.internal_token, body.dump()).status;
     }));
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
-  httplib::Client health("127.0.0.1", port);
-  health.set_read_timeout(1);
   const auto started = std::chrono::steady_clock::now();
-  const auto response = health.Get("/healthz");
-  ASSERT_TRUE(response);
-  ASSERT_EQ(response->status, 200);
+  const auto health = exchange(port, "GET", "/healthz", {}, {}, 1);
+  ASSERT_EQ(health.status, 200);
   ASSERT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
   int rejected = 0;
   for (auto &request : requests)
@@ -108,14 +153,14 @@ TEST_F(HttpServerTest, InterestPrincipalMustBeAKnownTypeAndUuid) {
                                    {{"principal_type", "device"}, {"principal_id", "not-a-uuid"}},
                                    {{"principal_type", "owner"}, {"principal_id", device}},
                                    {{"principal_type", "device"}, {"principal_id", 7}}}) {
-    const auto response = client().Put(interest_path(42), principal.dump(), "application/json");
-    ASSERT_TRUE(response);
-    ASSERT_EQ(response->status, 422) << principal.dump();
+    ASSERT_EQ(exchange(port, "PUT", interest_path(42), config.internal_token, principal.dump()).status, 422)
+        << principal.dump();
   }
-  const auto read = client().Get("/internal/v1/accounts/" + uuid +
+  const auto read = exchange(port, "GET",
+                             "/internal/v1/accounts/" + uuid +
                                  "/chats/42?principal_type=device&principal_id=a:b&view_id=90112233-4455-4677-8899-"
-                                 "aabbccddeeff");
-  ASSERT_TRUE(read);
-  ASSERT_EQ(read->status, 422);
+                                 "aabbccddeeff",
+                             config.internal_token);
+  ASSERT_EQ(read.status, 422);
 }
 } // namespace
