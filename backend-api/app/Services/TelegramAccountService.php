@@ -294,16 +294,21 @@ final class TelegramAccountService
     {
         $config = $this->repository->configuration();
         $globalProxy = Values::object($config['proxy']);
-        $proxy ??= $account->proxy_id === null ? $globalProxy : [
-            'id' => $account->proxy_id,
-            'mode' => $account->proxy_type ?? 'direct',
-            ...$account->proxy_server === null ? [] : [
-                'host' => $account->proxy_server,
-            ],
-            ...$account->proxy_port === null ? [] : [
-                'port' => $account->proxy_port,
-            ],
-        ];
+        if ($proxy === null) {
+            $stored = $account->proxy_config;
+            if ($account->proxy_id === null) {
+                $proxy = $globalProxy;
+            } elseif ($stored === null) {
+                // Without the stored configuration the runtime would be handed
+                // a profile stripped of its credentials.
+                throw new ApiException('configuration.missing', 409);
+            } else {
+                $proxy = [
+                    ...$stored,
+                    'version' => $account->proxy_config_version,
+                ];
+            }
+        }
         $credentials = $config['telegram_api_id'] !== null && $config['telegram_api_hash'] !== null ? [
             'telegram_api_id' => $config['telegram_api_id'],
             'telegram_api_hash' => $config['telegram_api_hash'],

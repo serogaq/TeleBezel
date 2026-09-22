@@ -6,6 +6,7 @@
 #include <limits>
 #include <memory>
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
 #include <openssl/kdf.h>
 #include <openssl/sha.h>
 #include <stdexcept>
@@ -133,6 +134,20 @@ std::string hex_encode(const std::uint8_t *data, std::size_t size) {
 std::string sha256_hex(const std::string &value) {
   std::array<std::uint8_t, SHA256_DIGEST_LENGTH> digest{};
   SHA256(reinterpret_cast<const unsigned char *>(value.data()), value.size(), digest.data());
+  return hex_encode(digest.data(), digest.size());
+}
+std::string hmac_sha256_hex(const std::string &key, const std::string &purpose, const std::string &payload) {
+  if (key.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    throw std::runtime_error("authentication key is too large");
+  }
+  const std::string message = purpose + '\x1f' + payload;
+  std::array<std::uint8_t, SHA256_DIGEST_LENGTH> digest{};
+  unsigned int size = 0;
+  if (HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()),
+           reinterpret_cast<const unsigned char *>(message.data()), message.size(), digest.data(), &size) == nullptr ||
+      size != digest.size()) {
+    throw std::runtime_error("message authentication failed");
+  }
   return hex_encode(digest.data(), digest.size());
 }
 } // namespace telebezel

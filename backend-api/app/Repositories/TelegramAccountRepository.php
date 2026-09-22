@@ -25,7 +25,7 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
 {
     private function data(TelegramAccount $account): AccountData
     {
-        return new AccountData($account->id, $account->label, $account->storage_generation, $account->lifecycle, $account->desired_revision, $account->applied_revision, $account->proxy_id, $account->proxy_server, $account->proxy_port, $account->proxy_type, $account->runtime_available, $account->authorization_state, $account->connection_state, $account->last_error_code, $account->operation_id, $account->logout_operation_id, $account->authorization_generation, $account->effective_config_id, $account->created_at === null ? null : CarbonImmutable::instance($account->created_at), $account->updated_at === null ? null : CarbonImmutable::instance($account->updated_at), $account->next_reconcile_at === null ? null : CarbonImmutable::instance($account->next_reconcile_at), $account->reconcile_failures, $account->reconcile_blocked_revision);
+        return new AccountData($account->id, $account->label, $account->storage_generation, $account->lifecycle, $account->desired_revision, $account->applied_revision, $account->proxy_id, $account->proxy_server, $account->proxy_port, $account->proxy_type, $account->proxy_config, $account->proxy_config_version, $account->runtime_available, $account->authorization_state, $account->connection_state, $account->last_error_code, $account->operation_id, $account->logout_operation_id, $account->authorization_generation, $account->effective_config_id, $account->created_at === null ? null : CarbonImmutable::instance($account->created_at), $account->updated_at === null ? null : CarbonImmutable::instance($account->updated_at), $account->next_reconcile_at === null ? null : CarbonImmutable::instance($account->next_reconcile_at), $account->reconcile_failures, $account->reconcile_blocked_revision);
     }
 
     /** @param array<string, mixed> $input
@@ -60,6 +60,8 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
                     'proxy_server' => isset($proxy['host']) ? Values::string($proxy['host']) : null,
                     'proxy_port' => isset($proxy['port']) ? Values::integer($proxy['port']) : null,
                     'proxy_type' => $proxy['mode'] === 'inherit' ? null : $proxy['mode'],
+                    'proxy_config' => $proxy['mode'] === 'inherit' ? null : $proxy,
+                    'proxy_config_version' => $proxy['mode'] === 'inherit' ? 0 : 1,
                 ]);
                 $keyModel::query()->create([
                     $scopeColumn => $scopeId,

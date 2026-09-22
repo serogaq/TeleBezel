@@ -27,6 +27,7 @@
 </main>
 <script src="/assets/settings-flow.js?v=1" defer></script>
 <script src="/assets/settings-api.js?v=1" defer></script>
-<script src="/assets/settings.js?v=13" defer></script>
+<script src="/assets/settings-qr.js?v=1" defer></script>
+<script src="/assets/settings.js?v=14" defer></script>
 </body>
 </html>

@@ -2,11 +2,14 @@
 #include "telebezel/runtime/support.hpp"
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include <td/telegram/td_api.h>
+#include <vector>
 
 namespace telebezel::runtime {
 namespace {
 using Phase = InterestChatState::Phase;
+enum class Outcome : std::uint8_t { succeeded, failed, unknown };
 struct Transition {
   std::string uuid;
   std::string epoch;
@@ -68,6 +71,7 @@ nlohmann::json InterestLeaseManager::set_interest(const std::string &uuid, std::
     account.interests.erase(existing);
   }
   const auto failed_before = account.interest_states[chat_id].failed_transition;
+  const auto unknown_before = account.interest_states[chat_id].unknown_transition;
   const auto client = account.client_id;
   const auto epoch = account.runtime_epoch;
   context_.condition_.notify_all();
@@ -82,14 +86,18 @@ nlohmann::json InterestLeaseManager::set_interest(const std::string &uuid, std::
     if (state == account.interest_states.end())
       return safe_error("authorization.invalid_state", 409);
     const auto desired = account.interest_counts[chat_id] > 0;
+    // Decided before the phase checks: an undecided transition marks the chat
+    // open so it is still closed later, which is not success.
+    if (state->second.failed_transition > failed_before)
+      return safe_error("telegram.operation_failed", 502);
+    if (state->second.unknown_transition > unknown_before)
+      return safe_error("operation.outcome_unknown", 504);
     if (active && !account.interests.contains(lease_key))
       return safe_error("telegram.operation_failed", 502);
     if (active && state->second.phase == Phase::Open)
       return {{"active", true}, {"expires_in", 90}};
     if (!active && (desired || state->second.phase == Phase::Closed))
       return {{"active", false}, {"expires_in", 0}};
-    if (state->second.failed_transition > failed_before)
-      return safe_error("telegram.operation_failed", 502);
     if (context_.condition_.wait_until(lock, deadline) == std::cv_status::timeout)
       return safe_error("service.busy", 503);
   }
@@ -126,7 +134,17 @@ void InterestLeaseManager::run() {
     {
       std::unique_lock lock(context_.mutex_);
       const auto now = std::chrono::steady_clock::now();
-      for (auto &[uuid, account] : context_.accounts_) {
+      // Resume after the account served last time so every account gets a turn.
+      std::vector<std::map<std::string, AccountState>::iterator> order;
+      order.reserve(context_.accounts_.size());
+      for (auto item = context_.accounts_.upper_bound(rotation_cursor_); item != context_.accounts_.end(); ++item)
+        order.push_back(item);
+      for (auto item = context_.accounts_.begin(); item != context_.accounts_.end() && item->first <= rotation_cursor_;
+           ++item)
+        order.push_back(item);
+      for (const auto &item : order) {
+        const auto &uuid = item->first;
+        auto &account = item->second;
         for (const auto &[chat_id, count] : account.interest_counts)
           if (count > 0 && !account.interest_states.contains(chat_id))
             account.interest_states[chat_id].phase = Phase::Open;
@@ -144,24 +162,29 @@ void InterestLeaseManager::run() {
           selected = Transition{uuid, account.runtime_epoch, account.client_id, chat_id, ++state.transition, opening};
           break;
         }
-        if (selected)
+        if (selected) {
+          rotation_cursor_ = uuid;
           break;
+        }
       }
       if (!selected) {
         context_.condition_.wait_for(lock, std::chrono::milliseconds(100));
         continue;
       }
     }
-    bool succeeded = false;
+    Outcome outcome = Outcome::failed;
     try {
       auto response = selected->opening
                           ? broker_.request(selected->client, td_api::make_object<td_api::openChat>(selected->chat_id),
                                             std::chrono::seconds(3))
                           : broker_.request(selected->client, td_api::make_object<td_api::closeChat>(selected->chat_id),
                                             std::chrono::seconds(3));
-      succeeded = response && response->get_id() != td_api::error::ID;
+      if (response && response->get_id() != td_api::error::ID)
+        outcome = Outcome::succeeded;
+      else if (td_error_code(response, 504))
+        outcome = Outcome::unknown;
     } catch (const std::exception &) {
-      succeeded = false;
+      outcome = Outcome::unknown;
     }
     {
       std::lock_guard lock(context_.mutex_);
@@ -171,20 +194,33 @@ void InterestLeaseManager::run() {
         auto &account = found->second;
         auto &state = account.interest_states[selected->chat_id];
         if (state.transition == selected->number) {
-          state.phase = succeeded ? (selected->opening ? Phase::Open : Phase::Closed)
-                                  : (selected->opening ? Phase::Closed : Phase::Open);
-          if (!succeeded) {
+          const auto now = std::chrono::steady_clock::now();
+          if (outcome == Outcome::succeeded) {
+            state.phase = selected->opening ? Phase::Open : Phase::Closed;
+            state.close_failures = 0;
+          } else if (outcome == Outcome::unknown) {
+            // The chat counts as open, so dropping the interest still produces
+            // a real closeChat if the request did land.
+            state.phase = Phase::Open;
+            state.unknown_transition = selected->number;
+            state.retry_at = now + std::chrono::seconds(1);
+          } else if (selected->opening) {
+            state.phase = Phase::Closed;
             state.failed_transition = selected->number;
-            state.retry_at = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-            if (selected->opening) {
-              for (auto item = account.interests.begin(); item != account.interests.end();) {
-                if (item->second.first == selected->chat_id)
-                  item = account.interests.erase(item);
-                else
-                  ++item;
-              }
-              account.interest_counts[selected->chat_id] = 0;
+            state.retry_at = now + std::chrono::seconds(1);
+            for (auto item = account.interests.begin(); item != account.interests.end();) {
+              if (item->second.first == selected->chat_id)
+                item = account.interests.erase(item);
+              else
+                ++item;
             }
+            account.interest_counts[selected->chat_id] = 0;
+          } else {
+            // TDLib refuses closeChat for a chat it does not consider open, so
+            // give up after a few attempts rather than spinning.
+            state.failed_transition = selected->number;
+            state.retry_at = now + std::chrono::seconds(1);
+            state.phase = ++state.close_failures >= 3 ? Phase::Closed : Phase::Open;
           }
         }
       }

@@ -331,10 +331,23 @@ test('reconciliation resumes removal', function (): void {
 });
 test('reconciliation replays the complete persisted proxy configuration', function (): void {
     $account = telegramAccountsTestAccount();
+    $configuration = [
+        'id' => '31112233-4455-4677-8899-aabbccddeeff',
+        'mode' => 'socks5',
+        'host' => '203.0.113.10',
+        'port' => 1080,
+        'http_only' => false,
+        'username' => 'proxy-user',
+        'password' => 'proxy-secret',
+    ];
     $account->fill([
         'lifecycle' => AccountLifecycle::Provisioning,
-        'proxy_id' => '31112233-4455-4677-8899-aabbccddeeff',
-        'proxy_type' => 'direct',
+        'proxy_id' => $configuration['id'],
+        'proxy_server' => $configuration['host'],
+        'proxy_port' => $configuration['port'],
+        'proxy_type' => $configuration['mode'],
+        'proxy_config' => $configuration,
+        'proxy_config_version' => 3,
         'effective_config_id' => fake()->uuid(),
         'operation_id' => fake()->uuid(),
     ])->save();
@@ -349,8 +362,8 @@ test('reconciliation replays the complete persisted proxy configuration', functi
     ]);
     $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     Http::assertSent(fn ($request): bool => $request->method() === 'PUT' && $request->data()['proxy'] === [
-        'id' => $account->proxy_id,
-        'mode' => 'direct',
+        ...$configuration,
+        'version' => 3,
     ]);
     expect($account->fresh()->lifecycle)->toBe(AccountLifecycle::Active);
 });
@@ -421,6 +434,14 @@ test('proxy read model exposes only its uuid', function (): void {
     $account->proxy_server = '203.0.113.10';
     $account->proxy_port = 1080;
     $account->proxy_type = 'socks5';
+    $account->proxy_config = [
+        'id' => '31112233-4455-4677-8899-aabbccddeeff',
+        'mode' => 'socks5',
+        'host' => '203.0.113.10',
+        'port' => 1080,
+        'http_only' => false,
+    ];
+    $account->proxy_config_version = 1;
     $account->save();
     $this->withToken($this->token)->getJson("/v1/telegram/accounts/{$account->id}/proxy")->assertOk()->assertJsonPath('data.id', $account->proxy_id)->assertJsonPath('data.server', '203.0.113.10')->assertJsonPath('data.port', 1080)->assertJsonPath('data.type', 'socks5')->assertJsonMissingPath('data.host')->assertJsonMissingPath('data.password');
 });
@@ -494,11 +515,12 @@ test('preview proxy validates its identifier and returns only bounded image byte
         ]),
     ]);
     $url = '/v1/telegram/accounts/'.$account->id.'/chats/42/messages/55/preview/';
-    $view = '?view_id=90112233-4455-4677-8899-aabbccddeeff';
-    $this->withToken($this->token)->get($url.$id.$view)
+    $this->withToken($this->token)->get($url.$id)
         ->assertOk()->assertHeader('Content-Type', 'image/jpeg')->assertHeader('Cache-Control', 'no-store, private');
-    expect($this->withToken($this->token)->get($url.$id.$view)->getContent())->toBe('jpeg-test');
-    $this->withToken($this->token)->getJson($url.'bad'.$view)->assertNotFound()->assertJsonPath('error.code', 'message.cache_miss');
+    expect($this->withToken($this->token)->get($url.$id)->getContent())->toBe('jpeg-test');
+    $this->withToken($this->token)->getJson($url.'bad')->assertNotFound()->assertJsonPath('error.code', 'message.cache_miss');
+    $this->withToken($this->token)->getJson($url.$id.'?view_id=90112233-4455-4677-8899-aabbccddeeff')
+        ->assertStatus(422)->assertJsonPath('error.code', 'request.invalid');
 });
 
 function telegramAccountsTestAccount(): TelegramAccount

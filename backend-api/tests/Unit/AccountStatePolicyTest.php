@@ -8,7 +8,7 @@ use App\Services\AccountStatePolicy;
 function policyAccount(AccountLifecycle $lifecycle = AccountLifecycle::Active): AccountData
 {
     return new AccountData('00112233-4455-4677-8899-aabbccddeeff', 'Private label', '11112233-4455-4677-8899-aabbccddeeff', $lifecycle,
-        3, 2, null, null, null, null, true, 'ready', 'ready', null, 'operation', null, 1, 'config', null, null, null, 0, null);
+        3, 2, null, null, null, null, null, 0, true, 'ready', 'ready', null, 'operation', null, 1, 'config', null, null, null, 0, null);
 }
 
 test('logout increments authorization generation only for a new intent', function () {

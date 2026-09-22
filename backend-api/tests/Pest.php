@@ -7,7 +7,7 @@ use Tests\TestCase;
 pest()->extend(TestCase::class)->beforeEach(fn () => Http::preventStrayRequests())->in('Feature');
 pest()->use(RefreshDatabase::class)->in(
     'Feature/HealthTest.php', 'Feature/ApiClientCommandTest.php', 'Feature/StatusTest.php',
-    'Feature/TelegramAccountsTest.php', 'Feature/OwnerAccessTest.php',
+    'Feature/TelegramAccountsTest.php', 'Feature/TelegramReadContractTest.php', 'Feature/OwnerAccessTest.php',
 );
 
 pest()->extend(TestCase::class)->use(RefreshDatabase::class)->in('Integration');

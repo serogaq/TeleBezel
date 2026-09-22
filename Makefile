@@ -19,7 +19,7 @@ TDLIB_BUILD_DIR ?= backend-tdlib/build
 TDLIB_CMAKE_ARGS ?=
 CMAKE_GENERATOR_ARGS ?= $(if $(wildcard $(TDLIB_BUILD_DIR)/CMakeCache.txt),,-G Ninja)
 
-.PHONY: help toolchain-check app-build app-check app-qemu app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test image-smoke check clean
+.PHONY: help toolchain-check app-build app-check app-qemu app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test offline-restart-test image-smoke check clean
 help:
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -131,6 +131,9 @@ api-client-issue: ## Issue an API token: make api-client-issue NAME=my-watch
 
 integration-test: ## Run the real Compose health path
 	bash tests/integration/health_path.sh
+
+offline-restart-test: ## Confirm offline history with a real authorized account (see docs/functional-testing.md)
+	bash tests/integration/offline_restart.sh
 
 image-smoke: ## Smoke an image: make image-smoke COMPONENT=backend-api
 	test "$(COMPONENT)" = backend-api -o "$(COMPONENT)" = backend-tdlib

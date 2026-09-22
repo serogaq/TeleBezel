@@ -11,7 +11,42 @@ struct InterestChatState {
   enum class Phase { Closed, Opening, Open, Closing } phase{Phase::Closed};
   std::uint64_t transition{0};
   std::uint64_t failed_transition{0};
+  // A transition TDLib never answered. The chat is then treated as open until a
+  // closeChat confirms otherwise, so a late success cannot leak an open chat.
+  std::uint64_t unknown_transition{0};
+  unsigned close_failures{0};
   std::chrono::steady_clock::time_point retry_at{};
+};
+// Records where each ordering change happened so a cursor is only rejected when
+// something at or above its boundary moved; appending at the tail is harmless.
+struct ChatOrderLog {
+  static constexpr std::size_t retained = 512;
+  std::uint64_t version{0};
+  // Cursors issued at or below `base` can no longer be judged precisely.
+  std::uint64_t base{0};
+  std::deque<std::pair<std::uint64_t, std::int64_t>> entries;
+
+  void record(std::int64_t order) {
+    ++version;
+    entries.emplace_back(version, order);
+    if (entries.size() > retained) {
+      base = entries.front().first;
+      entries.pop_front();
+    }
+  }
+  void reset() {
+    ++version;
+    base = version;
+    entries.clear();
+  }
+  bool disturbed(std::uint64_t since, std::int64_t boundary_order) const {
+    if (since < base)
+      return true;
+    for (const auto &[recorded, order] : entries)
+      if (recorded > since && order >= boundary_order)
+        return true;
+    return false;
+  }
 };
 struct AccountState {
   std::string uuid;
@@ -34,6 +69,12 @@ struct AccountState {
   std::int32_t telegram_api_id{0};
   std::string telegram_api_hash;
   nlohmann::json proxy = {{"mode", "inherit"}, {"http_only", false}};
+  // What TDLib is actually running with, kept apart from the desired
+  // configuration above so a failed step is resumed on the next reconciliation.
+  nlohmann::json applied_proxy;
+  bool proxy_applied{false};
+  std::int32_t applied_telegram_api_id{0};
+  std::string applied_telegram_api_hash;
   nlohmann::json telegram_identity;
   std::string delivery_method;
   bool delivery_supported{true};
@@ -51,8 +92,8 @@ struct AccountState {
   std::deque<nlohmann::json> events;
   std::uint64_t event_sequence{0};
   std::string runtime_epoch;
-  std::uint64_t main_order_version{0};
-  std::uint64_t archive_order_version{0};
+  ChatOrderLog main_orders;
+  ChatOrderLog archive_orders;
   bool main_exhausted{false};
   bool archive_exhausted{false};
   std::string main_load_error;

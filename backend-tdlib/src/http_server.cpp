@@ -1,4 +1,5 @@
 #include "telebezel/http_server.hpp"
+#include "telebezel/parse.hpp"
 #include <algorithm>
 #include <iostream>
 #include <mutex>
@@ -57,7 +58,7 @@ nlohmann::json body(const httplib::Request &request, const std::set<std::string>
   if (parsed.contains("proxy") && !parsed["proxy"].is_object())
     throw std::runtime_error("request.invalid");
   if (parsed.contains("proxy")) {
-    static const std::set<std::string> proxy_fields{"id",        "mode",     "host",     "port",
+    static const std::set<std::string> proxy_fields{"id",        "mode",     "host",     "port",  "version",
                                                     "http_only", "username", "password", "secret"};
     for (const auto &[key, value] : parsed["proxy"].items()) {
       static_cast<void>(value);
@@ -67,21 +68,20 @@ nlohmann::json body(const httplib::Request &request, const std::set<std::string>
   }
   return parsed;
 }
+std::int64_t path_integer(const std::string &value) {
+  const auto parsed = parse_int64(value);
+  if (!parsed)
+    throw std::runtime_error("request.invalid");
+  return *parsed;
+}
 std::int64_t integer_parameter(const httplib::Request &request, const char *name) {
-  const auto value = request.get_param_value(name);
-  if (value.empty() || value.find_first_not_of("-0123456789") != std::string::npos)
-    throw std::runtime_error("request.invalid");
-  std::size_t parsed = 0;
-  const auto result = std::stoll(value, &parsed);
-  if (parsed != value.size())
-    throw std::runtime_error("request.invalid");
-  return result;
+  return path_integer(request.get_param_value(name));
 }
 std::size_t limit_parameter(const httplib::Request &request, std::size_t fallback, std::size_t maximum) {
   if (!request.has_param("limit"))
     return fallback;
   const auto value = integer_parameter(request, "limit");
-  if (value < 1 || static_cast<std::size_t>(value) > maximum)
+  if (value < 1 || static_cast<std::uint64_t>(value) > maximum)
     throw std::runtime_error("request.invalid");
   return static_cast<std::size_t>(value);
 }
@@ -133,6 +133,24 @@ nlohmann::json exception_result(const std::exception &exception) {
                                                                                                               : 409;
   return {{"_error", true}, {"code", code}, {"status", status}};
 }
+// Holds one of an account's read slots for the lifetime of a request.
+class ReadSlot final {
+public:
+  ReadSlot(AccountReadLimiter &limiter, std::string uuid)
+      : limiter_(limiter), uuid_(std::move(uuid)), held_(limiter.acquire(uuid_)) {}
+  ~ReadSlot() {
+    if (held_)
+      limiter_.release(uuid_);
+  }
+  ReadSlot(const ReadSlot &) = delete;
+  ReadSlot &operator=(const ReadSlot &) = delete;
+  bool held() const { return held_; }
+
+private:
+  AccountReadLimiter &limiter_;
+  std::string uuid_;
+  bool held_;
+};
 void runtime_response(httplib::Response &response, const nlohmann::json &result, const std::string &id,
                       int success_status = 200) {
   if (result.value("_error", false)) {
@@ -144,6 +162,24 @@ void runtime_response(httplib::Response &response, const nlohmann::json &result,
   }
 }
 } // namespace
+
+bool AccountReadLimiter::acquire(const std::string &uuid) {
+  std::lock_guard lock(mutex_);
+  auto &count = in_flight_[uuid];
+  if (count >= limit_)
+    return false;
+  ++count;
+  return true;
+}
+
+void AccountReadLimiter::release(const std::string &uuid) {
+  std::lock_guard lock(mutex_);
+  const auto found = in_flight_.find(uuid);
+  if (found == in_flight_.end())
+    return;
+  if (--found->second == 0)
+    in_flight_.erase(found);
+}
 
 HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(config), runtime_(runtime) {
   server_.new_task_queue = [] { return new httplib::ThreadPool(4, 8, 64); };
@@ -193,6 +229,12 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                 const std::string id = request_id(request);
                 if (!authorize(config_, request, response, id))
                   return;
+                ReadSlot slot(reads_, request.matches[1]);
+                if (!slot.held()) {
+                  response.set_header("Retry-After", "1");
+                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
+                  return;
+                }
                 try {
                   const auto list = request.get_param_value("list");
                   if (list != "main" && list != "archive")
@@ -210,8 +252,14 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
     const std::string id = request_id(request);
     if (!authorize(config_, request, response, id))
       return;
+    ReadSlot slot(reads_, request.matches[1]);
+    if (!slot.held()) {
+      response.set_header("Retry-After", "1");
+      runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
+      return;
+    }
     try {
-      const auto chat_id = std::stoll(request.matches[2]);
+      const auto chat_id = path_integer(request.matches[2]);
       const auto key = lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
       auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
       runtime_response(response,
@@ -226,8 +274,14 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
         const std::string id = request_id(request);
         if (!authorize(config_, request, response, id))
           return;
+        ReadSlot slot(reads_, request.matches[1]);
+        if (!slot.held()) {
+          response.set_header("Retry-After", "1");
+          runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
+          return;
+        }
         try {
-          const auto chat_id = std::stoll(request.matches[2]);
+          const auto chat_id = path_integer(request.matches[2]);
           const auto key = lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
           auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
           runtime_response(response,
@@ -245,15 +299,21 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                 const std::string id = request_id(request);
                 if (!authorize(config_, request, response, id))
                   return;
+                ReadSlot slot(reads_, request.matches[1]);
+                if (!slot.held()) {
+                  response.set_header("Retry-After", "1");
+                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
+                  return;
+                }
                 try {
-                  const auto chat_id = std::stoll(request.matches[2]);
+                  const auto chat_id = path_integer(request.matches[2]);
                   const auto key =
                       lease_key(request, request.get_param_value("view_id")) + ":" + std::to_string(chat_id);
                   auto interest = runtime_.set_interest(request.matches[1], chat_id, key, true, false);
                   runtime_response(response,
-                                   interest.value("_error", false)
-                                       ? interest
-                                       : runtime_.message(request.matches[1], chat_id, std::stoll(request.matches[3])),
+                                   interest.value("_error", false) ? interest
+                                                                   : runtime_.message(request.matches[1], chat_id,
+                                                                                      path_integer(request.matches[3])),
                                    id);
                 } catch (const std::exception &exception) {
                   runtime_response(response, exception_result(exception), id);
@@ -264,10 +324,16 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                 const std::string id = request_id(request);
                 if (!authorize(config_, request, response, id))
                   return;
+                ReadSlot slot(reads_, request.matches[1]);
+                if (!slot.held()) {
+                  response.set_header("Retry-After", "1");
+                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
+                  return;
+                }
                 try {
                   runtime_response(response,
-                                   runtime_.preview(request.matches[1], std::stoll(request.matches[2]),
-                                                    std::stoll(request.matches[3]), request.matches[4]),
+                                   runtime_.preview(request.matches[1], path_integer(request.matches[2]),
+                                                    path_integer(request.matches[3]), request.matches[4]),
                                    id);
                 } catch (const std::exception &exception) {
                   runtime_response(response, exception_result(exception), id);
@@ -278,6 +344,12 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                 const std::string id = request_id(request);
                 if (!authorize(config_, request, response, id))
                   return;
+                ReadSlot slot(reads_, request.matches[1]);
+                if (!slot.held()) {
+                  response.set_header("Retry-After", "1");
+                  runtime_response(response, exception_result(std::runtime_error("service.busy")), id);
+                  return;
+                }
                 try {
                   runtime_response(response,
                                    runtime_.updates(request.matches[1], request.get_param_value("cursor"),
@@ -298,8 +370,8 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
         throw std::runtime_error("request.invalid");
       const auto key = payload.at("principal_type").get<std::string>() + ":" +
                        payload.at("principal_id").get<std::string>() + ":" + view_id + ":" + request.matches[2].str();
-      runtime_response(response, runtime_.set_interest(request.matches[1], std::stoll(request.matches[2]), key, active),
-                       id);
+      runtime_response(response,
+                       runtime_.set_interest(request.matches[1], path_integer(request.matches[2]), key, active), id);
     } catch (const std::exception &exception) {
       runtime_response(response, exception_result(exception), id);
     }

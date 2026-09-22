@@ -9,6 +9,7 @@ use App\Http\Requests\InterestRequest;
 use App\Http\Requests\ListChatsRequest;
 use App\Http\Requests\ListMessagesRequest;
 use App\Http\Requests\ListUpdatesRequest;
+use App\Http\Requests\PreviewRequest;
 use App\Http\Requests\ReadChatRequest;
 use App\Http\Resources\TelegramReadResource;
 use App\Services\TelegramReadService;
@@ -37,7 +38,7 @@ final class TelegramReadController extends Controller
         return (new TelegramReadResource($service->message($uuid, $chatId, $messageId, $request->inputData(), RequestContext::principal($request), RequestContext::requestId($request)), 'message'))->respond(RequestContext::requestId($request));
     }
 
-    public function preview(string $uuid, string $chatId, string $messageId, string $previewId, ReadChatRequest $request, TelegramReadService $service): Response
+    public function preview(string $uuid, string $chatId, string $messageId, string $previewId, PreviewRequest $request, TelegramReadService $service): Response
     {
         $preview = $service->preview($uuid, $chatId, $messageId, $previewId, RequestContext::requestId($request));
 

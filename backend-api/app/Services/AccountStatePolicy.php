@@ -65,11 +65,15 @@ final class AccountStatePolicy
             throw new ApiException('operation.conflict', 409);
         }
 
+        $inherited = $proxy['mode'] === 'inherit';
+
         return [
             'proxy_id' => $proxy['id'] ?? null,
             'proxy_server' => $proxy['host'] ?? null,
             'proxy_port' => $proxy['port'] ?? null,
-            'proxy_type' => $proxy['mode'] === 'inherit' ? null : $proxy['mode'],
+            'proxy_type' => $inherited ? null : $proxy['mode'],
+            'proxy_config' => $inherited ? null : $proxy,
+            'proxy_config_version' => $inherited ? 0 : $account->proxy_config_version + 1,
             'desired_revision' => $account->desired_revision + 1,
             'effective_config_id' => (string) Str::uuid(),
             'operation_id' => (string) Str::uuid(),
@@ -115,6 +119,8 @@ final class AccountStatePolicy
                 'proxy_server' => null,
                 'proxy_port' => null,
                 'proxy_type' => null,
+                'proxy_config' => null,
+                'proxy_config_version' => 0,
                 'lifecycle' => AccountLifecycle::Removed,
                 'runtime_available' => false,
                 'authorization_state' => null,

@@ -5,11 +5,14 @@
 #include "telebezel/runtime/commands.hpp"
 #include "telebezel/runtime/cursor_codec.hpp"
 #include "telebezel/runtime/request_broker.hpp"
+#include "telebezel/runtime/support.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <set>
 #include <thread>
+#include <vector>
 namespace telebezel::runtime {
 using OperationDeadline = std::chrono::steady_clock::time_point;
 class ProxyService final {
@@ -73,7 +76,9 @@ public:
   nlohmann::json updates(const std::string &uuid, const std::string &cursor, std::size_t limit) const;
 
 private:
+  enum class RefreshKind : std::uint8_t { history, message, preview, evict };
   struct RefreshJob {
+    RefreshKind kind{RefreshKind::history};
     std::string uuid;
     std::string epoch;
     std::uint64_t authorization_generation{0};
@@ -84,21 +89,58 @@ private:
     std::string key;
     std::int32_t preview_file_id{0};
     std::size_t preview_size{0};
+    std::int32_t client{0};
   };
+  // A reservation bounds concurrent downloads; ready_bytes bounds what is on
+  // disk. They are counted separately.
+  struct PreviewEntry {
+    enum class State : std::uint8_t { queued, downloading, ready, failed } state{State::queued};
+    std::string uuid;
+    std::int32_t client{0};
+    std::int32_t file_id{0};
+    std::size_t reserved{0};
+    std::size_t ready_bytes{0};
+    unsigned attempts{0};
+    std::chrono::steady_clock::time_point retry_at{};
+    std::chrono::steady_clock::time_point used_at{};
+  };
+  struct RefreshOutcome {
+    std::string state;
+    std::chrono::steady_clock::time_point at{};
+  };
+  struct HistoryPage {
+    std::vector<nlohmann::json> items;
+    bool exhausted{false};
+    bool failed{false};
+    bool deadline{false};
+  };
+  HistoryPage fetch_history(std::int32_t client, std::int64_t chat_id, std::int64_t anchor, std::size_t limit,
+                            bool only_local, std::chrono::steady_clock::time_point deadline);
   std::string enqueue_refresh(RefreshJob job);
+  void invalidate_preview(const std::string &key);
+  // reserve_preview and drop_preview require refresh_mutex_.
+  bool reserve_preview(const RefreshJob &job);
+  void drop_preview(const std::string &key);
+  void release_preview(const std::string &key, bool ready, std::size_t bytes);
   void prepare_preview(nlohmann::json &item, const std::string &uuid, const std::string &generation,
-                       const std::string &epoch, std::uint64_t authorization_generation);
+                       const std::string &epoch, std::uint64_t authorization_generation, std::int32_t client);
   void refresh_loop();
+  bool run_refresh(const RefreshJob &job);
+  bool publish_projections(const RefreshJob &job, const ReadFence &fence, const std::vector<nlohmann::json> &items);
   AccountStore &context_;
   const Config &config_;
   TdRequestBroker &broker_;
   CursorCodec &cursors_;
   std::mutex refresh_mutex_;
   std::condition_variable refresh_condition_;
-  std::deque<RefreshJob> refresh_queue_;
+  // Served round-robin so a stalled client cannot monopolise the worker.
+  std::map<std::string, std::deque<RefreshJob>> refresh_queues_;
+  std::deque<std::string> refresh_rotation_;
   std::set<std::string> refresh_keys_;
-  std::map<std::string, std::size_t> preview_reservations_;
+  std::map<std::string, RefreshOutcome> refresh_results_;
+  std::map<std::string, PreviewEntry> preview_entries_;
   std::size_t preview_reserved_bytes_{0};
+  std::size_t preview_cache_bytes_{0};
   bool refresh_stopping_{false};
   std::thread refresh_thread_;
 };
@@ -116,6 +158,7 @@ private:
   AccountStore &context_;
   TdRequestBroker &broker_;
   std::atomic<bool> stopping_{false};
+  std::string rotation_cursor_;
   std::thread worker_;
 };
 class RuntimeEngine final {

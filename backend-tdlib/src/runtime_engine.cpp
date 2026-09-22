@@ -5,8 +5,50 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <optional>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
+namespace {
+std::optional<std::int64_t> update_chat_id(const td_api::Object &object) {
+  switch (object.get_id()) {
+  case td_api::updateChatTitle::ID:
+    return static_cast<const td_api::updateChatTitle &>(object).chat_id_;
+  case td_api::updateChatPosition::ID:
+    return static_cast<const td_api::updateChatPosition &>(object).chat_id_;
+  case td_api::updateChatLastMessage::ID:
+    return static_cast<const td_api::updateChatLastMessage &>(object).chat_id_;
+  case td_api::updateChatDraftMessage::ID:
+    return static_cast<const td_api::updateChatDraftMessage &>(object).chat_id_;
+  case td_api::updateNewMessage::ID: {
+    const auto &update = static_cast<const td_api::updateNewMessage &>(object);
+    return update.message_ ? std::optional<std::int64_t>(update.message_->chat_id_) : std::nullopt;
+  }
+  case td_api::updateMessageContent::ID:
+    return static_cast<const td_api::updateMessageContent &>(object).chat_id_;
+  case td_api::updateMessageEdited::ID:
+    return static_cast<const td_api::updateMessageEdited &>(object).chat_id_;
+  case td_api::updateDeleteMessages::ID:
+    return static_cast<const td_api::updateDeleteMessages &>(object).chat_id_;
+  case td_api::updateChatReadInbox::ID:
+    return static_cast<const td_api::updateChatReadInbox &>(object).chat_id_;
+  case td_api::updateChatReadOutbox::ID:
+    return static_cast<const td_api::updateChatReadOutbox &>(object).chat_id_;
+  case td_api::updateChatIsMarkedAsUnread::ID:
+    return static_cast<const td_api::updateChatIsMarkedAsUnread &>(object).chat_id_;
+  default:
+    return std::nullopt;
+  }
+}
+
+void report_unknown_chat(const std::string &uuid, std::int64_t chat_id, std::int32_t update_id) {
+  std::cerr << nlohmann::json{{"event", "chat_projection_missing"},
+                              {"account_uuid", uuid},
+                              {"chat_id", std::to_string(chat_id)},
+                              {"update_id", update_id}}
+                   .dump()
+            << '\n';
+}
+} // namespace
 void RuntimeEngine::start() {
   if (receive_thread_.joinable())
     return;
@@ -26,7 +68,8 @@ void RuntimeEngine::start() {
       account.lifecycle = manifest.lifecycle;
       account.operation_id = manifest.operation_id;
       account.operation_phase = manifest.operation_phase;
-      account.revision_fingerprint = manifest.content_hash;
+      account.revision_fingerprint =
+          manifest.content_hash.starts_with(fingerprint_version) ? manifest.content_hash : std::string{};
       account.proxy = manifest.proxy;
       account.runtime_epoch = make_request_id();
       account.tombstone = manifest.tombstone;
@@ -235,8 +278,8 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       account.telegram_identity = nullptr;
       account.main_exhausted = false;
       account.archive_exhausted = false;
-      ++account.main_order_version;
-      ++account.archive_order_version;
+      account.main_orders.reset();
+      account.archive_orders.reset();
       account.reconciled = false;
     }
     account.authorization_state = authorization_name(state_id);
@@ -274,6 +317,10 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       account.closing = false;
       if (account.client_id == client_id)
         account.client_id = 0;
+      account.proxy_applied = false;
+      account.applied_proxy = nullptr;
+      account.applied_telegram_api_id = 0;
+      account.applied_telegram_api_hash.clear();
       context_.client_accounts_.erase(mapped);
       if (account.lifecycle != "logout_pending" && account.lifecycle != "removing")
         account.reconciled = false;
@@ -302,42 +349,55 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   } else if (object.get_id() == td_api::updateNewChat::ID) {
     auto &update = static_cast<td_api::updateNewChat &>(object);
     if (update.chat_) {
-      account.chats[update.chat_->id_] = chat_projection(*update.chat_);
+      auto projection = chat_projection(*update.chat_);
+      auto *const known = existing_chat(account, update.chat_->id_);
+      record_order_change(
+          account, known == nullptr ? nlohmann::json::object() : known->value("positions", nlohmann::json::object()),
+          projection.value("positions", nlohmann::json::object()));
+      account.chats[update.chat_->id_] = std::move(projection);
       account.sender_names["chat:" + std::to_string(update.chat_->id_)] = update.chat_->title_;
-      ++account.main_order_version;
-      ++account.archive_order_version;
       if (update.chat_->last_message_) {
-        auto projection = message_projection(*update.chat_->last_message_);
-        decorate_sender(account, projection);
-        context_.put_message(account, {update.chat_->id_, update.chat_->last_message_->id_}, std::move(projection));
+        auto message = message_projection(*update.chat_->last_message_);
+        decorate_sender(account, message);
+        context_.put_message(account, {update.chat_->id_, update.chat_->last_message_->id_}, std::move(message));
       }
       UpdateJournal::append(account, "chat_changed", update.chat_->id_);
     }
-  } else if (object.get_id() == td_api::updateChatTitle::ID) {
+    return;
+  }
+  // Every remaining update addresses a chat TDLib already announced with
+  // updateNewChat; materialising one here would publish a projection holding
+  // nothing but the fields of this update.
+  const auto chat_id = update_chat_id(object);
+  if (!chat_id)
+    return;
+  auto *const chat = existing_chat(account, *chat_id);
+  if (chat == nullptr) {
+    report_unknown_chat(account.uuid, *chat_id, object.get_id());
+    return;
+  }
+  if (object.get_id() == td_api::updateChatTitle::ID) {
     auto &update = static_cast<td_api::updateChatTitle &>(object);
-    account.chats[update.chat_id_]["id"] = std::to_string(update.chat_id_);
-    account.chats[update.chat_id_]["title"] = update.title_;
+    (*chat)["title"] = update.title_;
     account.sender_names["chat:" + std::to_string(update.chat_id_)] = update.title_;
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatPosition::ID) {
     auto &update = static_cast<td_api::updateChatPosition &>(object);
-    account.chats[update.chat_id_]["id"] = std::to_string(update.chat_id_);
-    if (!account.chats[update.chat_id_].contains("positions"))
-      account.chats[update.chat_id_]["positions"] = nlohmann::json::object();
-    apply_position(account.chats[update.chat_id_], update.position_.get());
-    ++account.main_order_version;
-    ++account.archive_order_version;
+    const auto before = chat->value("positions", nlohmann::json::object());
+    if (!chat->contains("positions"))
+      (*chat)["positions"] = nlohmann::json::object();
+    apply_position(*chat, update.position_.get());
+    record_order_change(account, before, chat->value("positions", nlohmann::json::object()));
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatLastMessage::ID) {
     auto &update = static_cast<td_api::updateChatLastMessage &>(object);
-    auto &chat = account.chats[update.chat_id_];
-    chat["id"] = std::to_string(update.chat_id_);
-    chat["positions"] = nlohmann::json::object();
+    const auto before = chat->value("positions", nlohmann::json::object());
+    (*chat)["positions"] = nlohmann::json::object();
     for (const auto &position : update.positions_)
-      apply_position(chat, position.get());
-    ++account.main_order_version;
-    ++account.archive_order_version;
-    chat["last_message"] = update.last_message_ ? message_projection(*update.last_message_) : nlohmann::json(nullptr);
+      apply_position(*chat, position.get());
+    record_order_change(account, before, chat->value("positions", nlohmann::json::object()));
+    (*chat)["last_message"] =
+        update.last_message_ ? message_projection(*update.last_message_) : nlohmann::json(nullptr);
     if (update.last_message_) {
       auto projection = message_projection(*update.last_message_);
       decorate_sender(account, projection);
@@ -346,13 +406,11 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatDraftMessage::ID) {
     auto &update = static_cast<td_api::updateChatDraftMessage &>(object);
-    auto &chat = account.chats[update.chat_id_];
-    chat["id"] = std::to_string(update.chat_id_);
-    chat["positions"] = nlohmann::json::object();
+    const auto before = chat->value("positions", nlohmann::json::object());
+    (*chat)["positions"] = nlohmann::json::object();
     for (const auto &position : update.positions_)
-      apply_position(chat, position.get());
-    ++account.main_order_version;
-    ++account.archive_order_version;
+      apply_position(*chat, position.get());
+    record_order_change(account, before, chat->value("positions", nlohmann::json::object()));
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateNewMessage::ID) {
     auto &update = static_cast<td_api::updateNewMessage &>(object);
@@ -370,7 +428,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       projection["content"] = message_content(update.new_content_.get());
       context_.put_message(account, {update.chat_id_, update.message_id_}, std::move(projection));
     }
-    auto &last = account.chats[update.chat_id_]["last_message"];
+    auto &last = (*chat)["last_message"];
     if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
       last["content"] = message_content(update.new_content_.get());
       UpdateJournal::append(account, "chat_changed", update.chat_id_);
@@ -384,7 +442,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       projection["edit_date"] = update.edit_date_;
       context_.put_message(account, {update.chat_id_, update.message_id_}, std::move(projection));
     }
-    auto &last = account.chats[update.chat_id_]["last_message"];
+    auto &last = (*chat)["last_message"];
     if (last.is_object() && last.value("id", "") == std::to_string(update.message_id_)) {
       last["edit_date"] = update.edit_date_;
       UpdateJournal::append(account, "chat_changed", update.chat_id_);
@@ -396,7 +454,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       context_.erase_message(account, {update.chat_id_, message_id});
       UpdateJournal::append(account, update.from_cache_ ? "message_changed" : "message_deleted", update.chat_id_,
                             message_id);
-      auto &last = account.chats[update.chat_id_]["last_message"];
+      auto &last = (*chat)["last_message"];
       if (last.is_object() && last.value("id", "") == std::to_string(message_id)) {
         last = nullptr;
         UpdateJournal::append(account, "chat_changed", update.chat_id_);
@@ -404,17 +462,16 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     }
   } else if (object.get_id() == td_api::updateChatReadInbox::ID) {
     auto &update = static_cast<td_api::updateChatReadInbox &>(object);
-    auto &chat = account.chats[update.chat_id_];
-    chat["last_read_inbox_message_id"] = std::to_string(update.last_read_inbox_message_id_);
-    chat["unread_count"] = update.unread_count_;
+    (*chat)["last_read_inbox_message_id"] = std::to_string(update.last_read_inbox_message_id_);
+    (*chat)["unread_count"] = update.unread_count_;
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatReadOutbox::ID) {
     auto &update = static_cast<td_api::updateChatReadOutbox &>(object);
-    account.chats[update.chat_id_]["last_read_outbox_message_id"] = std::to_string(update.last_read_outbox_message_id_);
+    (*chat)["last_read_outbox_message_id"] = std::to_string(update.last_read_outbox_message_id_);
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   } else if (object.get_id() == td_api::updateChatIsMarkedAsUnread::ID) {
     auto &update = static_cast<td_api::updateChatIsMarkedAsUnread &>(object);
-    account.chats[update.chat_id_]["is_marked_unread"] = update.is_marked_as_unread_;
+    (*chat)["is_marked_unread"] = update.is_marked_as_unread_;
     UpdateJournal::append(account, "chat_changed", update.chat_id_);
   }
 }

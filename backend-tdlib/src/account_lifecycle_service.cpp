@@ -50,41 +50,46 @@ nlohmann::json AccountLifecycleService::reconcile(const std::string &uuid, const
     if (account->busy)
       return safe_error("operation.conflict", 409);
     const auto revision = command.revision;
-    if (revision == account->revision && !account->revision_fingerprint.empty()) {
-      if (account->revision_fingerprint != fingerprint)
-        return safe_error("operation.conflict", 409);
-      if (account->reconciled && account->operation_id.empty()) {
-        auto result = account_json(*account);
-        result["completed"] = account->operation_id.empty();
-        return result;
-      }
-    }
+    if (revision == account->revision && !account->revision_fingerprint.empty() &&
+        account->revision_fingerprint != fingerprint)
+      return safe_error("operation.conflict", 409);
     if (command.mode == ActivationMode::restore && !registry_.account_directory_exists(uuid))
       return safe_error("storage.missing", 409);
     if (account->busy)
       return safe_error("operation.conflict", 409);
     const auto requested_proxy = command.proxy;
-    if (requested_proxy.size() == 1 && requested_proxy.contains("id") &&
-        account->proxy.value("id", "") != requested_proxy.value("id", ""))
+    const bool abbreviated_proxy = requested_proxy.size() == 1 && requested_proxy.contains("id");
+    if (abbreviated_proxy && account->proxy.value("id", "") != requested_proxy.value("id", ""))
       return safe_error("configuration.missing", 409);
-    account->busy = true;
+    const auto desired_proxy = abbreviated_proxy ? account->proxy : requested_proxy;
     const auto requested_api_id = command.telegram_api_id.value_or(config_.telegram_api_id);
     const auto requested_api_hash = command.telegram_api_hash.value_or(config_.telegram_api_hash);
-    recreate_client =
-        account->client_id != 0 && !account->closed &&
-        (account->telegram_api_id != requested_api_id || account->telegram_api_hash != requested_api_hash);
-    apply_existing_proxy = account->client_id != 0 && !account->closed && !recreate_client &&
-                           !(requested_proxy.size() == 1 && requested_proxy.contains("id")) &&
-                           account->proxy != requested_proxy;
+    const bool client_live = account->client_id != 0 && !account->closed;
+    // Compared against what TDLib is actually running with, never against the
+    // desired fields themselves: writing the intent and then failing must not
+    // make the next attempt believe the work is done.
+    const bool settled = client_live && account->reconciled && account->operation_id.empty() &&
+                         account->applied_revision == revision && account->proxy_applied &&
+                         account->applied_proxy == desired_proxy &&
+                         account->applied_telegram_api_id == requested_api_id &&
+                         account->applied_telegram_api_hash == requested_api_hash;
+    if (revision == account->revision && !account->revision_fingerprint.empty() && settled) {
+      auto result = account_json(*account);
+      result["completed"] = true;
+      return result;
+    }
+    account->busy = true;
+    recreate_client = client_live && (account->applied_telegram_api_id != requested_api_id ||
+                                      account->applied_telegram_api_hash != requested_api_hash);
+    apply_existing_proxy =
+        client_live && !recreate_client && (!account->proxy_applied || account->applied_proxy != desired_proxy);
     account->authorization_generation = command.authorization_generation.value_or(account->authorization_generation);
     account->revision = revision;
     account->effective_config_id = command.effective_config_id;
-    account->telegram_api_id = command.telegram_api_id.value_or(config_.telegram_api_id);
-    account->telegram_api_hash = command.telegram_api_hash.value_or(config_.telegram_api_hash);
+    account->telegram_api_id = requested_api_id;
+    account->telegram_api_hash = requested_api_hash;
     account->lifecycle = command.lifecycle;
-    if (!(requested_proxy.size() == 1 && requested_proxy.contains("id"))) {
-      account->proxy = requested_proxy;
-    }
+    account->proxy = desired_proxy;
     account->operation_id = command.operation_id;
     account->revision_fingerprint = fingerprint;
   }
@@ -186,6 +191,10 @@ void AccountLifecycleService::activate(Account &account, OperationDeadline deadl
     account.client_id = client;
     account.runtime_epoch = make_request_id();
     account.closed = false;
+    account.proxy_applied = false;
+    account.applied_proxy = nullptr;
+    account.applied_telegram_api_id = 0;
+    account.applied_telegram_api_hash.clear();
     context_.client_accounts_[client] = uuid;
   }
   try {
@@ -215,6 +224,9 @@ void AccountLifecycleService::activate(Account &account, OperationDeadline deadl
     throw_runtime_control_error(response);
     if (!response || response->get_id() == td_api::error::ID)
       throw std::runtime_error("configuration.invalid");
+    std::lock_guard lock(context_.mutex_);
+    account.applied_telegram_api_id = telegram_api_id;
+    account.applied_telegram_api_hash = telegram_api_hash;
   } catch (...) {
     const auto failure = std::current_exception();
     {
@@ -280,8 +292,8 @@ nlohmann::json AccountLifecycleService::logout(const std::string &uuid, const Ac
     account->interest_states.clear();
     account->main_exhausted = false;
     account->archive_exhausted = false;
-    ++account->main_order_version;
-    ++account->archive_order_version;
+    account->main_orders.reset();
+    account->archive_orders.reset();
   }
 
   const auto persist = [&](const std::string &phase, const std::string &lifecycle,
@@ -386,7 +398,8 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
       const auto requested_proxy = command.proxy;
       if (!(requested_proxy.size() == 1 && requested_proxy.contains("id")) && account->proxy != requested_proxy)
         return safe_error("operation.conflict", 409);
-      if (account->operation_id.empty()) {
+      if (account->operation_id.empty() && account->client_id != 0 && !account->closed && account->proxy_applied &&
+          account->applied_proxy == account->proxy) {
         auto result = account_json(*account);
         result["completed"] = true;
         return result;
@@ -394,11 +407,16 @@ nlohmann::json AccountLifecycleService::update_proxy(const std::string &uuid, co
     }
     if (account->busy)
       return safe_error("operation.conflict", 409);
+    const auto requested_proxy = command.proxy;
+    const bool abbreviated_proxy = requested_proxy.size() == 1 && requested_proxy.contains("id");
+    if (abbreviated_proxy && account->proxy.value("id", "") != requested_proxy.value("id", ""))
+      return safe_error("configuration.missing", 409);
     account->busy = true;
     account->authorization_generation = command.authorization_generation.value_or(account->authorization_generation);
     account->revision = command.revision;
     account->effective_config_id = command.effective_config_id;
-    account->proxy = command.proxy;
+    if (!abbreviated_proxy)
+      account->proxy = requested_proxy;
     account->operation_id = command.operation_id;
     account->revision_fingerprint = fingerprint;
     intent_manifest = {1,
@@ -610,6 +628,10 @@ void AccountLifecycleService::close_account(Account &account, bool destroy, Oper
     throw std::runtime_error("operation.outcome_unknown");
   context_.client_accounts_.erase(client);
   account.client_id = 0;
+  account.proxy_applied = false;
+  account.applied_proxy = nullptr;
+  account.applied_telegram_api_id = 0;
+  account.applied_telegram_api_hash.clear();
 }
 
 } // namespace telebezel::runtime

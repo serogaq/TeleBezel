@@ -113,6 +113,8 @@
     else accountRefreshDelay = 1000;
   };
   let authorizationTimer = null;
+  let authorizationSequence = 0;
+  const qrcode = globalThis.TeleBezelQr;
   const authorizationActions = {
     submit_phone_number: ['Phone number', 'tel', 'Send phone number'],
     submit_code: ['Login code', 'text', 'Send code'],
@@ -122,12 +124,33 @@
     start_qr: [null, null, 'Use QR login'],
     resend_code: [null, null, 'Resend code']
   };
-  const renderAuthorization = (id, auth) => {
+  const stopAuthorizationPolling = () => {
     if (authorizationTimer !== null) clearTimeout(authorizationTimer);
+    authorizationTimer = null;
+  };
+  const renderQr = (panel, link) => {
+    let markup = null;
+    try { markup = qrcode.svg(link, 4, 4); } catch { markup = null; }
+    if (markup === null) {
+      panel.append(node('p', `Open this link on the phone running Telegram: ${link}`, 'meta'));
+      return;
+    }
+    const holder = node('div', null, 'qr');
+    holder.innerHTML = markup;
+    holder.firstChild.setAttribute('aria-label', 'Telegram login QR code');
+    panel.append(holder, node('p', 'In Telegram: Settings → Devices → Link Desktop Device, then scan this code.', 'meta'));
+  };
+  const renderAuthorization = (id, sequence, auth) => {
+    if (sequence !== authorizationSequence) return;
+    stopAuthorizationPolling();
     const panel = document.getElementById('authorization-panel');
     panel.hidden = false;
     panel.replaceChildren(node('h3', `Authorization · ${auth.state || 'unknown'}`));
-    if (auth.qr_link) panel.append(node('p', `Scan this link with Telegram: ${auth.qr_link}`));
+    if (auth.state === 'ready') {
+      panel.append(node('p', 'This account is authorized.', 'meta'));
+      return;
+    }
+    if (auth.qr_link) renderQr(panel, auth.qr_link);
     (auth.allowed_actions || []).forEach(action => {
       const definition = authorizationActions[action];
       if (!definition) return;
@@ -141,6 +164,7 @@
       const button = node('button', definition[2]); form.append(button);
       form.addEventListener('submit', async event => {
         event.preventDefault();
+        if (sequence !== authorizationSequence) return;
         try {
           await request(`/v1/owner/telegram/accounts/${id}/authorization/actions`, {
             method: 'POST', body: JSON.stringify(flow.authorizationPayload(auth, action, input ? input.value : null))
@@ -152,12 +176,17 @@
       panel.append(form);
     });
     if (auth.state === 'awaiting_qr_confirmation') {
-      authorizationTimer = setTimeout(() => authorize(id), 5000);
+      authorizationTimer = setTimeout(() => {
+        if (sequence === authorizationSequence) authorize(id);
+      }, 3000);
     }
   };
   const authorize = async id => {
-    try { renderAuthorization(id, await request(`/v1/owner/telegram/accounts/${id}/authorization`)); }
-    catch (error) { status.textContent = error.message; }
+    stopAuthorizationPolling();
+    authorizationSequence += 1;
+    const sequence = authorizationSequence;
+    try { renderAuthorization(id, sequence, await request(`/v1/owner/telegram/accounts/${id}/authorization`)); }
+    catch (error) { if (sequence === authorizationSequence) status.textContent = error.message; }
   };
   const pendingAccountKey = 'telebezel.pending-account-create';
   document.getElementById('account-add').addEventListener('submit', async event => {

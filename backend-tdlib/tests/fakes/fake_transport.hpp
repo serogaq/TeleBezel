@@ -13,6 +13,12 @@
 
 namespace telebezel::testing {
 namespace td_api = td::td_api;
+struct HistoryRequest {
+  std::int64_t chat_id;
+  std::int64_t from_message_id;
+  std::int32_t limit;
+  bool only_local;
+};
 class FakeTransport final : public telebezel::TdTransport {
 public:
   std::string initialize() override { return "1.8.67"; }
@@ -26,6 +32,10 @@ public:
       sent_.emplace_back(client, type);
       if (type == td_api::checkAuthenticationCode::ID)
         last_code_ = static_cast<const td_api::checkAuthenticationCode &>(*function).code_;
+      if (type == td_api::getChatHistory::ID) {
+        const auto &request = static_cast<const td_api::getChatHistory &>(*function);
+        history_requests_.push_back({request.chat_id_, request.from_message_id_, request.limit_, request.only_local_});
+      }
     }
     td_api::object_ptr<td_api::Object> scripted;
     bool has_script = false;
@@ -42,6 +52,30 @@ public:
       if (scripted)
         push({client, request, std::move(scripted)});
       return;
+    }
+    {
+      std::lock_guard lock(mutex_);
+      // Telegram delivers a loadChats page as updates and only then answers.
+      if (type == td_api::loadChats::ID && chat_total_ > 0) {
+        std::size_t emitted = 0;
+        while (emitted < chat_batch_ && chat_delivered_ < chat_total_) {
+          const auto index = static_cast<std::int64_t>(++chat_delivered_);
+          auto chat = td_api::make_object<td_api::chat>();
+          chat->id_ = index;
+          chat->title_ = "Chat " + std::to_string(index);
+          chat->type_ = td_api::make_object<td_api::chatTypePrivate>(index);
+          chat->positions_.push_back(td_api::make_object<td_api::chatPosition>(
+              td_api::make_object<td_api::chatListMain>(), 1000000 - index, false, nullptr));
+          responses_.push({client, 0, td_api::make_object<td_api::updateNewChat>(std::move(chat))});
+          ++emitted;
+        }
+        responses_.push({client, request,
+                         chat_delivered_ >= chat_total_
+                             ? td_api::object_ptr<td_api::Object>(td_api::make_object<td_api::error>(404, "Not Found"))
+                             : td_api::object_ptr<td_api::Object>(td_api::make_object<td_api::ok>())});
+        condition_.notify_one();
+        return;
+      }
     }
     if (type == td_api::getMe::ID) {
       auto user = td_api::make_object<td_api::user>();
@@ -104,6 +138,17 @@ public:
     }
     return total;
   }
+  std::vector<HistoryRequest> history_requests() {
+    std::lock_guard lock(mutex_);
+    return history_requests_;
+  }
+  // Delivers `total` chats, `batch` per loadChats, in descending order.
+  void script_chat_pagination(std::size_t total, std::size_t batch) {
+    std::lock_guard lock(mutex_);
+    chat_total_ = total;
+    chat_batch_ = batch;
+    chat_delivered_ = 0;
+  }
   void fail_next_send() { fail_send_.store(true); }
   void set_fail_add_proxy(bool value) { fail_add_proxy_.store(value); }
   void set_suppress_close_updates(bool value) { suppress_close_updates_.store(value); }
@@ -133,6 +178,10 @@ private:
   std::atomic<bool> fail_send_{false};
   std::atomic<bool> fail_add_proxy_{false};
   std::atomic<bool> suppress_close_updates_{false};
+  std::vector<HistoryRequest> history_requests_;
+  std::size_t chat_total_{0};
+  std::size_t chat_batch_{0};
+  std::size_t chat_delivered_{0};
 };
 
 } // namespace telebezel::testing

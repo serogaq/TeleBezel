@@ -1,8 +1,24 @@
 #include "telebezel/crypto.hpp"
+#include "telebezel/parse.hpp"
 #include "telebezel/runtime/support.hpp"
 #include <algorithm>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
+
+std::optional<ReadFence> read_fence(const AccountState &account) {
+  if (!account.reconciled || account.closed || account.tombstone || account.lifecycle != "active" ||
+      account.authorization_state != "ready" || account.client_id == 0)
+    return std::nullopt;
+  return ReadFence{account.generation, account.runtime_epoch, account.client_id, account.authorization_generation,
+                   account.event_sequence};
+}
+
+bool fence_valid(const AccountState &account, const ReadFence &fence) {
+  if (!read_fence(account) || account.generation != fence.generation || account.runtime_epoch != fence.epoch ||
+      account.client_id != fence.client || account.authorization_generation != fence.authorization_generation)
+    return false;
+  return account.events.empty() || fence.sequence + 1 >= account.events.front().value("sequence", 0ULL);
+}
 
 bool td_error_code(const td_api::object_ptr<td_api::Object> &object, int code) {
   return object && object->get_id() == td_api::error::ID && static_cast<const td_api::error &>(*object).code_ == code;
@@ -28,12 +44,11 @@ std::string command_fingerprint(nlohmann::json command) {
   command.erase("lifecycle");
   command.erase("operation_id");
   command.erase("authorization_generation");
-  if (command.contains("proxy") && command["proxy"].is_object()) {
-    const auto &proxy = command["proxy"];
-    command["proxy"] = proxy.contains("id") ? nlohmann::json{{"id", proxy["id"]}}
-                                            : nlohmann::json{{"mode", proxy.value("mode", "inherit")}};
-  }
-  return sha256_hex(command.dump());
+  // The whole proxy configuration is part of the identity of an intent: a
+  // payload carrying only the profile id is a different, truncated intent. The
+  // prefix names that rule, so a manifest written under the previous rule is
+  // recognised as such instead of conflicting for ever.
+  return std::string(fingerprint_version) + sha256_hex(command.dump());
 }
 std::pair<std::string, bool> delivery_method(const td_api::AuthenticationCodeType *type) {
   if (type == nullptr)
@@ -174,6 +189,29 @@ nlohmann::json chat_projection(const td_api::chat &chat) {
   for (const auto &position : chat.positions_)
     apply_position(projection, position.get());
   return projection;
+}
+
+nlohmann::json *existing_chat(Account &account, std::int64_t chat_id) {
+  const auto found = account.chats.find(chat_id);
+  return found == account.chats.end() ? nullptr : &found->second;
+}
+
+ChatOrderLog &order_log(Account &account, const std::string &list) {
+  return list == "archive" ? account.archive_orders : account.main_orders;
+}
+
+void record_order_change(Account &account, const nlohmann::json &before, const nlohmann::json &after) {
+  for (const auto *list : {"main", "archive"}) {
+    const auto previous = before.is_object() ? before.value(list, nlohmann::json::object()) : nlohmann::json::object();
+    const auto current = after.is_object() ? after.value(list, nlohmann::json::object()) : nlohmann::json::object();
+    if (previous == current)
+      continue;
+    std::int64_t order = 0;
+    for (const auto &position : {previous, current})
+      if (const auto parsed = parse_int64(position.value("order", std::string{"0"})))
+        order = std::max(order, *parsed);
+    order_log(account, list).record(order);
+  }
 }
 
 std::string authorization_name(std::int32_t id) {

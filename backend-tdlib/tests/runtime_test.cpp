@@ -14,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <set>
 #include <stdexcept>
 #include <td/telegram/td_api.h>
 #include <thread>
@@ -23,13 +24,17 @@ namespace td_api = td::td_api;
 
 using telebezel::testing::FakeTransport;
 
-template <class Predicate> void wait_until(Predicate predicate) {
-  for (int attempt = 0; attempt < 100; ++attempt) {
+template <class Predicate> void wait_until(Predicate predicate, int attempts = 100) {
+  for (int attempt = 0; attempt < attempts; ++attempt) {
     if (predicate())
       return;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   throw std::runtime_error("runtime test wait timed out");
+}
+std::string nullable(const nlohmann::json &value, const char *key) {
+  const auto found = value.find(key);
+  return found != value.end() && found->is_string() ? found->get<std::string>() : std::string{};
 }
 } // namespace
 
@@ -142,7 +147,8 @@ TEST_F(RuntimeTest, MultiAccountReadsAndInterests) {
   ASSERT_TRUE((snapshots["accounts"].size() == 2));
 }
 
-TEST_F(RuntimeTest, ConcurrentLeaseOpenSharesFailedTransition) {
+// An openChat TDLib never answered is undecided, not a refusal.
+TEST_F(RuntimeTest, ConcurrentLeaseOpenSharesUnknownOutcome) {
   transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
   wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
   transport->queue_response(td_api::openChat::ID, nullptr);
@@ -154,11 +160,30 @@ TEST_F(RuntimeTest, ConcurrentLeaseOpenSharesFailedTransition) {
   };
   auto first_request = std::async(std::launch::async, acquire, "device:one:view:42");
   auto second_request = std::async(std::launch::async, acquire, "device:two:view:42");
-  ASSERT_EQ(first_request.get().value("code", ""), "telegram.operation_failed");
-  ASSERT_EQ(second_request.get().value("code", ""), "telegram.operation_failed");
+  ASSERT_EQ(first_request.get().value("code", ""), "operation.outcome_unknown");
+  ASSERT_EQ(second_request.get().value("code", ""), "operation.outcome_unknown");
   const auto sent = transport->sent();
   ASSERT_EQ(
       std::count_if(sent.begin(), sent.end(), [](const auto &item) { return item.second == td_api::openChat::ID; }), 1);
+}
+
+// If the openChat did land, dropping the interest must still close the chat.
+TEST_F(RuntimeTest, UnknownOpenOutcomeStillClosesTheChat) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->queue_response(td_api::openChat::ID, nullptr);
+  const std::string device = "80112233-4455-4677-8899-aabbccddeeff";
+  const std::string view = "90112233-4455-4677-8899-aabbccddeeff";
+  const auto key = "device:" + device + ":" + view + ":42";
+  ASSERT_EQ(runtime->set_interest(first, 42, key, true).value("code", ""), "operation.outcome_unknown");
+  ASSERT_EQ(runtime->release_interests("device", device).value("released", 0), 1);
+  wait_until(
+      [&] {
+        const auto sent = transport->sent();
+        return std::count_if(sent.begin(), sent.end(),
+                             [](const auto &item) { return item.second == td_api::closeChat::ID; }) == 1;
+      },
+      600);
 }
 
 TEST_F(RuntimeTest, ChatCursorTracksOrderAcrossMoreThanFiftyChats) {
@@ -184,6 +209,210 @@ TEST_F(RuntimeTest, ChatCursorTracksOrderAcrossMoreThanFiftyChats) {
                                 75, td_api::make_object<td_api::chatPosition>(
                                         td_api::make_object<td_api::chatListMain>(), 2000, false, nullptr)));
   wait_until([&] { return runtime->chats(first, "main", 50, cursor).value("code", "") == "sync.resync_required"; });
+}
+
+// loadChats appends chats below the tail of the list. Those arrivals must not
+// invalidate a cursor that was issued for a page above them, or paging never
+// gets past the first page.
+TEST_F(RuntimeTest, ChatPaginationSurvivesChatsArrivingThroughLoadChats) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->script_chat_pagination(200, 25);
+  std::set<std::string> seen;
+  std::string cursor;
+  for (int page = 0; page < 40; ++page) {
+    const auto result = runtime->chats(first, "main", 20, cursor);
+    ASSERT_FALSE(result.contains("code")) << result.dump();
+    for (const auto &item : result["items"])
+      seen.insert(item.value("id", ""));
+    cursor = nullable(result, "next_cursor");
+    if (cursor.empty())
+      break;
+  }
+  ASSERT_EQ(seen.size(), 200U);
+  ASSERT_TRUE(cursor.empty());
+}
+
+// Archive movement leaves a main-list cursor alone; a move above the cursor
+// boundary invalidates it.
+TEST_F(RuntimeTest, ChatCursorSeparatesListsAndDetectsReordering) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  for (std::int64_t id = 1; id <= 40; ++id) {
+    auto chat = td_api::make_object<td_api::chat>();
+    chat->id_ = id;
+    chat->title_ = "Chat " + std::to_string(id);
+    chat->type_ = td_api::make_object<td_api::chatTypePrivate>(id);
+    chat->positions_.push_back(td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListMain>(),
+                                                                         1000 - id, false, nullptr));
+    transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(chat)));
+  }
+  wait_until([&] { return runtime->chats(first, "main", 20, "")["items"].size() == 20; });
+  const auto cursor = runtime->chats(first, "main", 20, "").value("next_cursor", "");
+  ASSERT_FALSE(cursor.empty());
+  auto archived = td_api::make_object<td_api::chat>();
+  archived->id_ = 500;
+  archived->title_ = "Archived";
+  archived->type_ = td_api::make_object<td_api::chatTypePrivate>(500);
+  archived->positions_.push_back(
+      td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListArchive>(), 5000, false, nullptr));
+  transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(archived)));
+  wait_until([&] { return runtime->chat(first, 500).contains("item"); });
+  ASSERT_EQ(runtime->chats(first, "main", 20, cursor)["items"].size(), 20U);
+  transport->emit_update(1, td_api::make_object<td_api::updateChatPosition>(
+                                40, td_api::make_object<td_api::chatPosition>(
+                                        td_api::make_object<td_api::chatListMain>(), 9000, false, nullptr)));
+  wait_until([&] { return runtime->chats(first, "main", 20, cursor).value("code", "") == "sync.resync_required"; });
+}
+
+// The background refresh uses the same page definition as the local read: the
+// anchor is excluded, so a limit of one still asks for two messages.
+TEST_F(RuntimeTest, BackgroundRefreshExcludesTheAnchorLikeTheLocalRead) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto message = [](std::int64_t id) {
+    auto item = td_api::make_object<td_api::message>();
+    item->id_ = id;
+    item->chat_id_ = 42;
+    item->sender_id_ = td_api::make_object<td_api::messageSenderUser>(7);
+    return item;
+  };
+  const auto history = [&](std::initializer_list<std::int64_t> ids) {
+    auto result = td_api::make_object<td_api::messages>();
+    for (const auto id : ids)
+      result->messages_.push_back(message(id));
+    return result;
+  };
+  const auto refreshed = [&](std::int64_t anchor) {
+    const auto requests = transport->history_requests();
+    return std::any_of(requests.begin(), requests.end(),
+                       [anchor](const auto &item) { return !item.only_local && item.from_message_id == anchor; });
+  };
+  transport->queue_response(td_api::getChatHistory::ID, history({100}));
+  transport->queue_response(td_api::getChatHistory::ID, history({100}));
+  const auto cursor = nullable(runtime->messages(first, 42, 1, ""), "next_cursor");
+  ASSERT_FALSE(cursor.empty());
+  wait_until([&] { return refreshed(0); }, 400);
+  transport->queue_response(td_api::getChatHistory::ID, history({100}));
+  transport->queue_response(td_api::getChatHistory::ID, history({100, 99}));
+  ASSERT_TRUE(runtime->messages(first, 42, 1, cursor)["items"].empty());
+  wait_until([&] { return refreshed(100); }, 400);
+  const auto requests = transport->history_requests();
+  const auto refresh = std::find_if(requests.begin(), requests.end(),
+                                    [](const auto &item) { return !item.only_local && item.from_message_id == 100; });
+  ASSERT_NE(refresh, requests.end());
+  ASSERT_EQ(refresh->limit, 2) << "the refresh gave the anchor's own slot away";
+  wait_until([&] { return runtime->message(first, 42, 99)["item"].value("id", "") == "99"; }, 400);
+}
+
+// Reading the same unchanged message again must not append journal entries, or
+// a client polling updates drives an endless event/GET loop.
+TEST_F(RuntimeTest, RefreshWithoutChangesDoesNotGrowTheJournal) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto message = [](const std::string &text) {
+    auto item = td_api::make_object<td_api::message>();
+    item->id_ = 77;
+    item->chat_id_ = 42;
+    item->sender_id_ = td_api::make_object<td_api::messageSenderUser>(7);
+    auto content = td_api::make_object<td_api::messageText>();
+    content->text_ = td_api::make_object<td_api::formattedText>();
+    content->text_->text_ = text;
+    item->content_ = std::move(content);
+    return item;
+  };
+  transport->queue_response(td_api::getMessageLocally::ID, message("Hello"));
+  transport->queue_response(td_api::getMessage::ID, message("Hello"));
+  const auto cursor = nullable(runtime->message(first, 42, 77), "updates_cursor");
+  ASSERT_FALSE(cursor.empty());
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    ASSERT_EQ(runtime->message(first, 42, 77)["item"].value("id", ""), "77");
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  wait_until([&] { return transport->pending_responses() == 0; }, 400);
+  ASSERT_TRUE(runtime->updates(first, cursor, 100)["items"].empty()) << "an unchanged refresh published a change";
+  std::this_thread::sleep_for(std::chrono::seconds(6));
+  transport->queue_response(td_api::getMessage::ID, message("Edited"));
+  runtime->message(first, 42, 77);
+  wait_until([&] { return !runtime->updates(first, cursor, 100)["items"].empty(); }, 400);
+  ASSERT_EQ(runtime->message(first, 42, 77)["item"]["content"].value("text", ""), "Edited");
+}
+
+// A finished download releases its reservation instead of holding the budget.
+TEST_F(RuntimeTest, PreviewBudgetEvictsInsteadOfSaturating) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto photo_message = [](std::int64_t id, std::int32_t file_id) {
+    auto message = td_api::make_object<td_api::message>();
+    message->id_ = id;
+    message->chat_id_ = 42;
+    auto content = td_api::make_object<td_api::messagePhoto>();
+    content->photo_ = td_api::make_object<td_api::photo>();
+    auto size = td_api::make_object<td_api::photoSize>();
+    size->photo_ = td_api::make_object<td_api::file>();
+    size->photo_->id_ = file_id;
+    size->photo_->size_ = 100000;
+    content->photo_->sizes_.push_back(std::move(size));
+    message->content_ = std::move(content);
+    return message;
+  };
+  const auto downloaded = [](std::int32_t file_id) {
+    auto file = td_api::make_object<td_api::file>();
+    file->id_ = file_id;
+    file->size_ = 100000;
+    file->local_ = td_api::make_object<td_api::localFile>();
+    file->local_->is_downloading_completed_ = true;
+    file->local_->downloaded_size_ = 100000;
+    return file;
+  };
+  for (std::int32_t index = 0; index < 40; ++index) {
+    auto history = td_api::make_object<td_api::messages>();
+    history->messages_.push_back(photo_message(1000 + index, 200 + index));
+    transport->queue_response(td_api::getChatHistory::ID, std::move(history));
+    transport->queue_response(td_api::downloadFile::ID, downloaded(200 + index));
+    const auto page = runtime->messages(first, 42, 1, "");
+    ASSERT_NE(page["items"][0]["content"].value("preview_state", ""), "saturated")
+        << "preview " << index << " was refused while the budget was free";
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+
+// A failed download must release its reservation and become retryable.
+TEST_F(RuntimeTest, FailedPreviewDownloadIsRetried) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto photo_message = [] {
+    auto message = td_api::make_object<td_api::message>();
+    message->id_ = 66;
+    message->chat_id_ = 42;
+    auto content = td_api::make_object<td_api::messagePhoto>();
+    content->photo_ = td_api::make_object<td_api::photo>();
+    auto size = td_api::make_object<td_api::photoSize>();
+    size->photo_ = td_api::make_object<td_api::file>();
+    size->photo_->id_ = 31;
+    size->photo_->size_ = 1024;
+    content->photo_->sizes_.push_back(std::move(size));
+    message->content_ = std::move(content);
+    return message;
+  };
+  auto history = td_api::make_object<td_api::messages>();
+  history->messages_.push_back(photo_message());
+  transport->queue_response(td_api::getChatHistory::ID, std::move(history));
+  transport->queue_response(td_api::downloadFile::ID, td_api::make_object<td_api::error>(400, "FILE_DOWNLOAD_FAILED"));
+  ASSERT_EQ(runtime->messages(first, 42, 1, "")["items"][0]["content"].value("preview_state", ""), "queued");
+  std::this_thread::sleep_for(std::chrono::seconds(3));
+  auto retry_history = td_api::make_object<td_api::messages>();
+  retry_history->messages_.push_back(photo_message());
+  transport->queue_response(td_api::getChatHistory::ID, std::move(retry_history));
+  auto file = td_api::make_object<td_api::file>();
+  file->id_ = 31;
+  file->size_ = 1024;
+  file->local_ = td_api::make_object<td_api::localFile>();
+  file->local_->is_downloading_completed_ = true;
+  file->local_->downloaded_size_ = 1024;
+  transport->queue_response(td_api::downloadFile::ID, std::move(file));
+  ASSERT_EQ(runtime->messages(first, 42, 1, "")["items"][0]["content"].value("preview_state", ""), "queued")
+      << "a failed download stayed pending for ever";
 }
 
 TEST_F(RuntimeTest, HistoryUsesLocalResultsAndInvalidatesAfterLogout) {
