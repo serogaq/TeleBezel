@@ -29,7 +29,6 @@ services:
       DB_USERNAME: "${POSTGRES_USER:-telebezel}"
       DB_PASSWORD_FILE: /run/secrets/postgres_password
       PGCONNECT_TIMEOUT: "2"
-      PGOPTIONS: "-c statement_timeout=2000 -c lock_timeout=500"
       CACHE_STORE: database
       QUEUE_CONNECTION: sync
       SESSION_DRIVER: database
@@ -118,7 +117,6 @@ services:
       DB_USERNAME: "${POSTGRES_USER:-telebezel}"
       DB_PASSWORD_FILE: /run/secrets/postgres_password
       PGCONNECT_TIMEOUT: "2"
-      PGOPTIONS: "-c statement_timeout=2000 -c lock_timeout=500"
       CACHE_STORE: database
       TDLIB_BASE_URL: http://backend-tdlib:8081
       TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token

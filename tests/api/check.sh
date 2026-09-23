@@ -34,7 +34,7 @@ node --test tests/Js/*Test.js
 "$php_bin" "$composer_bin" lint
 "$php_bin" vendor/bin/phpstan analyse --memory-limit=1G
 export APP_ENV=testing DB_CONNECTION=pgsql DB_URL= DB_HOST=127.0.0.1 DB_PORT="$port"
-export PGCONNECT_TIMEOUT=2 PGOPTIONS='-c statement_timeout=2000 -c lock_timeout=500'
+export PGCONNECT_TIMEOUT=2
 export DB_DATABASE="$database" DB_USERNAME=telebezel DB_PASSWORD=telebezel_test
 export TELEBEZEL_DISPOSABLE_DB="$database" TELEBEZEL_DISPOSABLE_PORT="$port"
 "$php_bin" "$root/tests/api/assert_disposable_db.php"

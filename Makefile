@@ -127,7 +127,7 @@ secrets-provision: ## Grant only required container UIDs access to secret files 
 	bash tests/secrets/provision_file.sh secrets/tdlib_database_master_key 10002
 
 db-migrate: ## Apply production-safe migrations explicitly
-	docker compose run --rm -e PGOPTIONS='-c statement_timeout=30000 -c lock_timeout=5000' backend-api php artisan telebezel:migrate-locked
+	docker compose run --rm -e DB_STATEMENT_TIMEOUT=30000 -e DB_LOCK_TIMEOUT=5000 backend-api php artisan telebezel:migrate-locked
 
 api-client-issue: ## Issue an API token: make api-client-issue NAME=my-watch
 	test -n "$(NAME)"

@@ -48,3 +48,34 @@ test('server statement timeout is active and connection recovers', function (): 
     }
     expect((int) DB::selectOne('select 1 as ready')->ready)->toBe(1);
 });
+test('configured timeouts are applied to every new connection', function (): void {
+    $original = Config::get('database.connections.pgsql');
+    try {
+        Config::set('database.connections.pgsql.statement_timeout', 1500);
+        Config::set('database.connections.pgsql.lock_timeout', '250');
+        DB::purge('pgsql');
+        expect(DB::selectOne('show statement_timeout')->statement_timeout)->toBe('1500ms');
+        expect(DB::selectOne('show lock_timeout')->lock_timeout)->toBe('250ms');
+    } finally {
+        Config::set('database.connections.pgsql', $original);
+        DB::purge('pgsql');
+    }
+    expect(DB::selectOne('show statement_timeout')->statement_timeout)->toBe('2s');
+});
+test('an invalid timeout is refused instead of reaching sql', function (): void {
+    $original = Config::get('database.connections.pgsql');
+    try {
+        Config::set('database.connections.pgsql.statement_timeout', '1; drop table migrations');
+        DB::purge('pgsql');
+        try {
+            DB::selectOne('select 1');
+            $this->fail('An invalid timeout reached the database');
+        } catch (QueryException $exception) {
+            expect($exception->getPrevious())->toBeInstanceOf(InvalidArgumentException::class);
+        }
+    } finally {
+        Config::set('database.connections.pgsql', $original);
+        DB::purge('pgsql');
+    }
+    expect((int) DB::selectOne('select 1 as ready')->ready)->toBe(1);
+});
