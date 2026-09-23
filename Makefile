@@ -19,7 +19,7 @@ TDLIB_BUILD_DIR ?= backend-tdlib/build
 TDLIB_CMAKE_ARGS ?=
 CMAKE_GENERATOR_ARGS ?= $(if $(wildcard $(TDLIB_BUILD_DIR)/CMakeCache.txt),,-G Ninja)
 
-.PHONY: help toolchain-check app-build app-check app-qemu app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test offline-restart-test image-smoke check clean
+.PHONY: help toolchain-check app-build app-check app-qemu app-emulator-check app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test offline-restart-test image-smoke check clean
 help:
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -46,6 +46,10 @@ app-qemu: ## Install an existing PBW in QEMU: PLATFORM=emery QEMU_FLAGS=--vnc
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
 	@test -f "$(PBW)" || { printf 'PBW not found: %s\nRun make app-build first or set PBW=/path/to/app.pbw\n' "$(PBW)" >&2; exit 1; }
 	"$(PEBBLE)" install "$(PBW)" --emulator "$(PLATFORM)" $(QEMU_FLAGS)
+
+app-emulator-check: ## Walk the read path in QEMU against the mock API and save screenshots: PLATFORM=emery
+	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
+	PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" bash tests/emulator/read_path.sh "$(PLATFORM)"
 
 app-install: ## Install an existing PBW on a watch: IP=phone-ip (or CloudPebble)
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }

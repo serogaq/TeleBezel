@@ -1,6 +1,7 @@
 #include "fakes/fake_transport.hpp"
 #include "telebezel/registry.hpp"
 #include "telebezel/runtime/account_store.hpp"
+#include "telebezel/runtime/support.hpp"
 #include "telebezel/td_runtime.hpp"
 #include <algorithm>
 #include <atomic>
@@ -58,6 +59,59 @@ TEST(CacheBudgetTest, EnforcesPerChatAccountAndProcessLimits) {
   ASSERT_EQ(first.messages.size() + second.messages.size(), 4);
   ASSERT_TRUE(first.messages.contains({7, 2}));
   ASSERT_FALSE(first.messages.contains({8, 4}));
+}
+
+TEST(MessageContentTest, KeepsCaptionsAndNamesContentKinds) {
+  using telebezel::runtime::message_content;
+  const auto caption = [](const std::string &text) {
+    auto result = td_api::make_object<td_api::formattedText>();
+    result->text_ = text;
+    return result;
+  };
+  auto photo = td_api::make_object<td_api::messagePhoto>();
+  photo->caption_ = caption("Photo caption");
+  const auto photo_json = message_content(photo.get());
+  ASSERT_EQ(photo_json.value("kind", ""), "photo");
+  ASSERT_EQ(photo_json.value("text", ""), "Photo caption");
+  ASSERT_EQ(photo_json.value("fallback_key", ""), "message.photo");
+  auto voice = td_api::make_object<td_api::messageVoiceNote>();
+  voice->voice_note_ = td_api::make_object<td_api::voiceNote>();
+  voice->voice_note_->duration_ = 14;
+  voice->caption_ = caption("Voice caption");
+  const auto voice_json = message_content(voice.get());
+  ASSERT_EQ(voice_json.value("kind", ""), "voice_note");
+  ASSERT_EQ(voice_json.value("duration", 0), 14);
+  ASSERT_EQ(voice_json.value("text", ""), "Voice caption");
+  auto sticker = td_api::make_object<td_api::messageSticker>();
+  sticker->sticker_ = td_api::make_object<td_api::sticker>();
+  sticker->sticker_->emoji_ = "\xF0\x9F\x98\x80";
+  const auto sticker_json = message_content(sticker.get());
+  ASSERT_EQ(sticker_json.value("kind", ""), "sticker");
+  ASSERT_EQ(sticker_json.value("emoji", ""), "\xF0\x9F\x98\x80");
+  ASSERT_FALSE(sticker_json.contains("text"));
+  auto document = td_api::make_object<td_api::messageDocument>();
+  document->document_ = td_api::make_object<td_api::document>();
+  document->document_->file_name_ = "report.pdf";
+  const auto document_json = message_content(document.get());
+  ASSERT_EQ(document_json.value("kind", ""), "document");
+  ASSERT_EQ(document_json.value("title", ""), "report.pdf");
+  auto poll = td_api::make_object<td_api::messagePoll>();
+  poll->poll_ = td_api::make_object<td_api::poll>();
+  poll->poll_->question_ = caption("Lunch?");
+  ASSERT_EQ(message_content(poll.get()).value("text", ""), "Lunch?");
+  auto title = td_api::make_object<td_api::messageChatChangeTitle>("New title");
+  const auto title_json = message_content(title.get());
+  ASSERT_EQ(title_json.value("kind", ""), "service");
+  ASSERT_EQ(title_json.value("action", ""), "title_changed");
+  ASSERT_EQ(title_json.value("title", ""), "New title");
+  auto empty_caption = td_api::make_object<td_api::messageAnimation>();
+  empty_caption->caption_ = caption("");
+  ASSERT_FALSE(message_content(empty_caption.get()).contains("text"));
+  auto gift = td_api::make_object<td_api::messageGiftedPremium>();
+  const auto gift_json = message_content(gift.get());
+  ASSERT_EQ(gift_json.value("kind", ""), "unsupported");
+  ASSERT_EQ(gift_json.value("fallback_key", ""), "message.unsupported");
+  ASSERT_EQ(message_content(nullptr).value("kind", ""), "unsupported");
 }
 
 class RuntimeTest : public ::testing::Test {
@@ -413,6 +467,32 @@ TEST_F(RuntimeTest, FailedPreviewDownloadIsRetried) {
   transport->queue_response(td_api::downloadFile::ID, std::move(file));
   ASSERT_EQ(runtime->messages(first, 42, 1, "")["items"][0]["content"].value("preview_state", ""), "queued")
       << "a failed download stayed pending for ever";
+}
+
+TEST_F(RuntimeTest, ChatListRequiresAuthorizationAndNamesLastSender) {
+  ASSERT_EQ(runtime->chats(first, "main", 20, "").value("code", ""), "authorization.invalid_state");
+  ASSERT_EQ(runtime->chats(first, "main", 20, "").value("status", 0), 409);
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  auto user = td_api::make_object<td_api::user>();
+  user->id_ = 7;
+  user->first_name_ = "Ada";
+  user->last_name_ = "Lovelace";
+  transport->emit_update(1, td_api::make_object<td_api::updateUser>(std::move(user)));
+  auto chat = td_api::make_object<td_api::chat>();
+  chat->id_ = 42;
+  chat->title_ = "Group";
+  chat->type_ = td_api::make_object<td_api::chatTypeBasicGroup>(5);
+  chat->positions_.push_back(
+      td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListMain>(), 100, false, nullptr));
+  chat->last_message_ = td_api::make_object<td_api::message>();
+  chat->last_message_->id_ = 10;
+  chat->last_message_->chat_id_ = 42;
+  chat->last_message_->sender_id_ = td_api::make_object<td_api::messageSenderUser>(7);
+  transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(chat)));
+  wait_until([&] { return runtime->chats(first, "main", 20, "")["items"].size() == 1; });
+  const auto page = runtime->chats(first, "main", 20, "");
+  ASSERT_EQ(page["items"][0]["last_message"]["sender"].value("name", ""), "Ada Lovelace");
 }
 
 TEST_F(RuntimeTest, HistoryUsesLocalResultsAndInvalidatesAfterLogout) {

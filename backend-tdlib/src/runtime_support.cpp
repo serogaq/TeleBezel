@@ -93,48 +93,270 @@ std::pair<std::string, bool> delivery_method(const td_api::AuthenticationCodeTyp
     return {"firebase", false};
   return {"unknown", false};
 }
+namespace {
+void set_caption(nlohmann::json &result, const td_api::object_ptr<td_api::formattedText> &caption) {
+  if (caption && !caption->text_.empty())
+    result["text"] = caption->text_;
+}
+void set_string(nlohmann::json &result, const char *key, const std::string &value) {
+  if (!value.empty())
+    result[key] = value;
+}
+nlohmann::json content_kind(const char *kind) {
+  return {{"kind", kind}, {"fallback_key", std::string("message.") + kind}};
+}
+nlohmann::json service_content(const char *action) {
+  auto result = content_kind("service");
+  result["action"] = action;
+  return result;
+}
+nlohmann::json photo_content(const td_api::messagePhoto &photo) {
+  auto result = content_kind("photo");
+  set_caption(result, photo.caption_);
+  if (photo.is_secret_)
+    return result;
+  const td_api::file *candidate = nullptr;
+  if (photo.photo_)
+    for (const auto &size : photo.photo_->sizes_)
+      if (size && size->photo_ && size->photo_->size_ > 0 &&
+          (candidate == nullptr || size->photo_->size_ < candidate->size_))
+        candidate = size->photo_.get();
+  if (candidate) {
+    result["preview_file_id"] = candidate->id_;
+    result["preview_size"] = candidate->size_;
+    result["preview_mime"] = "image/jpeg";
+  }
+  return result;
+}
+nlohmann::json video_content(const td_api::messageVideo &video) {
+  auto result = content_kind("video");
+  set_caption(result, video.caption_);
+  if (video.video_)
+    result["duration"] = video.video_->duration_;
+  if (video.is_secret_)
+    return result;
+  const auto *thumbnail = video.video_ && video.video_->thumbnail_ ? video.video_->thumbnail_.get() : nullptr;
+  if (thumbnail && thumbnail->file_ && thumbnail->format_ && thumbnail->file_->size_ > 0) {
+    const auto format = thumbnail->format_->get_id();
+    const auto mime = format == td_api::thumbnailFormatJpeg::ID   ? "image/jpeg"
+                      : format == td_api::thumbnailFormatPng::ID  ? "image/png"
+                      : format == td_api::thumbnailFormatWebp::ID ? "image/webp"
+                                                                  : "";
+    if (*mime != '\0') {
+      result["preview_file_id"] = thumbnail->file_->id_;
+      result["preview_size"] = thumbnail->file_->size_;
+      result["preview_mime"] = mime;
+    }
+  }
+  return result;
+}
+std::optional<nlohmann::json> media_content(const td_api::MessageContent &content) {
+  switch (content.get_id()) {
+  case td_api::messagePhoto::ID:
+    return photo_content(static_cast<const td_api::messagePhoto &>(content));
+  case td_api::messageVideo::ID:
+    return video_content(static_cast<const td_api::messageVideo &>(content));
+  case td_api::messageVoiceNote::ID: {
+    const auto &voice = static_cast<const td_api::messageVoiceNote &>(content);
+    auto result = content_kind("voice_note");
+    set_caption(result, voice.caption_);
+    if (voice.voice_note_)
+      result["duration"] = voice.voice_note_->duration_;
+    return result;
+  }
+  case td_api::messageVideoNote::ID: {
+    const auto &note = static_cast<const td_api::messageVideoNote &>(content);
+    auto result = content_kind("video_note");
+    if (note.video_note_)
+      result["duration"] = note.video_note_->duration_;
+    return result;
+  }
+  case td_api::messageSticker::ID: {
+    const auto &sticker = static_cast<const td_api::messageSticker &>(content);
+    auto result = content_kind("sticker");
+    if (sticker.sticker_)
+      set_string(result, "emoji", sticker.sticker_->emoji_);
+    return result;
+  }
+  case td_api::messageDocument::ID: {
+    const auto &document = static_cast<const td_api::messageDocument &>(content);
+    auto result = content_kind("document");
+    set_caption(result, document.caption_);
+    if (document.document_)
+      set_string(result, "title", document.document_->file_name_);
+    return result;
+  }
+  case td_api::messageAudio::ID: {
+    const auto &audio = static_cast<const td_api::messageAudio &>(content);
+    auto result = content_kind("audio");
+    set_caption(result, audio.caption_);
+    if (audio.audio_) {
+      result["duration"] = audio.audio_->duration_;
+      const auto &performer = audio.audio_->performer_;
+      const auto &title = audio.audio_->title_;
+      set_string(result, "title",
+                 !performer.empty() && !title.empty() ? performer + " - " + title
+                 : !title.empty()                     ? title
+                 : !performer.empty()                 ? performer
+                                                      : audio.audio_->file_name_);
+    }
+    return result;
+  }
+  case td_api::messageAnimation::ID: {
+    const auto &animation = static_cast<const td_api::messageAnimation &>(content);
+    auto result = content_kind("animation");
+    set_caption(result, animation.caption_);
+    return result;
+  }
+  case td_api::messagePaidMedia::ID: {
+    const auto &paid = static_cast<const td_api::messagePaidMedia &>(content);
+    auto result = content_kind("paid_media");
+    set_caption(result, paid.caption_);
+    return result;
+  }
+  default:
+    return std::nullopt;
+  }
+}
+std::optional<nlohmann::json> shared_content(const td_api::MessageContent &content) {
+  switch (content.get_id()) {
+  case td_api::messageLocation::ID:
+  case td_api::messageLiveLocation::ID:
+    return content_kind("location");
+  case td_api::messageVenue::ID: {
+    const auto &venue = static_cast<const td_api::messageVenue &>(content);
+    auto result = content_kind("venue");
+    if (venue.venue_) {
+      set_string(result, "title", venue.venue_->title_);
+      set_string(result, "text", venue.venue_->address_);
+    }
+    return result;
+  }
+  case td_api::messageContact::ID: {
+    const auto &contact = static_cast<const td_api::messageContact &>(content);
+    auto result = content_kind("contact");
+    if (contact.contact_) {
+      const auto &first = contact.contact_->first_name_;
+      const auto &last = contact.contact_->last_name_;
+      set_string(result, "title", first.empty() || last.empty() ? first + last : first + " " + last);
+    }
+    return result;
+  }
+  case td_api::messagePoll::ID: {
+    const auto &poll = static_cast<const td_api::messagePoll &>(content);
+    auto result = content_kind("poll");
+    if (poll.poll_)
+      set_caption(result, poll.poll_->question_);
+    return result;
+  }
+  case td_api::messageDice::ID: {
+    const auto &dice = static_cast<const td_api::messageDice &>(content);
+    auto result = content_kind("dice");
+    set_string(result, "emoji", dice.emoji_);
+    return result;
+  }
+  case td_api::messageAnimatedEmoji::ID: {
+    const auto &emoji = static_cast<const td_api::messageAnimatedEmoji &>(content);
+    nlohmann::json result{{"kind", "text"}};
+    result["text"] = emoji.emoji_;
+    return result;
+  }
+  case td_api::messageCall::ID: {
+    const auto &call = static_cast<const td_api::messageCall &>(content);
+    auto result = content_kind("call");
+    result["duration"] = call.duration_;
+    return result;
+  }
+  case td_api::messageGame::ID: {
+    const auto &game = static_cast<const td_api::messageGame &>(content);
+    auto result = content_kind("game");
+    if (game.game_)
+      set_string(result, "title", game.game_->title_);
+    return result;
+  }
+  case td_api::messageStory::ID:
+    return content_kind("story");
+  case td_api::messageExpiredPhoto::ID:
+  case td_api::messageExpiredVideo::ID:
+  case td_api::messageExpiredVideoNote::ID:
+  case td_api::messageExpiredVoiceNote::ID:
+    return content_kind("expired");
+  default:
+    return std::nullopt;
+  }
+}
+std::optional<nlohmann::json> service_message(const td_api::MessageContent &content) {
+  switch (content.get_id()) {
+  case td_api::messageChatAddMembers::ID:
+    return service_content("members_added");
+  case td_api::messageChatJoinByLink::ID:
+  case td_api::messageChatJoinByRequest::ID:
+    return service_content("member_joined");
+  case td_api::messageChatDeleteMember::ID:
+    return service_content("member_left");
+  case td_api::messageChatChangeTitle::ID: {
+    auto result = service_content("title_changed");
+    set_string(result, "title", static_cast<const td_api::messageChatChangeTitle &>(content).title_);
+    return result;
+  }
+  case td_api::messageChatChangePhoto::ID:
+  case td_api::messageChatDeletePhoto::ID:
+    return service_content("photo_changed");
+  case td_api::messageBasicGroupChatCreate::ID: {
+    auto result = service_content("chat_created");
+    set_string(result, "title", static_cast<const td_api::messageBasicGroupChatCreate &>(content).title_);
+    return result;
+  }
+  case td_api::messageSupergroupChatCreate::ID: {
+    auto result = service_content("chat_created");
+    set_string(result, "title", static_cast<const td_api::messageSupergroupChatCreate &>(content).title_);
+    return result;
+  }
+  case td_api::messagePinMessage::ID:
+    return service_content("pinned");
+  case td_api::messageScreenshotTaken::ID:
+    return service_content("screenshot");
+  case td_api::messageContactRegistered::ID:
+    return service_content("contact_joined");
+  case td_api::messageVideoChatScheduled::ID:
+  case td_api::messageVideoChatStarted::ID:
+  case td_api::messageVideoChatEnded::ID:
+  case td_api::messageGroupCall::ID:
+    return service_content("video_chat");
+  case td_api::messageChatSetMessageAutoDeleteTime::ID:
+    return service_content("auto_delete");
+  case td_api::messageChatUpgradeTo::ID:
+  case td_api::messageChatUpgradeFrom::ID:
+    return service_content("upgraded");
+  case td_api::messageForumTopicCreated::ID: {
+    auto result = service_content("topic_created");
+    set_string(result, "title", static_cast<const td_api::messageForumTopicCreated &>(content).name_);
+    return result;
+  }
+  case td_api::messageCustomServiceAction::ID: {
+    auto result = service_content("custom");
+    set_string(result, "text", static_cast<const td_api::messageCustomServiceAction &>(content).text_);
+    return result;
+  }
+  default:
+    return std::nullopt;
+  }
+}
+} // namespace
 nlohmann::json message_content(const td_api::MessageContent *content) {
-  if (content != nullptr && content->get_id() == td_api::messageText::ID) {
+  if (content == nullptr)
+    return content_kind("unsupported");
+  if (content->get_id() == td_api::messageText::ID) {
     const auto &text = static_cast<const td_api::messageText &>(*content);
     return {{"kind", "text"}, {"text", text.text_ ? text.text_->text_ : std::string{}}};
   }
-  if (content != nullptr && content->get_id() == td_api::messagePhoto::ID) {
-    const auto &photo = static_cast<const td_api::messagePhoto &>(*content);
-    if (photo.is_secret_)
-      return {{"kind", "photo"}, {"fallback_key", "message.photo"}};
-    const td_api::file *candidate = nullptr;
-    if (photo.photo_)
-      for (const auto &size : photo.photo_->sizes_)
-        if (size && size->photo_ && size->photo_->size_ > 0 &&
-            (candidate == nullptr || size->photo_->size_ < candidate->size_))
-          candidate = size->photo_.get();
-    if (candidate)
-      return {{"kind", "photo"},
-              {"fallback_key", "message.photo"},
-              {"preview_file_id", candidate->id_},
-              {"preview_size", candidate->size_},
-              {"preview_mime", "image/jpeg"}};
-    return {{"kind", "photo"}, {"fallback_key", "message.photo"}};
-  }
-  if (content != nullptr && content->get_id() == td_api::messageVideo::ID) {
-    const auto &video = static_cast<const td_api::messageVideo &>(*content);
-    const auto *thumbnail = video.video_ && video.video_->thumbnail_ ? video.video_->thumbnail_.get() : nullptr;
-    if (thumbnail && thumbnail->file_ && thumbnail->format_ && thumbnail->file_->size_ > 0) {
-      const auto format = thumbnail->format_->get_id();
-      const auto mime = format == td_api::thumbnailFormatJpeg::ID   ? "image/jpeg"
-                        : format == td_api::thumbnailFormatPng::ID  ? "image/png"
-                        : format == td_api::thumbnailFormatWebp::ID ? "image/webp"
-                                                                    : "";
-      if (*mime != '\0')
-        return {{"kind", "video"},
-                {"fallback_key", "message.video"},
-                {"preview_file_id", thumbnail->file_->id_},
-                {"preview_size", thumbnail->file_->size_},
-                {"preview_mime", mime}};
-    }
-    return {{"kind", "video"}, {"fallback_key", "message.video"}};
-  }
-  return {{"kind", "unsupported"}, {"fallback_key", "message.unsupported"}};
+  if (auto media = media_content(*content))
+    return std::move(*media);
+  if (auto shared = shared_content(*content))
+    return std::move(*shared);
+  if (auto service = service_message(*content))
+    return std::move(*service);
+  return content_kind("unsupported");
 }
 nlohmann::json message_projection(const td_api::message &message) {
   nlohmann::json sender = nullptr;

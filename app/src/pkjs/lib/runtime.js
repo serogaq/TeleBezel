@@ -5,15 +5,10 @@ function create(options) {
   var inboxSize = 0;
   var ready = false;
   var pendingHello = 0;
-  var latestStatusSeq = 0;
-  var generation = 0;
-  function send(kind, sequence, code, retries) {
-    options.Pebble.sendAppMessage({RESPONSE_KIND: kind, REQUEST_SEQ: sequence, RESULT_CODE: code},
-      function() {}, function() {
-        if (retries > 0 && (kind !== options.protocol.response.status || sequence === latestStatusSeq)) {
-          send(kind, sequence, code, retries - 1);
-        }
-      });
+  var transport = options.transport;
+  var reader = options.reader;
+  function sendControl(kind, sequence) {
+    transport.send({RESPONSE_KIND: kind, REQUEST_SEQ: sequence, RESULT_CODE: 0});
   }
   function scrubClayToken() {
     try {
@@ -28,34 +23,22 @@ function create(options) {
       options.storage.removeItem(CLAY_STORAGE_KEY);
     }
   }
-  function sendStatus(sequence, code) { send(options.protocol.response.status, sequence, code, 1); }
-  function checkStatus(sequence, value) {
-    var currentGeneration = ++generation;
-    options.api.checkStatus(value, function(result) {
-      if (currentGeneration === generation && sequence === latestStatusSeq) { sendStatus(sequence, result.code); }
-    });
-  }
   function onMessage(event) {
     var payload = event && event.payload ? event.payload : {};
     var kind = payload.REQUEST_KIND;
     var sequence = payload.REQUEST_SEQ;
     if (!Number.isInteger(sequence) || sequence <= 0 || sequence > 2147483647) { return; }
     if (kind === options.protocol.request.hello) {
-      if (Number.isInteger(payload.INBOX_SIZE) && payload.INBOX_SIZE > 0) { inboxSize = payload.INBOX_SIZE; }
-      if (ready) { send(options.protocol.response.ready, sequence, 0, 1); }
+      if (Number.isInteger(payload.INBOX_SIZE) && payload.INBOX_SIZE > 0) {
+        inboxSize = payload.INBOX_SIZE;
+        reader.setInboxSize(inboxSize);
+      }
+      if (ready) { sendControl(options.protocol.response.ready, sequence); }
       else { pendingHello = sequence; }
       return;
     }
-    if (!ready || kind !== options.protocol.request.status) { return; }
-    latestStatusSeq = sequence;
-    var value = options.settings.load(options.storage);
-    var valid = options.settings.validate(value);
-    if (!valid.ok) {
-      ++generation;
-      sendStatus(sequence, valid.missing ? options.protocol.result.config_missing : options.protocol.result.config_invalid);
-      return;
-    }
-    checkStatus(sequence, value);
+    if (!ready) { return; }
+    reader.handle(payload);
   }
   function showConfiguration() {
     var saved = options.settings.load(options.storage);
@@ -76,19 +59,14 @@ function create(options) {
     scrubClayToken();
     activeClay = null;
     if (!submitted) { return; }
-    var value = options.settings.fromClay(submitted, saved);
-    options.settings.save(options.storage, value);
-    ++generation;
-    send(options.protocol.response.refresh, 0, 0, 1);
-    if (latestStatusSeq <= 0) { return; }
-    var valid = options.settings.validate(value);
-    if (valid.ok) { checkStatus(latestStatusSeq, value); }
-    else { sendStatus(latestStatusSeq, valid.missing ? options.protocol.result.config_missing : options.protocol.result.config_invalid); }
+    options.settings.save(options.storage, options.settings.fromClay(submitted, saved));
+    reader.reset();
+    sendControl(options.protocol.response.refresh, 0);
   }
   function register() {
     options.Pebble.addEventListener('ready', function() {
       ready = true;
-      if (pendingHello > 0) { send(options.protocol.response.ready, pendingHello, 0, 1); pendingHello = 0; }
+      if (pendingHello > 0) { sendControl(options.protocol.response.ready, pendingHello); pendingHello = 0; }
     });
     options.Pebble.addEventListener('appmessage', onMessage);
     options.Pebble.addEventListener('showConfiguration', showConfiguration);

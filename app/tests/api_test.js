@@ -45,15 +45,43 @@ var ok = run(200, '{"data":{"items":[]}}');
 assert.deepStrictEqual([ok.ok, ok.data], [true, {items: []}]);
 assert.strictEqual(run(200, '<html></html>').code, 'response.invalid');
 
-function status(code, body) {
-  var value = null;
-  apiFactory.create(scripted(code, body), settings, protocol).checkStatus(configured, function(result) { value = result.code; });
-  return value;
+function recording(status, body) {
+  var seen = [];
+  function Xhr() { this.readyState = 0; this.headers = {}; seen.push(this); }
+  Xhr.prototype.open = function(method, url) { this.method = method; this.url = url; };
+  Xhr.prototype.setRequestHeader = function(name, value) { this.headers[name] = value; };
+  Xhr.prototype.getResponseHeader = function() { return null; };
+  Xhr.prototype.abort = function() { this.aborted = true; };
+  Xhr.prototype.send = function(payload) {
+    this.body = payload;
+    if (status === undefined) { return; }
+    this.status = status;
+    this.responseText = body;
+    this.readyState = 4;
+    this.onreadystatechange();
+  };
+  return {Xhr: Xhr, seen: seen};
 }
-assert.strictEqual(status(200, '{"data":{"status":"ready"}}'), protocol.result.ok);
-assert.strictEqual(status(401, '{"error":{"code":"auth.unauthorized"}}'), protocol.result.api_unauthorized);
-assert.strictEqual(status(503, '{"error":{"code":"service.tdlib_unavailable"}}'), protocol.result.backend_not_ready);
-assert.strictEqual(status(200, 'not json'), protocol.result.protocol_error);
-assert.strictEqual(status(null), protocol.result.backend_unavailable);
+var chatId = '-1009007199254740993';
+var recorded = recording(200, '{"data":{"items":[]}}');
+var client = apiFactory.create(recorded.Xhr, settings, protocol);
+client.chats(configured, '00112233-4455-4677-8899-aabbccddeeff', {list: 'archive', limit: 20, cursor: 'a+b/c='}, function() {});
+assert.strictEqual(recorded.seen[0].url, 'https://api.test:443/v1/telegram/accounts/00112233-4455-4677-8899-aabbccddeeff/chats?list=archive&limit=20&cursor=a%2Bb%2Fc%3D');
+client.history(configured, '00112233-4455-4677-8899-aabbccddeeff', chatId, {view_id: 'v', limit: 5, cursor: null}, function() {});
+assert.strictEqual(recorded.seen[1].url, 'https://api.test:443/v1/telegram/accounts/00112233-4455-4677-8899-aabbccddeeff/chats/-1009007199254740993/messages?view_id=v&limit=5');
+client.updatePreferences(configured, {default_account_id: null}, function() {});
+assert.deepStrictEqual([recorded.seen[2].method, recorded.seen[2].body, recorded.seen[2].headers['Content-Type']], ['PUT', '{"default_account_id":null}', 'application/json']);
+client.accounts(configured, function() {});
+assert.ok(/\/v1\/telegram\/accounts\?per_page=50$/.test(recorded.seen[3].url));
+var silent = recording();
+var calls = 0;
+var handle = apiFactory.create(silent.Xhr, settings, protocol).releaseInterest(configured, '00112233-4455-4677-8899-aabbccddeeff', chatId, 'v', function() { calls++; });
+assert.strictEqual(silent.seen[0].method, 'DELETE');
+handle.abort();
+assert.ok(silent.seen[0].aborted);
+silent.seen[0].onerror();
+assert.strictEqual(calls, 0, 'an aborted request reported a result');
+var parsedIds = run(200, '{"data":{"items":[{"id":"9223372036854775807"}]}}');
+assert.strictEqual(parsedIds.data.items[0].id, '9223372036854775807');
 
 process.stdout.write('PKJS API tests passed\n');

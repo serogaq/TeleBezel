@@ -33,7 +33,7 @@ nlohmann::json ReadModelService::chats(const std::string &uuid, const std::strin
                                        const std::string &cursor) {
   const auto opened = begin_read(uuid);
   if (!opened)
-    return safe_error("service.busy", 503);
+    return safe_error("authorization.invalid_state", 409);
   const auto &fence = *opened;
   std::optional<ChatBoundary> boundary;
   if (!cursor.empty()) {
@@ -115,8 +115,11 @@ nlohmann::json ReadModelService::chats(const std::string &uuid, const std::strin
     current_version = order_log(*account, list).version;
     for (const auto &[chat_id, projection] : account->chats) {
       static_cast<void>(chat_id);
-      if (projection.value("positions", nlohmann::json::object()).contains(list))
-        items.push_back(projection);
+      if (!projection.value("positions", nlohmann::json::object()).contains(list))
+        continue;
+      items.push_back(projection);
+      if (items.back().value("last_message", nlohmann::json(nullptr)).is_object())
+        decorate_sender(*account, items.back()["last_message"]);
     }
     exhausted = exhausted_flag(*account, list);
     envelope = ReadEnvelope::capture(cursors_, *account, fence);

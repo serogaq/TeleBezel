@@ -4,7 +4,7 @@ services:
   backend-api:
     build:
       context: ./backend-api
-      args: {VERSION: "${API_VERSION:-0.2.0}"}
+      args: {VERSION: "${API_VERSION:-0.3.0}"}
     image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-api:local"
     restart: unless-stopped
     read_only: true
@@ -59,7 +59,7 @@ services:
   backend-tdlib:
     build:
       context: ./backend-tdlib
-      args: {VERSION: "${TDLIB_SERVICE_VERSION:-0.2.0}"}
+      args: {VERSION: "${TDLIB_SERVICE_VERSION:-0.3.0}"}
     image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-tdlib:local"
     restart: unless-stopped
     stop_grace_period: 45s
@@ -92,7 +92,7 @@ services:
   scheduler:
     build:
       context: ./backend-api
-      args: {VERSION: "${API_VERSION:-0.2.0}"}
+      args: {VERSION: "${API_VERSION:-0.3.0}"}
     image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-api:local"
     restart: unless-stopped
     read_only: true

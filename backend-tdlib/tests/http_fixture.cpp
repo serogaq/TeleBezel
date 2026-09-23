@@ -27,13 +27,51 @@ const std::map<std::string, std::int32_t> functions{{"phone", api::setAuthentica
                                                     {"destroy", api::destroy::ID},
                                                     {"add_proxy", api::addProxy::ID},
                                                     {"ping", api::pingProxy::ID}};
+api::object_ptr<api::formattedText> formatted(const std::string &text) {
+  auto result = api::make_object<api::formattedText>();
+  result->text_ = text;
+  return result;
+}
+api::object_ptr<api::MessageContent> media(const Json &data) {
+  const auto kind = data.value("kind", "");
+  const auto caption = data.value("caption", "");
+  if (kind == "photo") {
+    auto content = api::make_object<api::messagePhoto>();
+    content->caption_ = formatted(caption);
+    return content;
+  }
+  if (kind == "voice_note") {
+    auto content = api::make_object<api::messageVoiceNote>();
+    content->voice_note_ = api::make_object<api::voiceNote>();
+    content->voice_note_->duration_ = data.value("duration", 0);
+    content->caption_ = formatted(caption);
+    return content;
+  }
+  if (kind == "sticker") {
+    auto content = api::make_object<api::messageSticker>();
+    content->sticker_ = api::make_object<api::sticker>();
+    content->sticker_->emoji_ = data.value("emoji", "");
+    return content;
+  }
+  if (kind == "document") {
+    auto content = api::make_object<api::messageDocument>();
+    content->document_ = api::make_object<api::document>();
+    content->document_->file_name_ = data.value("title", "");
+    content->caption_ = formatted(caption);
+    return content;
+  }
+  throw std::runtime_error("Unknown fixture content");
+}
 api::object_ptr<api::message> message(const Json &data) {
   auto result = api::make_object<api::message>();
   result->id_ = std::stoll(data.at("id").get<std::string>());
   result->chat_id_ = std::stoll(data.value("chat", "42"));
-  result->sender_id_ = api::make_object<api::messageSenderUser>(9007199254740993LL);
-  result->date_ = 1700000000;
-  if (!data.value("unsupported", false)) {
+  result->sender_id_ = api::make_object<api::messageSenderUser>(std::stoll(data.value("sender", "9007199254740993")));
+  result->date_ = data.value("date", 1700000000);
+  result->is_outgoing_ = data.value("outgoing", false);
+  if (data.contains("content")) {
+    result->content_ = media(data.at("content"));
+  } else if (!data.value("unsupported", false)) {
     auto content = api::make_object<api::messageText>();
     content->text_ = api::make_object<api::formattedText>();
     content->text_->text_ = data.value("text", "Hello Telegram");
@@ -128,7 +166,16 @@ int main(int argc, char **argv) {
         auto chat = api::make_object<api::chat>();
         chat->id_ = std::stoll(command.value("id", "42"));
         chat->title_ = command.value("title", "Integration chat");
-        chat->type_ = api::make_object<api::chatTypePrivate>(9007199254740993LL);
+        const auto type = command.value("type", "private");
+        if (type == "basic_group")
+          chat->type_ = api::make_object<api::chatTypeBasicGroup>(5);
+        else if (type == "channel")
+          chat->type_ = api::make_object<api::chatTypeSupergroup>(6, true);
+        else
+          chat->type_ = api::make_object<api::chatTypePrivate>(9007199254740993LL);
+        chat->unread_count_ = command.value("unread", 0);
+        if (command.contains("last_message"))
+          chat->last_message_ = message(command.at("last_message"));
         api::object_ptr<api::ChatList> list =
             command.value("list", "main") == "main"
                 ? api::object_ptr<api::ChatList>(api::make_object<api::chatListMain>())
@@ -136,6 +183,12 @@ int main(int argc, char **argv) {
         chat->positions_.push_back(
             api::make_object<api::chatPosition>(std::move(list), command.value("order", 100LL), false, nullptr));
         transport->emit_update(client, api::make_object<api::updateNewChat>(std::move(chat)));
+      } else if (op == "user") {
+        auto user = api::make_object<api::user>();
+        user->id_ = std::stoll(command.at("id").get<std::string>());
+        user->first_name_ = command.value("first_name", "");
+        user->last_name_ = command.value("last_name", "");
+        transport->emit_update(client, api::make_object<api::updateUser>(std::move(user)));
       } else if (op == "title") {
         transport->emit_update(client, api::make_object<api::updateChatTitle>(std::stoll(command.value("chat", "42")),
                                                                               command.at("title")));

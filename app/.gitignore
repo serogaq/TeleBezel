@@ -1,2 +1,3 @@
 src/c/generated/
 src/pkjs/lib/*.generated.js
+tests/generated/

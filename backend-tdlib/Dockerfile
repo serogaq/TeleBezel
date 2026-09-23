@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.11
 FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS build
 ARG CMAKE_VERSION=4.4.3
-ARG VERSION=0.2.0
+ARG VERSION=0.3.0
 ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential ca-certificates ccache gperf libssl-dev ninja-build php-cli python3-venv zlib1g-dev \
@@ -50,7 +50,7 @@ RUN --mount=type=cache,id=telebezel-tdlib-build-${TARGETARCH},target=/src/build,
 
 
 FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime
-ARG VERSION=0.2.0
+ARG VERSION=0.3.0
 LABEL org.opencontainers.image.source="https://github.com/serogaq/TeleBezel" \
       org.opencontainers.image.title="TeleBezel backend-tdlib" \
       org.opencontainers.image.version="${VERSION}"

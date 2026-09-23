@@ -213,3 +213,42 @@ test('the chat list reports exhaustion and pagination through the same fields', 
         ->assertJsonPath('data.partial', false)
         ->assertJsonPath('data.next_cursor', null);
 });
+
+test('message content keeps captions and descriptive fields and strips internal ones', function (): void {
+    Http::fake([
+        '*' => Http::response([
+            'data' => readContractRuntime([
+                'items' => [[
+                    'id' => '99',
+                    'chat_id' => '42',
+                    'date' => 2,
+                    'content' => [
+                        'kind' => 'voice_note',
+                        'fallback_key' => 'message.voice_note',
+                        'text' => 'Caption',
+                        'duration' => 14,
+                        'emoji' => 'x',
+                        'title' => 'Title',
+                        'action' => 'pinned',
+                        'preview_file_id' => 7,
+                        'preview_mime' => 'image/jpeg',
+                    ],
+                ]],
+                'local_exhausted' => true,
+                'has_more' => false,
+            ]),
+        ]),
+    ]);
+    $content = $this->withToken($this->token)->getJson($this->history)
+        ->assertOk()
+        ->json('data.items.0.content');
+    expect($content)->toBe([
+        'kind' => 'voice_note',
+        'fallback_key' => 'message.voice_note',
+        'text' => 'Caption',
+        'duration' => 14,
+        'emoji' => 'x',
+        'title' => 'Title',
+        'action' => 'pinned',
+    ]);
+});

@@ -73,7 +73,7 @@ final class TelegramReadResource extends ApiResource
             $value['sender'] = self::pick(Values::object($value['sender']), ['type', 'id', 'name', 'fallback']);
         }
         if (is_array($value['content'] ?? null)) {
-            $value['content'] = self::pick(Values::object($value['content']), ['kind', 'text', 'fallback_key', 'preview_id', 'preview_state']);
+            $value['content'] = self::pick(Values::object($value['content']), ['kind', 'text', 'fallback_key', 'duration', 'emoji', 'title', 'action', 'preview_id', 'preview_state']);
         }
 
         return $value;

@@ -19,7 +19,7 @@ COPY . .
 RUN composer dump-autoload --no-dev --classmap-authoritative --no-interaction
 
 FROM dunglas/frankenphp:1.12.7-php8.5-bookworm@sha256:7380f2c24ef9d86ad496dbc285ba66e212365c864db2797f3e7269afad100dbb AS runtime
-ARG VERSION=0.2.0
+ARG VERSION=0.3.0
 LABEL org.opencontainers.image.source="https://github.com/serogaq/TeleBezel" \
       org.opencontainers.image.title="TeleBezel backend-api" \
       org.opencontainers.image.version="${VERSION}"

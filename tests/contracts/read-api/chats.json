@@ -1,0 +1,57 @@
+{
+    "data": {
+        "connection": "unknown",
+        "fallback_reason": null,
+        "has_more": null,
+        "items": [
+            {
+                "id": "-100200",
+                "is_forum": false,
+                "is_marked_unread": false,
+                "last_message": {
+                    "author_signature": "",
+                    "chat_id": "-100200",
+                    "content": {
+                        "kind": "text",
+                        "text": "Привет 👋"
+                    },
+                    "date": 1700000000,
+                    "edit_date": 0,
+                    "id": "1048576",
+                    "is_outgoing": false,
+                    "sender": {
+                        "fallback": "User 7",
+                        "id": "7",
+                        "name": "Ада Лавлейс",
+                        "type": "user"
+                    }
+                },
+                "last_read_inbox_message_id": "0",
+                "last_read_outbox_message_id": "0",
+                "notifications": {
+                    "mute_for": 0,
+                    "use_default_mute_for": true
+                },
+                "positions": {
+                    "main": {
+                        "is_pinned": false,
+                        "order": "500"
+                    }
+                },
+                "title": "Группа",
+                "type": "basic_group",
+                "unread_count": 3,
+                "unread_mention_count": 0,
+                "unread_reaction_count": 0
+            }
+        ],
+        "local_exhausted": false,
+        "next_cursor": null,
+        "observed_at": 1790150064,
+        "partial": true,
+        "retry_cursor": null,
+        "source": "tdlib_memory",
+        "stale": true,
+        "updates_cursor": "1:f597c019-127e-4b3b-bbf4-ef3cd9a44fe7:1.207dbb801bc64bda3686090339b95bb9ea3975066ac8c99cb10be3783208a35c"
+    }
+}
