@@ -92,11 +92,13 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => env('DB_SSLMODE', 'prefer'),
-            // PDO_PGSQL passes this connection deadline to libpq. PGOPTIONS
-            // separately bounds server-side statements and lock waits.
+            // PDO_PGSQL passes this connection deadline to libpq; the two
+            // server-side limits are applied to every new connection.
             'options' => [
                 PDO::ATTR_TIMEOUT => 2,
             ],
+            'statement_timeout' => env('DB_STATEMENT_TIMEOUT', 2000),
+            'lock_timeout' => env('DB_LOCK_TIMEOUT', 500),
         ],
 
         'sqlsrv' => [

@@ -1,6 +1,7 @@
 #include "fakes/fake_transport.hpp"
 #include "telebezel/registry.hpp"
 #include "telebezel/runtime/account_store.hpp"
+#include "telebezel/runtime/support.hpp"
 #include "telebezel/td_runtime.hpp"
 #include <algorithm>
 #include <atomic>
@@ -32,6 +33,10 @@ template <class Predicate> void wait_until(Predicate predicate, int attempts = 1
   }
   throw std::runtime_error("runtime test wait timed out");
 }
+std::string item_field(const nlohmann::json &result, const char *key) {
+  const auto item = result.find("item");
+  return item != result.end() && item->is_object() ? item->value(key, std::string{}) : std::string{};
+}
 std::string nullable(const nlohmann::json &value, const char *key) {
   const auto found = value.find(key);
   return found != value.end() && found->is_string() ? found->get<std::string>() : std::string{};
@@ -58,6 +63,59 @@ TEST(CacheBudgetTest, EnforcesPerChatAccountAndProcessLimits) {
   ASSERT_EQ(first.messages.size() + second.messages.size(), 4);
   ASSERT_TRUE(first.messages.contains({7, 2}));
   ASSERT_FALSE(first.messages.contains({8, 4}));
+}
+
+TEST(MessageContentTest, KeepsCaptionsAndNamesContentKinds) {
+  using telebezel::runtime::message_content;
+  const auto caption = [](const std::string &text) {
+    auto result = td_api::make_object<td_api::formattedText>();
+    result->text_ = text;
+    return result;
+  };
+  auto photo = td_api::make_object<td_api::messagePhoto>();
+  photo->caption_ = caption("Photo caption");
+  const auto photo_json = message_content(photo.get());
+  ASSERT_EQ(photo_json.value("kind", ""), "photo");
+  ASSERT_EQ(photo_json.value("text", ""), "Photo caption");
+  ASSERT_EQ(photo_json.value("fallback_key", ""), "message.photo");
+  auto voice = td_api::make_object<td_api::messageVoiceNote>();
+  voice->voice_note_ = td_api::make_object<td_api::voiceNote>();
+  voice->voice_note_->duration_ = 14;
+  voice->caption_ = caption("Voice caption");
+  const auto voice_json = message_content(voice.get());
+  ASSERT_EQ(voice_json.value("kind", ""), "voice_note");
+  ASSERT_EQ(voice_json.value("duration", 0), 14);
+  ASSERT_EQ(voice_json.value("text", ""), "Voice caption");
+  auto sticker = td_api::make_object<td_api::messageSticker>();
+  sticker->sticker_ = td_api::make_object<td_api::sticker>();
+  sticker->sticker_->emoji_ = "\xF0\x9F\x98\x80";
+  const auto sticker_json = message_content(sticker.get());
+  ASSERT_EQ(sticker_json.value("kind", ""), "sticker");
+  ASSERT_EQ(sticker_json.value("emoji", ""), "\xF0\x9F\x98\x80");
+  ASSERT_FALSE(sticker_json.contains("text"));
+  auto document = td_api::make_object<td_api::messageDocument>();
+  document->document_ = td_api::make_object<td_api::document>();
+  document->document_->file_name_ = "report.pdf";
+  const auto document_json = message_content(document.get());
+  ASSERT_EQ(document_json.value("kind", ""), "document");
+  ASSERT_EQ(document_json.value("title", ""), "report.pdf");
+  auto poll = td_api::make_object<td_api::messagePoll>();
+  poll->poll_ = td_api::make_object<td_api::poll>();
+  poll->poll_->question_ = caption("Lunch?");
+  ASSERT_EQ(message_content(poll.get()).value("text", ""), "Lunch?");
+  auto title = td_api::make_object<td_api::messageChatChangeTitle>("New title");
+  const auto title_json = message_content(title.get());
+  ASSERT_EQ(title_json.value("kind", ""), "service");
+  ASSERT_EQ(title_json.value("action", ""), "title_changed");
+  ASSERT_EQ(title_json.value("title", ""), "New title");
+  auto empty_caption = td_api::make_object<td_api::messageAnimation>();
+  empty_caption->caption_ = caption("");
+  ASSERT_FALSE(message_content(empty_caption.get()).contains("text"));
+  auto gift = td_api::make_object<td_api::messageGiftedPremium>();
+  const auto gift_json = message_content(gift.get());
+  ASSERT_EQ(gift_json.value("kind", ""), "unsupported");
+  ASSERT_EQ(gift_json.value("fallback_key", ""), "message.unsupported");
+  ASSERT_EQ(message_content(nullptr).value("kind", ""), "unsupported");
 }
 
 class RuntimeTest : public ::testing::Test {
@@ -130,7 +188,7 @@ TEST_F(RuntimeTest, MultiAccountReadsAndInterests) {
   wait_until([&] { return runtime->chats(first, "main", 20, "")["items"].size() == 1; });
   const auto initial_cursor = runtime->chats(first, "main", 20, "").value("updates_cursor", "");
   transport->emit_update(1, td_api::make_object<td_api::updateChatTitle>(42, "Renamed"));
-  wait_until([&] { return runtime->chat(first, 42)["item"].value("title", "") == "Renamed"; });
+  wait_until([&] { return item_field(runtime->chat(first, 42), "title") == "Renamed"; });
   ASSERT_TRUE((runtime->updates(first, initial_cursor, 100)["items"].size() == 1));
   const std::string device = "80112233-4455-4677-8899-aabbccddeeff";
   const std::string view = "90112233-4455-4677-8899-aabbccddeeff";
@@ -302,7 +360,7 @@ TEST_F(RuntimeTest, BackgroundRefreshExcludesTheAnchorLikeTheLocalRead) {
                                     [](const auto &item) { return !item.only_local && item.from_message_id == 100; });
   ASSERT_NE(refresh, requests.end());
   ASSERT_EQ(refresh->limit, 2) << "the refresh gave the anchor's own slot away";
-  wait_until([&] { return runtime->message(first, 42, 99)["item"].value("id", "") == "99"; }, 400);
+  wait_until([&] { return item_field(runtime->message(first, 42, 99), "id") == "99"; }, 400);
 }
 
 // Reading the same unchanged message again must not append journal entries, or
@@ -413,6 +471,90 @@ TEST_F(RuntimeTest, FailedPreviewDownloadIsRetried) {
   transport->queue_response(td_api::downloadFile::ID, std::move(file));
   ASSERT_EQ(runtime->messages(first, 42, 1, "")["items"][0]["content"].value("preview_state", ""), "queued")
       << "a failed download stayed pending for ever";
+}
+
+TEST_F(RuntimeTest, ChatListRequiresAuthorizationAndNamesLastSender) {
+  ASSERT_EQ(runtime->chats(first, "main", 20, "").value("code", ""), "authorization.invalid_state");
+  ASSERT_EQ(runtime->chats(first, "main", 20, "").value("status", 0), 409);
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  auto user = td_api::make_object<td_api::user>();
+  user->id_ = 7;
+  user->first_name_ = "Ada";
+  user->last_name_ = "Lovelace";
+  transport->emit_update(1, td_api::make_object<td_api::updateUser>(std::move(user)));
+  auto chat = td_api::make_object<td_api::chat>();
+  chat->id_ = 42;
+  chat->title_ = "Group";
+  chat->type_ = td_api::make_object<td_api::chatTypeBasicGroup>(5);
+  chat->positions_.push_back(
+      td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListMain>(), 100, false, nullptr));
+  chat->last_message_ = td_api::make_object<td_api::message>();
+  chat->last_message_->id_ = 10;
+  chat->last_message_->chat_id_ = 42;
+  chat->last_message_->sender_id_ = td_api::make_object<td_api::messageSenderUser>(7);
+  transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(chat)));
+  wait_until([&] { return runtime->chats(first, "main", 20, "")["items"].size() == 1; });
+  const auto page = runtime->chats(first, "main", 20, "");
+  ASSERT_EQ(page["items"][0]["last_message"]["sender"].value("name", ""), "Ada Lovelace");
+}
+
+TEST_F(RuntimeTest, ChatPagesCarryUnmutedUnreadCountersPerList) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->emit_update(1, td_api::make_object<td_api::updateUnreadChatCount>(
+                                td_api::make_object<td_api::chatListMain>(), 9, 5, 3, 1, 0));
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateUnreadMessageCount>(td_api::make_object<td_api::chatListMain>(), 40, 12));
+  transport->emit_update(1, td_api::make_object<td_api::updateUnreadChatCount>(
+                                td_api::make_object<td_api::chatListArchive>(), 4, 2, 1, 0, 0));
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateUnreadMessageCount>(td_api::make_object<td_api::chatListArchive>(), 8, 2));
+  wait_until([&] { return runtime->chats(first, "archive", 20, "")["unread"].value("messages", 0) == 2; });
+  const auto main = runtime->chats(first, "main", 20, "");
+  ASSERT_EQ(main["unread"].value("chats", 0), 3);
+  ASSERT_EQ(main["unread"].value("messages", 0), 12);
+  const auto archive = runtime->chats(first, "archive", 20, "");
+  ASSERT_EQ(archive["unread"].value("chats", 0), 1);
+  ASSERT_EQ(archive["unread"].value("messages", 0), 2);
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateWaitPhoneNumber>());
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  runtime->reconcile(first, command(first));
+  wait_until([&] { return runtime->chats(first, "main", 20, "").contains("unread"); });
+  ASSERT_EQ(runtime->chats(first, "main", 20, "")["unread"].value("messages", -1), 0)
+      << "counters survived the end of the session";
+}
+
+TEST_F(RuntimeTest, SavedMessagesChatIsFlagged) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).contains("telegram_identity"); });
+  for (const std::int64_t id : {9007199254740000LL, 42LL}) {
+    auto chat = td_api::make_object<td_api::chat>();
+    chat->id_ = id;
+    chat->title_ = id == 42 ? "Friend" : "Ada Lovelace";
+    chat->type_ = td_api::make_object<td_api::chatTypePrivate>(id);
+    chat->positions_.push_back(td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListMain>(),
+                                                                         id == 42 ? 100 : 200, false, nullptr));
+    transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(chat)));
+  }
+  wait_until([&] { return runtime->chats(first, "main", 20, "")["items"].size() == 2; });
+  const auto page = runtime->chats(first, "main", 20, "");
+  ASSERT_TRUE(page["items"][0].value("is_saved_messages", false));
+  ASSERT_FALSE(page["items"][1].value("is_saved_messages", true));
+  ASSERT_TRUE(runtime->chat(first, 9007199254740000LL)["item"].value("is_saved_messages", false));
+}
+
+TEST_F(RuntimeTest, UpdatesReportConnectionState) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateConnectionState>(td_api::make_object<td_api::connectionStateUpdating>()));
+  wait_until([&] { return runtime->updates(first, "", 100).value("connection", "") == "updating"; });
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateConnectionState>(td_api::make_object<td_api::connectionStateReady>()));
+  wait_until([&] { return runtime->updates(first, "", 100).value("connection", "") == "ready"; });
+  ASSERT_EQ(runtime->chats(first, "main", 20, "").value("connection", ""), "ready");
 }
 
 TEST_F(RuntimeTest, HistoryUsesLocalResultsAndInvalidatesAfterLogout) {

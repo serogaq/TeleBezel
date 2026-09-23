@@ -16,22 +16,18 @@ function write(relative, content) {
 }
 
 var protocol = readJson('protocol/appmessage.json');
+var defines = [];
+Object.keys(protocol).forEach(function(group) {
+  if (group === 'errors') { return; }
+  Object.keys(protocol[group]).forEach(function(name) {
+    var value = protocol[group][name];
+    if (!Number.isInteger(value)) { throw new Error('non-integer protocol value ' + group + '.' + name); }
+    defines.push('#define TB_' + group.toUpperCase() + '_' + name.toUpperCase().replace(/[^A-Z0-9]/g, '_') + ' ' + value);
+  });
+});
 write('src/c/generated/protocol.h', [
-  '#ifndef TELEBEZEL_PROTOCOL_H', '#define TELEBEZEL_PROTOCOL_H', '',
-  '#define TB_REQUEST_STATUS ' + protocol.request.status,
-  '#define TB_REQUEST_HELLO ' + protocol.request.hello,
-  '#define TB_RESPONSE_STATUS ' + protocol.response.status,
-  '#define TB_RESPONSE_READY ' + protocol.response.ready,
-  '#define TB_RESPONSE_REFRESH ' + protocol.response.refresh,
-  '#define TB_RESULT_OK ' + protocol.result.ok,
-  '#define TB_RESULT_CONFIG_MISSING ' + protocol.result.config_missing,
-  '#define TB_RESULT_CONFIG_INVALID ' + protocol.result.config_invalid,
-  '#define TB_RESULT_BACKEND_UNAVAILABLE ' + protocol.result.backend_unavailable,
-  '#define TB_RESULT_API_UNAUTHORIZED ' + protocol.result.api_unauthorized,
-  '#define TB_RESULT_BACKEND_NOT_READY ' + protocol.result.backend_not_ready,
-  '#define TB_RESULT_PROTOCOL_ERROR ' + protocol.result.protocol_error,
-  '', '#endif', ''
-].join('\n'));
+  '#ifndef TELEBEZEL_PROTOCOL_H', '#define TELEBEZEL_PROTOCOL_H', ''
+].concat(defines, ['', '#endif', '']).join('\n'));
 write('src/pkjs/lib/protocol.generated.js', "'use strict';\n\nmodule.exports = " + JSON.stringify(protocol, null, 2) + ';\n');
 
 var locales = ['en', 'ru'];
@@ -69,3 +65,9 @@ write('src/c/generated/localization.c', [
   '}', ''
 ].join('\n'));
 write('src/pkjs/lib/settings-locales.generated.js', "'use strict';\n\nmodule.exports = " + JSON.stringify(settings, null, 2) + ';\n');
+
+var vectors = readJson('tests/fixtures/codec.json');
+write('tests/generated/codec_vectors.h', ['#pragma once', '#include <stdint.h>', ''].concat(vectors.map(function(vector) {
+  var bytes = vector.hex.match(/../g).map(function(pair) { return '0x' + pair; });
+  return 'static const uint8_t tb_vector_' + vector.name + '[] = {' + bytes.join(', ') + '};';
+}), ['']).join('\n'));

@@ -1,0 +1,55 @@
+{
+    "data": {
+        "connection": "updating",
+        "fallback_reason": null,
+        "has_more": true,
+        "items": [
+            {
+                "author_signature": "",
+                "chat_id": "-100200",
+                "content": {
+                    "kind": "text",
+                    "text": "Привет 👋"
+                },
+                "date": 1700000000,
+                "edit_date": 0,
+                "id": "1048576",
+                "is_outgoing": false,
+                "sender": {
+                    "fallback": "User 7",
+                    "id": "7",
+                    "name": "Ада Лавлейс",
+                    "type": "user"
+                }
+            },
+            {
+                "author_signature": "",
+                "chat_id": "-100200",
+                "content": {
+                    "fallback_key": "message.photo",
+                    "kind": "photo",
+                    "text": "Подпись"
+                },
+                "date": 1700000000,
+                "edit_date": 0,
+                "id": "1048575",
+                "is_outgoing": true,
+                "sender": {
+                    "fallback": "User 9007199254740993",
+                    "id": "9007199254740993",
+                    "name": null,
+                    "type": "user"
+                }
+            }
+        ],
+        "local_exhausted": false,
+        "next_cursor": "h:1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:-100200:1048575.35a00e34305305b90694f4a8a88be036e04276072298c0cda1fc73dafaab0f57",
+        "observed_at": 1790171572,
+        "partial": false,
+        "refresh": "queued",
+        "retry_cursor": null,
+        "source": "tdlib_local",
+        "stale": true,
+        "updates_cursor": "1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:1.586b8fa6d8230d180704154dac1c55a7a597ca4ecd72973b45b10e7c6815a7ac"
+    }
+}

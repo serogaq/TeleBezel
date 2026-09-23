@@ -1,0 +1,62 @@
+{
+    "data": {
+        "connection": "updating",
+        "fallback_reason": null,
+        "has_more": null,
+        "items": [
+            {
+                "id": "-100200",
+                "is_forum": false,
+                "is_marked_unread": false,
+                "is_saved_messages": false,
+                "last_message": {
+                    "author_signature": "",
+                    "chat_id": "-100200",
+                    "content": {
+                        "kind": "text",
+                        "text": "Привет 👋"
+                    },
+                    "date": 1700000000,
+                    "edit_date": 0,
+                    "id": "1048576",
+                    "is_outgoing": false,
+                    "sender": {
+                        "fallback": "User 7",
+                        "id": "7",
+                        "name": "Ада Лавлейс",
+                        "type": "user"
+                    }
+                },
+                "last_read_inbox_message_id": "0",
+                "last_read_outbox_message_id": "0",
+                "notifications": {
+                    "mute_for": 0,
+                    "use_default_mute_for": true
+                },
+                "positions": {
+                    "main": {
+                        "is_pinned": false,
+                        "order": "500"
+                    }
+                },
+                "title": "Группа",
+                "type": "basic_group",
+                "unread_count": 3,
+                "unread_mention_count": 0,
+                "unread_reaction_count": 0
+            }
+        ],
+        "local_exhausted": false,
+        "next_cursor": null,
+        "observed_at": 1790171572,
+        "partial": true,
+        "retry_cursor": null,
+        "source": "tdlib_memory",
+        "stale": true,
+        "unread": {
+            "chats": 1,
+            "messages": 3
+        },
+        "updates_cursor": "1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:1.586b8fa6d8230d180704154dac1c55a7a597ca4ecd72973b45b10e7c6815a7ac"
+    }
+}

@@ -47,8 +47,19 @@ deployment step.
 
 For a standalone watch build, run `make app-build`; it writes and validates
 `app/build/app.pbw`. `make app-check` also runs the C and PebbleKit JS checks.
-Use `make app-qemu PLATFORM=emery` (or `PLATFORM=gabbro`) to install that PBW
-in an emulator. Use `make app-install IP=phone-ip` for a local phone developer
+Use `make app-qemu PLATFORM=emery` (or `PLATFORM=gabbro`) to run that PBW in an
+emulator against the mock API (`app/tests/e2e/mock_api.js`); add
+`BACKEND=docker TOKEN=tb_...` to use the Docker backend instead. With the LAN
+HTTPS stack the command reads `TELEBEZEL_LAN_ADDRESS` from `.env` and relays the
+emulator through a local proxy that trusts the Caddy root certificate, because
+the emulator's JavaScript runtime only trusts public CAs. The token is saved in
+`app/build/emulator/docker-token` (mode 600) for every platform and may be
+omitted on later runs; mock runs do not touch it. The command keeps running until
+the emulator is closed or Ctrl+C is pressed, and then stops the mock or proxy.
+`LANG_PACK=ru` installs Rebble's official `ru_RU` language pack (downloaded once
+into `app/build/lang/`), so Cyrillic text renders in the emulator; any other
+value is taken as a path to a `.pbl` file. The choice is remembered for later
+runs; `LANG_PACK=none` turns it off. Use `make app-install IP=phone-ip` for a local phone developer
 connection, or `make app-install` for an already authenticated CloudPebble
 connection. Both installation targets use the existing PBW; `app-install`
 streams logs until interrupted.

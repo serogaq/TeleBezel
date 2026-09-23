@@ -1,0 +1,58 @@
+#include "theme.h"
+
+static TbTheme s_theme;
+
+void tb_theme_init(void) {
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+  s_theme.title = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  s_theme.body = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+  s_theme.meta = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  s_theme.meta_bold = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  s_theme.title_height = 30;
+  s_theme.meta_height = 22;
+  s_theme.body_line = 28;
+#else
+  s_theme.title = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  s_theme.body = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  s_theme.meta = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+  s_theme.meta_bold = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  s_theme.title_height = 22;
+  s_theme.meta_height = 17;
+  s_theme.body_line = 22;
+#endif
+  s_theme.round = PBL_IF_ROUND_ELSE(true, false);
+  s_theme.margin = PBL_IF_ROUND_ELSE(22, 4);
+#if defined(PBL_TOUCH)
+  s_theme.touch = touch_service_is_enabled();
+  if (s_theme.touch) { app_touch_navigation_enable(true); }
+#else
+  s_theme.touch = false;
+#endif
+  s_theme.row_min = s_theme.touch ? 44 : 28;
+}
+
+const TbTheme *tb_theme(void) { return &s_theme; }
+
+GColor tb_theme_background(void) { return GColorWhite; }
+GColor tb_theme_text(bool highlighted) { return highlighted ? GColorWhite : GColorBlack; }
+GColor tb_theme_muted(bool highlighted) {
+  return highlighted ? GColorWhite : PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack);
+}
+GColor tb_theme_accent(bool highlighted) {
+  return highlighted ? GColorWhite : PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack);
+}
+
+void tb_theme_menu(MenuLayer *menu) {
+  menu_layer_set_normal_colors(menu, GColorWhite, GColorBlack);
+  menu_layer_set_highlight_colors(menu, PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack), GColorWhite);
+#if defined(PBL_ROUND)
+  menu_layer_set_center_focused(menu, true);
+#endif
+}
+
+int16_t tb_theme_text_height(const char *text, GFont font, int16_t width, int16_t limit) {
+  if (!text || !*text) { return 0; }
+  const GSize size = graphics_text_layout_get_content_size(text, font, GRect(0, 0, width, limit), GTextOverflowModeTrailingEllipsis,
+                                                           GTextAlignmentLeft);
+  return size.h < limit ? size.h : limit;
+}

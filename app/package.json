@@ -1,7 +1,7 @@
 {
   "name": "telebezel-app",
   "author": "TeleBezel contributors",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Modern Pebble Telegram client",
   "keywords": [
     "pebble-app",
@@ -16,8 +16,9 @@
     "generate": "node scripts/generate.js",
     "lint": "eslint src/pkjs tests scripts",
     "test:js": "node tests/run.js",
-    "test:c": "mkdir -p build && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_state_test.c src/c/status_state.c -o build/status_state_test && build/status_state_test && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/request_layer_test.c src/c/request_layer.c -o build/request_layer_test && build/request_layer_test && cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc/c tests/status_session_test.c src/c/status_session.c src/c/request_layer.c src/c/status_state.c -o build/status_session_test && build/status_session_test",
-    "test": "npm run generate && npm run lint && npm run test:js && npm run test:c"
+    "test:c": "node tests/c.js",
+    "test:e2e": "node tests/e2e/read_path.js",
+    "test": "npm run generate && npm run lint && npm run test:js && npm run test:c && npm run test:e2e"
   },
   "dependencies": {
     "@rebble/clay": "1.1.0"
@@ -54,7 +55,16 @@
       "CHUNK_TOTAL",
       "CONFIG_ADDRESS",
       "CONFIG_SSL",
-      "CONFIG_TOKEN"
+      "CONFIG_TOKEN",
+      "ACCOUNT_ID",
+      "MESSAGE_ID",
+      "PAGE_OP",
+      "LIST",
+      "PAGE_LIMIT",
+      "TEXT_LIMIT",
+      "PAGE_FLAGS",
+      "RETRY_AFTER",
+      "CONFIG_DEFAULT_ACCOUNT"
     ],
     "resources": {
       "media": []

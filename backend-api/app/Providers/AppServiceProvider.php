@@ -18,6 +18,7 @@ use App\Contracts\TdlibGateway;
 use App\Contracts\TdlibStatusClient;
 use App\Contracts\TransactionManager;
 use App\Infrastructure\Persistence\DatabaseTransactionManager;
+use App\Infrastructure\Persistence\PostgresConnector;
 use App\Infrastructure\Tdlib\TdlibGateway as TdlibGatewayImplementation;
 use App\Infrastructure\Tdlib\TdlibStatusClient as TdlibStatusClientImplementation;
 use App\Infrastructure\Time\SystemMonotonicClock;
@@ -44,6 +45,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->bind('db.connector.pgsql', PostgresConnector::class);
         $this->app->bind(TransactionManager::class, DatabaseTransactionManager::class);
         $this->app->bind(AdministrationRepositoryContract::class, AdministrationRepository::class);
         $this->app->bind(AuthenticationRepositoryContract::class, AuthenticationRepository::class);

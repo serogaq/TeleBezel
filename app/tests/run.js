@@ -1,8 +1,6 @@
 'use strict';
 var assert = require('assert');
-var protocol = require('../src/pkjs/lib/protocol.generated');
 var settings = require('../src/pkjs/lib/settings');
-var apiFactory = require('../src/pkjs/lib/api');
 var memory = {};
 var storage = {getItem: function(key) { return memory[key] || null; }, setItem: function(key, value) { memory[key] = value; }};
 assert.strictEqual(settings.validate({}).missing, true);
@@ -10,13 +8,20 @@ assert.strictEqual(settings.validate({address: 'https://bad:443', token: 'x'}).o
 assert.strictEqual(settings.validate({address: 'localhost:8080', ssl: false, token: 'tb_x'}).ok, true);
 settings.save(storage, {address: 'localhost:8080', ssl: false, token: 'tb_secret'});
 assert.strictEqual(settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, CONFIG_TOKEN: ''}, settings.load(storage)).token, 'tb_secret');
-function FakeXhr() { this.headers = {}; this.readyState = 0; }
-FakeXhr.prototype.open = function(method, url, async) { this.method = method; this.url = url; this.async = async; };
-FakeXhr.prototype.setRequestHeader = function(name, value) { this.headers[name] = value; };
-FakeXhr.prototype.send = function() { this.status = 200; this.responseText = '{"data":{"status":"ready"}}'; this.readyState = 4; this.onreadystatechange(); this.onerror(); };
-var calls = 0;
-apiFactory.create(FakeXhr, settings, protocol).checkStatus(settings.load(storage), function(result) { calls++; assert.strictEqual(result.code, protocol.result.ok); });
-assert.strictEqual(calls, 1);
+var saved = settings.load(storage);
+assert.deepStrictEqual([saved.showArchive, saved.unreadMode], [true, 'chats'], 'older saved settings keep the archive and count chats');
+var hidden = settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, CONFIG_TOKEN: '', SHOW_ARCHIVE: false, UNREAD_MODE: {value: 'messages'}}, saved);
+assert.deepStrictEqual([hidden.showArchive, hidden.unreadMode, hidden.token], [false, 'messages', 'tb_secret']);
+settings.save(storage, hidden);
+assert.deepStrictEqual(settings.toClay(settings.load(storage)), {CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, SHOW_ARCHIVE: false, UNREAD_MODE: 'messages'});
+assert.strictEqual(settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false}, hidden).showArchive, false, 'a missing toggle keeps the saved value');
+assert.strictEqual(settings.normalize({unreadMode: 'bogus'}).unreadMode, 'chats');
 require('./runtime_test');
 require('./api_test');
+require('./text_test');
+require('./codec_test');
+require('./transport_test');
+require('./reader_test');
+require('./contract_test');
+require('./config_page_test');
 process.stdout.write('PKJS tests passed\n');

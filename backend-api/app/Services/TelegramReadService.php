@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Contracts\Repositories\TelegramAccountRepository;
 use App\Contracts\TdlibGateway;
+use App\Data\AccountData;
 use App\Data\Input;
 use App\Data\PrincipalContext;
 use App\Data\TelegramId;
@@ -13,7 +15,7 @@ use App\Exceptions\ApiException;
 
 final readonly class TelegramReadService
 {
-    public function __construct(private TelegramAccountService $accounts, private TdlibGateway $tdlib) {}
+    public function __construct(private TelegramAccountService $accounts, private TelegramAccountRepository $repository, private TdlibGateway $tdlib) {}
 
     /** @return array<string, mixed> */
     public function chats(string $uuid, Input $input, string $requestId): array
@@ -90,11 +92,16 @@ final readonly class TelegramReadService
     /** @return array<string, mixed> */
     public function updates(string $uuid, Input $input, string $requestId): array
     {
-        $this->assertReadable($uuid, $requestId);
-
-        return $this->tdlib->updates($uuid, $input->all() + [
+        $account = $this->assertReadable($uuid, $requestId);
+        $updates = $this->tdlib->updates($uuid, $input->all() + [
             'limit' => 100,
         ], $requestId);
+        $updates['status'] = [
+            'connection' => is_string($updates['connection'] ?? null) ? $updates['connection'] : 'unknown',
+            'proxy' => $this->repository->usesProxy($account),
+        ];
+
+        return $updates;
     }
 
     /** @return array<string, mixed> */
@@ -115,10 +122,13 @@ final readonly class TelegramReadService
         ];
     }
 
-    private function assertReadable(string $uuid, string $requestId): void
+    private function assertReadable(string $uuid, string $requestId): AccountData
     {
-        if ($this->accounts->find($uuid, false, $requestId)->lifecycle !== AccountLifecycle::Active) {
+        $account = $this->accounts->find($uuid, false, $requestId);
+        if ($account->lifecycle !== AccountLifecycle::Active) {
             throw new ApiException('authorization.invalid_state', 409);
         }
+
+        return $account;
     }
 }

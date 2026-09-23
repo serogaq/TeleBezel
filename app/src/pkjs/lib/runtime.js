@@ -1,19 +1,20 @@
 'use strict';
+var accountInfo = require('./accounts');
+var message = require('./message');
 var CLAY_STORAGE_KEY = 'clay-settings';
+var ACCOUNTS_TIMEOUT_MS = 5000;
 function create(options) {
   var activeClay = null;
   var inboxSize = 0;
   var ready = false;
   var pendingHello = 0;
-  var latestStatusSeq = 0;
-  var generation = 0;
-  function send(kind, sequence, code, retries) {
-    options.Pebble.sendAppMessage({RESPONSE_KIND: kind, REQUEST_SEQ: sequence, RESULT_CODE: code},
-      function() {}, function() {
-        if (retries > 0 && (kind !== options.protocol.response.status || sequence === latestStatusSeq)) {
-          send(kind, sequence, code, retries - 1);
-        }
-      });
+  var transport = options.transport;
+  var reader = options.reader;
+  var setTimer = options.setTimeout || setTimeout;
+  var clearTimer = options.clearTimeout || clearTimeout;
+  var offered = null;
+  function sendControl(kind, sequence) {
+    transport.send({RESPONSE_KIND: kind, REQUEST_SEQ: sequence, RESULT_CODE: 0});
   }
   function scrubClayToken() {
     try {
@@ -28,67 +29,103 @@ function create(options) {
       options.storage.removeItem(CLAY_STORAGE_KEY);
     }
   }
-  function sendStatus(sequence, code) { send(options.protocol.response.status, sequence, code, 1); }
-  function checkStatus(sequence, value) {
-    var currentGeneration = ++generation;
-    options.api.checkStatus(value, function(result) {
-      if (currentGeneration === generation && sequence === latestStatusSeq) { sendStatus(sequence, result.code); }
-    });
-  }
   function onMessage(event) {
-    var payload = event && event.payload ? event.payload : {};
+    var payload = message.normalize(event && event.payload ? event.payload : {});
     var kind = payload.REQUEST_KIND;
     var sequence = payload.REQUEST_SEQ;
     if (!Number.isInteger(sequence) || sequence <= 0 || sequence > 2147483647) { return; }
     if (kind === options.protocol.request.hello) {
-      if (Number.isInteger(payload.INBOX_SIZE) && payload.INBOX_SIZE > 0) { inboxSize = payload.INBOX_SIZE; }
-      if (ready) { send(options.protocol.response.ready, sequence, 0, 1); }
+      if (Number.isInteger(payload.INBOX_SIZE) && payload.INBOX_SIZE > 0) {
+        inboxSize = payload.INBOX_SIZE;
+        reader.setInboxSize(inboxSize);
+      }
+      if (ready) { sendControl(options.protocol.response.ready, sequence); }
       else { pendingHello = sequence; }
       return;
     }
-    if (!ready || kind !== options.protocol.request.status) { return; }
-    latestStatusSeq = sequence;
-    var value = options.settings.load(options.storage);
-    var valid = options.settings.validate(value);
-    if (!valid.ok) {
-      ++generation;
-      sendStatus(sequence, valid.missing ? options.protocol.result.config_missing : options.protocol.result.config_invalid);
-      return;
-    }
-    checkStatus(sequence, value);
+    if (!ready) { return; }
+    reader.handle(payload);
   }
   function showConfiguration() {
     var saved = options.settings.load(options.storage);
-    openClay(saved);
+    offered = null;
+    if (!options.settings.validate(saved).ok) {
+      openClay(saved, {});
+      return;
+    }
+    var opened = false;
+    var timer = setTimer(function() { open({accountsUnavailable: true}); }, ACCOUNTS_TIMEOUT_MS);
+    function open(state) {
+      if (opened) { return; }
+      opened = true;
+      clearTimer(timer);
+      openClay(saved, state);
+    }
+    options.api.preferences(saved, function(preferences) {
+      if (opened) { return; }
+      if (!preferences.ok) {
+        open({accountsUnavailable: true});
+        return;
+      }
+      options.api.accounts(saved, function(result) {
+        if (opened) { return; }
+        if (!result.ok || !Array.isArray(result.data)) {
+          open({accountsUnavailable: true});
+          return;
+        }
+        var list = result.data.filter(accountInfo.valid).map(function(account) { return {id: account.id, name: accountInfo.name(account)}; });
+        var ids = list.map(function(account) { return account.id; });
+        var current = typeof preferences.data.default_account_id === 'string' && ids.indexOf(preferences.data.default_account_id) !== -1
+          ? preferences.data.default_account_id : '';
+        offered = {address: saved.address, ssl: saved.ssl, token: saved.token, value: current, ids: ids};
+        open({accounts: list, defaultAccount: current});
+      });
+    });
   }
-  function openClay(saved) {
+  function openClay(saved, state) {
     var strings = options.localization.resolve(options.locales, options.getLocale());
     scrubClayToken();
-    activeClay = new options.Clay(options.configPage.build(strings, {tokenSaved: saved.token !== ''}), null, {autoHandleEvents: false});
-    activeClay.setSettings(options.settings.toClay(saved));
+    state.tokenSaved = saved.token !== '';
+    activeClay = new options.Clay(options.configPage.build(strings, state), null, {autoHandleEvents: false});
+    var values = options.settings.toClay(saved);
+    if (state.accounts) { values.CONFIG_DEFAULT_ACCOUNT = state.defaultAccount || ''; }
+    activeClay.setSettings(values);
     options.Pebble.openURL(activeClay.generateUrl());
   }
+  function chosenDefault(submitted, value) {
+    var chosen = options.settings.clayValue(submitted, 'CONFIG_DEFAULT_ACCOUNT');
+    var target = offered;
+    offered = null;
+    if (!target || typeof chosen !== 'string' || chosen === target.value) { return null; }
+    if (chosen !== '' && target.ids.indexOf(chosen) === -1) { return null; }
+    if (value.address !== target.address || value.ssl !== target.ssl || value.token !== target.token) { return null; }
+    return {default_account_id: chosen || null};
+  }
   function webviewClosed(event) {
-    if (!activeClay || !event || !event.response) { activeClay = null; return; }
+    if (!activeClay || !event || !event.response) { activeClay = null; offered = null; return; }
     var saved = options.settings.load(options.storage);
     var submitted = null;
     try { submitted = activeClay.getSettings(event.response, false); } catch (_error) { submitted = null; }
     scrubClayToken();
     activeClay = null;
-    if (!submitted) { return; }
+    if (!submitted) { offered = null; return; }
     var value = options.settings.fromClay(submitted, saved);
     options.settings.save(options.storage, value);
-    ++generation;
-    send(options.protocol.response.refresh, 0, 0, 1);
-    if (latestStatusSeq <= 0) { return; }
-    var valid = options.settings.validate(value);
-    if (valid.ok) { checkStatus(latestStatusSeq, value); }
-    else { sendStatus(latestStatusSeq, valid.missing ? options.protocol.result.config_missing : options.protocol.result.config_invalid); }
+    var change = chosenDefault(submitted, value);
+    function applied() {
+      reader.reset();
+      sendControl(options.protocol.response.refresh, 0);
+    }
+    if (!change) {
+      applied();
+      return;
+    }
+    options.api.updatePreferences(value, change, applied);
   }
   function register() {
     options.Pebble.addEventListener('ready', function() {
       ready = true;
-      if (pendingHello > 0) { send(options.protocol.response.ready, pendingHello, 0, 1); pendingHello = 0; }
+      if (pendingHello > 0) { sendControl(options.protocol.response.ready, pendingHello); pendingHello = 0; }
     });
     options.Pebble.addEventListener('appmessage', onMessage);
     options.Pebble.addEventListener('showConfiguration', showConfiguration);

@@ -1,0 +1,183 @@
+[
+  {
+    "name": "account",
+    "record": "account",
+    "input": {
+      "id": "00112233-4455-4677-8899-aabbccddeeff",
+      "name": "Работа",
+      "state": 0,
+      "flags": 1
+    },
+    "hex": "0134002430303131323233332d343435352d343637372d383839392d6161626263636464656566660cd0a0d0b0d0b1d0bed182d0b00001",
+    "decoded": {
+      "id": "00112233-4455-4677-8899-aabbccddeeff",
+      "name": "Работа",
+      "state": 0,
+      "flags": 1
+    }
+  },
+  {
+    "name": "prefs",
+    "record": "prefs",
+    "input": {
+      "defaultAccount": "00112233-4455-4677-8899-aabbccddeeff",
+      "chatList": 1,
+      "host": "tg.example:443",
+      "showArchive": false,
+      "unreadMode": 1
+    },
+    "hex": "0237002430303131323233332d343435352d343637372d383839392d616162626363646465656666010e74672e6578616d706c653a3434330001",
+    "decoded": {
+      "defaultAccount": "00112233-4455-4677-8899-aabbccddeeff",
+      "chatList": 1,
+      "host": "tg.example:443",
+      "showArchive": 0,
+      "unreadMode": 1
+    }
+  },
+  {
+    "name": "summary",
+    "record": "summary",
+    "input": {
+      "connection": 1,
+      "proxy": true,
+      "unreadChats": 70000,
+      "unreadMessages": 4294967295
+    },
+    "hex": "060a00010170110100ffffffff",
+    "decoded": {
+      "connection": 1,
+      "proxy": 1,
+      "unreadChats": 70000,
+      "unreadMessages": 4294967295
+    }
+  },
+  {
+    "name": "status",
+    "record": "status",
+    "input": {
+      "connection": 2,
+      "proxy": false
+    },
+    "hex": "0702000200",
+    "decoded": {
+      "connection": 2,
+      "proxy": 0
+    }
+  },
+  {
+    "name": "chat",
+    "record": "chat",
+    "input": {
+      "id": "-1009007199254740993",
+      "title": "Группа 👋",
+      "type": 1,
+      "flags": 9,
+      "unread": 1234,
+      "lastDate": 1700000000,
+      "previewKind": 1,
+      "previewAction": 0,
+      "previewDuration": 0,
+      "previewSender": "Ада",
+      "previewExtra": "",
+      "previewText": "Подпись\nк фото"
+    },
+    "hex": "035700142d3130303930303731393932353437343039393311d093d180d183d0bfd0bfd0b020f09f918b0109d20400f153650100000006d090d0b4d0b0001a00d09fd0bed0b4d0bfd0b8d181d18c20d0ba20d184d0bed182d0be",
+    "decoded": {
+      "id": "-1009007199254740993",
+      "title": "Группа 👋",
+      "chatType": 1,
+      "flags": 9,
+      "unread": 1234,
+      "lastDate": 1700000000,
+      "previewKind": 1,
+      "previewAction": 0,
+      "previewDuration": 0,
+      "previewSender": "Ада",
+      "previewExtra": "",
+      "previewText": "Подпись к фото"
+    },
+    "textLimit": 80
+  },
+  {
+    "name": "message",
+    "record": "message",
+    "input": {
+      "id": "9007199254740993",
+      "date": 1700000123,
+      "flags": 3,
+      "kind": 3,
+      "action": 0,
+      "duration": 74,
+      "sender": "Ada Lovelace",
+      "extra": "",
+      "text": "Hello, мир 😀"
+    },
+    "hex": "043c0010393030373139393235343734303939337bf153650303004a000c416461204c6f76656c61636500120048656c6c6f2c20d0bcd0b8d18020f09f9880",
+    "decoded": {
+      "id": "9007199254740993",
+      "date": 1700000123,
+      "flags": 3,
+      "kind": 3,
+      "action": 0,
+      "duration": 74,
+      "sender": "Ada Lovelace",
+      "extra": "",
+      "text": "Hello, мир 😀"
+    },
+    "textLimit": 300
+  },
+  {
+    "name": "message_truncated",
+    "record": "message",
+    "input": {
+      "id": "42",
+      "date": 1,
+      "flags": 0,
+      "kind": 0,
+      "action": 0,
+      "duration": 0,
+      "sender": "",
+      "extra": "",
+      "text": "Длинный текст сообщения"
+    },
+    "hex": "041b0002343201000000040000000000000b00d094d0bbd0b8d0bde280a6",
+    "decoded": {
+      "id": "42",
+      "date": 1,
+      "flags": 4,
+      "kind": 0,
+      "action": 0,
+      "duration": 0,
+      "sender": "",
+      "extra": "",
+      "text": "Длин…"
+    },
+    "textLimit": 12
+  },
+  {
+    "name": "text",
+    "record": "text",
+    "input": {
+      "bytes": [
+        208,
+        159,
+        209,
+        128,
+        208,
+        184
+      ]
+    },
+    "hex": "0508000600d09fd180d0b8",
+    "decoded": {
+      "bytes": [
+        208,
+        159,
+        209,
+        128,
+        208,
+        184
+      ]
+    }
+  }
+]

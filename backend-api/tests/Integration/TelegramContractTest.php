@@ -533,3 +533,137 @@ test('failed close remains retryable instead of silently leaving a chat open', f
         'op' => 'stats',
     ])['counts']['close'])->toBe(2);
 });
+
+test('the chat list of an account that is not authorized asks for authorization instead of retrying', function (): void {
+    $this->getJson($this->base.'/chats')->assertStatus(409)->assertJsonPath('error.code', 'authorization.invalid_state');
+});
+
+test('the account owner chat is marked as saved messages', function (): void {
+    contractState($this, 'ready');
+    $this->td->control([
+        'op' => 'chat',
+        'id' => '9007199254740000',
+        'type' => 'private',
+        'title' => 'Ада Лавлейс',
+    ]);
+    contractEventually(fn () => count(app(TdlibGateway::class)->chats($this->account, [
+        'list' => 'main',
+        'limit' => 20,
+    ], (string) Str::uuid())['items']) === 1);
+    contractEventually(fn () => $this->getJson($this->base.'/chats?limit=20')->json('data.items.0.is_saved_messages') === true);
+    $this->getJson($this->base.'/chats/9007199254740000?view_id='.$this->view)->assertOk()->assertJsonPath('data.item.is_saved_messages', true);
+});
+
+test('watch read contract shapes match the shared fixtures', function (): void {
+    contractState($this, 'ready');
+    $this->td->control([
+        'op' => 'user',
+        'id' => '7',
+        'first_name' => 'Ада',
+        'last_name' => 'Лавлейс',
+    ]);
+    $this->td->control([
+        'op' => 'chat',
+        'id' => '-100200',
+        'type' => 'basic_group',
+        'title' => 'Группа',
+        'order' => 500,
+        'unread' => 3,
+        'last_message' => [
+            'id' => '1048576',
+            'chat' => '-100200',
+            'sender' => '7',
+            'text' => 'Привет 👋',
+        ],
+    ]);
+    $this->td->control([
+        'op' => 'unread',
+        'list' => 'main',
+        'chats' => 1,
+        'messages' => 3,
+    ]);
+    $this->td->control([
+        'op' => 'connection',
+        'state' => 'updating',
+    ]);
+    contractEventually(fn () => count(app(TdlibGateway::class)->chats($this->account, [
+        'list' => 'main',
+        'limit' => 20,
+    ], (string) Str::uuid())['items']) === 1);
+    $chats = $this->getJson($this->base.'/chats?limit=20')->assertOk()
+        ->assertJsonPath('data.items.0.last_message.sender.name', 'Ада Лавлейс')
+        ->assertJsonPath('data.items.0.unread_count', 3)
+        ->assertJsonPath('data.items.0.is_saved_messages', false)
+        ->assertJsonPath('data.unread.chats', 1)
+        ->assertJsonPath('data.unread.messages', 3)
+        ->assertJsonPath('data.connection', 'updating')
+        ->json();
+    $updates = $this->getJson($this->base.'/updates')->assertOk()
+        ->assertJsonPath('data.status.connection', 'updating')
+        ->assertJsonPath('data.status.proxy', false)
+        ->json();
+    $this->td->control([
+        'op' => 'response',
+        'function' => 'history',
+        'kind' => 'history',
+        'items' => [[
+            'id' => '1048576',
+            'chat' => '-100200',
+            'sender' => '7',
+            'text' => 'Привет 👋',
+        ], [
+            'id' => '1048575',
+            'chat' => '-100200',
+            'outgoing' => true,
+            'content' => [
+                'kind' => 'photo',
+                'caption' => 'Подпись',
+            ],
+        ]],
+    ]);
+    $history = $this->getJson($this->base.'/chats/-100200/messages?view_id='.$this->view.'&limit=2')->assertOk()
+        ->assertJsonPath('data.items.0.sender.name', 'Ада Лавлейс')
+        ->assertJsonPath('data.items.1.content.kind', 'photo')
+        ->assertJsonPath('data.items.1.content.text', 'Подпись')
+        ->assertJsonPath('data.items.1.is_outgoing', true)
+        ->json();
+    contractEventually(fn () => $this->td->control([
+        'op' => 'stats',
+    ])['pending'] === 0);
+    contractFixture('chats', $chats);
+    contractFixture('history', $history);
+    contractFixture('updates', $updates);
+});
+
+/** @param array<string, mixed> $response */
+function contractFixture(string $name, array $response): void
+{
+    $path = dirname(__DIR__, 3).'/tests/contracts/read-api/'.$name.'.json';
+    unset($response['request_id']);
+    if (getenv('TELEBEZEL_UPDATE_CONTRACTS') === '1') {
+        file_put_contents($path, json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
+    }
+    $expected = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    expect(contractShape($response))->toBe(contractShape($expected));
+}
+
+function contractShape(mixed $value): mixed
+{
+    if (is_array($value) && array_is_list($value)) {
+        return $value === [] ? [] : [contractShape($value[0])];
+    }
+    if (is_array($value)) {
+        $shape = [];
+        foreach ($value as $key => $item) {
+            if ($key === 'request_id' || $key === 'preview_id' || $key === 'preview_state') {
+                continue;
+            }
+            $shape[$key] = contractShape($item);
+        }
+        ksort($shape);
+
+        return $shape;
+    }
+
+    return get_debug_type($value);
+}

@@ -213,3 +213,118 @@ test('the chat list reports exhaustion and pagination through the same fields', 
         ->assertJsonPath('data.partial', false)
         ->assertJsonPath('data.next_cursor', null);
 });
+
+test('message content keeps captions and descriptive fields and strips internal ones', function (): void {
+    Http::fake([
+        '*' => Http::response([
+            'data' => readContractRuntime([
+                'items' => [[
+                    'id' => '99',
+                    'chat_id' => '42',
+                    'date' => 2,
+                    'content' => [
+                        'kind' => 'voice_note',
+                        'fallback_key' => 'message.voice_note',
+                        'text' => 'Caption',
+                        'duration' => 14,
+                        'emoji' => 'x',
+                        'title' => 'Title',
+                        'action' => 'pinned',
+                        'preview_file_id' => 7,
+                        'preview_mime' => 'image/jpeg',
+                    ],
+                ]],
+                'local_exhausted' => true,
+                'has_more' => false,
+            ]),
+        ]),
+    ]);
+    $content = $this->withToken($this->token)->getJson($this->history)
+        ->assertOk()
+        ->json('data.items.0.content');
+    expect($content)->toBe([
+        'kind' => 'voice_note',
+        'fallback_key' => 'message.voice_note',
+        'text' => 'Caption',
+        'duration' => 14,
+        'emoji' => 'x',
+        'title' => 'Title',
+        'action' => 'pinned',
+    ]);
+});
+
+test('updates report the connection and whether the account goes through a proxy', function (): void {
+    Http::fake([
+        '*' => Http::response([
+            'data' => [
+                'items' => [],
+                'cursor' => 'next',
+                'has_more' => false,
+                'connection' => 'connecting_to_proxy',
+            ],
+        ]),
+    ]);
+    $updates = '/v1/telegram/accounts/'.$this->account->id.'/updates';
+    $this->withToken($this->token)->getJson($updates)
+        ->assertOk()
+        ->assertJsonPath('data.status', [
+            'connection' => 'connecting_to_proxy',
+            'proxy' => false,
+        ]);
+    $this->account->forceFill([
+        'proxy_id' => fake()->uuid(),
+        'proxy_type' => 'socks5',
+        'proxy_server' => 'proxy.example',
+        'proxy_port' => 1080,
+        'proxy_config' => [
+            'mode' => 'socks5',
+            'host' => 'proxy.example',
+            'port' => 1080,
+        ],
+        'proxy_config_version' => 1,
+    ])->save();
+    $this->withToken($this->token)->getJson($updates)
+        ->assertOk()
+        ->assertJsonPath('data.status.proxy', true);
+    $this->account->forceFill([
+        'proxy_type' => 'direct',
+        'proxy_server' => null,
+        'proxy_port' => null,
+        'proxy_config' => [
+            'mode' => 'direct',
+        ],
+        'proxy_config_version' => 2,
+    ])->save();
+    $this->withToken($this->token)->getJson($updates)
+        ->assertOk()
+        ->assertJsonPath('data.status.proxy', false);
+});
+
+test('chat pages keep unmuted unread counters and the saved messages flag', function (): void {
+    Http::fake([
+        '*' => Http::response([
+            'data' => readContractRuntime([
+                'items' => [[
+                    'id' => '7',
+                    'type' => 'private',
+                    'title' => 'Ada',
+                    'is_saved_messages' => true,
+                    'internal' => 'hidden',
+                ]],
+                'unread' => [
+                    'chats' => 2,
+                    'messages' => 5,
+                    'muted' => 9,
+                ],
+            ]),
+        ]),
+    ]);
+    $this->withToken($this->token)->getJson('/v1/telegram/accounts/'.$this->account->id.'/chats')
+        ->assertOk()
+        ->assertJsonPath('data.unread', [
+            'chats' => 2,
+            'messages' => 5,
+        ])
+        ->assertJsonPath('data.items.0.is_saved_messages', true)
+        ->assertJsonMissingPath('data.items.0.internal');
+});
