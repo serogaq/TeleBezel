@@ -85,6 +85,7 @@ static void completed(void *owner, uint32_t sequence, const TbResponse *response
     else { settle(session, tb_error_from_response(response)); }
     return;
   }
+  session->failure = response->outcome == TB_OUTCOME_PROTOCOL ? "chunk order" : NULL;
   if (response->outcome != TB_OUTCOME_RESPONSE || response->result != TB_RESULT_OK) {
     if (!response->final) { tb_requests_cancel(session->requests, sequence); }
     session->retry_after = response->retry_after;

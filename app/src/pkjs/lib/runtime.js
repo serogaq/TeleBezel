@@ -1,5 +1,6 @@
 'use strict';
 var accountInfo = require('./accounts');
+var message = require('./message');
 var CLAY_STORAGE_KEY = 'clay-settings';
 var ACCOUNTS_TIMEOUT_MS = 5000;
 function create(options) {
@@ -29,7 +30,7 @@ function create(options) {
     }
   }
   function onMessage(event) {
-    var payload = event && event.payload ? event.payload : {};
+    var payload = message.normalize(event && event.payload ? event.payload : {});
     var kind = payload.REQUEST_KIND;
     var sequence = payload.REQUEST_SEQ;
     if (!Number.isInteger(sequence) || sequence <= 0 || sequence > 2147483647) { return; }

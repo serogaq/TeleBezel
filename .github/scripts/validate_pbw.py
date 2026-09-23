@@ -6,11 +6,11 @@ from pathlib import Path
 
 EXPECTED_UUID = "b91f715e-af74-4a90-9df4-fda0fbcd9762"
 EXPECTED_PLATFORMS = {"diorite", "emery", "flint", "gabbro"}
-EXPECTED_KEYS = {
+EXPECTED_KEYS = [
     "REQUEST_KIND", "REQUEST_SEQ", "RESPONSE_KIND", "RESULT_CODE", "INBOX_SIZE", "PAYLOAD", "ENTITY_ID",
-    "CHUNK_INDEX", "CHUNK_TOTAL", "CONFIG_ADDRESS", "CONFIG_SSL", "CONFIG_TOKEN", "CONFIG_DEFAULT_ACCOUNT", "ACCOUNT_ID", "MESSAGE_ID",
-    "PAGE_OP", "LIST", "PAGE_LIMIT", "TEXT_LIMIT", "PAGE_FLAGS", "RETRY_AFTER",
-}
+    "CHUNK_INDEX", "CHUNK_TOTAL", "CONFIG_ADDRESS", "CONFIG_SSL", "CONFIG_TOKEN", "ACCOUNT_ID", "MESSAGE_ID",
+    "PAGE_OP", "LIST", "PAGE_LIMIT", "TEXT_LIMIT", "PAGE_FLAGS", "RETRY_AFTER", "CONFIG_DEFAULT_ACCOUNT",
+]
 
 # Pebble SDK's STM32 CRC implementation is Apache-2.0 (Google LLC, 2024).
 # The bundle manifest uses this CRC, not ZIP's CRC-32.
@@ -42,7 +42,8 @@ with zipfile.ZipFile(pbw) as archive:
     info = json.loads(archive.read("appinfo.json"))
     require(info["uuid"] == EXPECTED_UUID, "wrong application UUID")
     require(set(info["targetPlatforms"]) == EXPECTED_PLATFORMS, "wrong platforms")
-    require(set(info["messageKeys"]) == EXPECTED_KEYS, "wrong AppMessage keys")
+    require(dict(info["messageKeys"]) == {key: 10000 + index for index, key in enumerate(EXPECTED_KEYS)},
+            "AppMessage key numbers changed; append new keys at the end")
     expected_version = json.loads(Path("app/package.json").read_text())["version"]
     require(info["versionLabel"] == expected_version, "PBW version drift")
     require("pebble-js-app.js" in names, "missing PKJS")

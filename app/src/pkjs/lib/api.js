@@ -21,7 +21,7 @@ function query(params) {
   });
   return parts.length ? '?' + parts.join('&') : '';
 }
-function create(XMLHttpRequestCtor, settingsStore, protocol, now) {
+function create(XMLHttpRequestCtor, settingsStore, protocol, now, log) {
   now = now || Date.now;
   function request(settings, method, path, callback, body) {
     var done = false;
@@ -50,7 +50,11 @@ function create(XMLHttpRequestCtor, settingsStore, protocol, now) {
         var retryAfter = parseRetryAfter(xhr.getResponseHeader ? xhr.getResponseHeader('Retry-After') : null, now);
         var parsed = null;
         try { parsed = JSON.parse(xhr.responseText || ''); } catch (_error) { parsed = null; }
-        if (!parsed || typeof parsed !== 'object') { failure(status, 'response.invalid', retryAfter); return; }
+        if (!parsed || typeof parsed !== 'object') {
+          if (log) { log('TeleBezel ' + method + ' ' + path.split('?')[0] + ' returned non-JSON http ' + status + ' (' + String(xhr.responseText || '').length + ' bytes)'); }
+          failure(status, 'response.invalid', retryAfter);
+          return;
+        }
         if (status >= 200 && status < 300) {
           if (!parsed.data || typeof parsed.data !== 'object') { failure(status, 'response.invalid', retryAfter); return; }
           finish({ok: true, status: status, code: null, retryAfter: null, action: null, data: parsed.data});

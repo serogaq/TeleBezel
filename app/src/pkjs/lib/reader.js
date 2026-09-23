@@ -1,5 +1,6 @@
 'use strict';
 var accountInfo = require('./accounts');
+var message = require('./message');
 var ACCOUNT_PATTERN = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 var CHAT_PATTERN = /^-?[1-9][0-9]{0,18}$/;
 var MESSAGE_PATTERN = /^[1-9][0-9]{0,18}$/;
@@ -30,7 +31,13 @@ function create(options) {
     return Math.max(256, Math.min(size, 8192) - 96);
   }
 
+  function report(sequence, code, detail) {
+    if (code !== protocol.result.ok && options.log) { options.log('TeleBezel request ' + sequence + ' result ' + code + (detail ? ' (' + detail + ')' : '')); }
+  }
+
   function respond(sequence, code, records, flags, retryAfter) {
+    report(sequence, code, respond.detail);
+    respond.detail = null;
     var chunks = code === protocol.result.ok ? codec.pack(records || [], budget()) : [[]];
     chunks.forEach(function(chunk, index) {
       var message = {
@@ -104,7 +111,12 @@ function create(options) {
             return;
           }
         }
-        done(result);
+        try {
+          done(result);
+        } catch (error) {
+          respond.detail = 'exception ' + (error && error.message ? error.message : String(error));
+          respond(slot.sequence, protocol.result.protocol_error);
+        }
       });
     }
     attempt();
@@ -120,7 +132,13 @@ function create(options) {
     return value;
   }
 
+  function reject(sequence, payload, keys) {
+    respond.detail = 'rejected ' + message.describe(payload, keys) + ' received ' + Object.keys(payload).sort().join(',');
+    respond(sequence, protocol.result.protocol_error);
+  }
+
   function fail(sequence, result) {
+    respond.detail = 'http ' + result.status + ' ' + result.code;
     respond(sequence, failureCode(result), null, 0, result.code === 'rate_limit.exceeded' || result.code === 'interest.limit_reached' ? result.retryAfter || 5 : 0);
   }
 
@@ -144,7 +162,11 @@ function create(options) {
       call('bootstrap', slot, function(callback) { return options.api.accounts(value, callback); }, function(accounts) {
         finish('bootstrap', slot);
         if (!accounts.ok) { fail(sequence, accounts); return; }
-        if (!Array.isArray(accounts.data)) { respond(sequence, protocol.result.protocol_error); return; }
+        if (!Array.isArray(accounts.data)) {
+          respond.detail = 'accounts are not a list';
+          respond(sequence, protocol.result.protocol_error);
+          return;
+        }
         var defaultAccount = typeof preferences.data.default_account_id === 'string' ? preferences.data.default_account_id : '';
         var records = [codec.prefs({
           defaultAccount: defaultAccount,
@@ -233,7 +255,7 @@ function create(options) {
     var account = payload.ACCOUNT_ID;
     var list = payload.LIST === protocol.list.archive ? 'archive' : 'main';
     var op = payload.PAGE_OP;
-    if (!ACCOUNT_PATTERN.test(account || '')) { respond(sequence, protocol.result.protocol_error); return; }
+    if (!ACCOUNT_PATTERN.test(account || '')) { reject(sequence, payload, ['ACCOUNT_ID']); return; }
     var bounds = limits(payload, 20, 80, Math.max(16, Math.min(512, budget() - 200)));
     var key = account + '|' + list;
     var state = chatCursors[key] || {};
@@ -244,7 +266,7 @@ function create(options) {
     } else if (op === ops.retry) {
       cursor = state.retry || null;
     } else if (op !== ops.first && op !== ops.refresh) {
-      respond(sequence, protocol.result.protocol_error);
+      reject(sequence, payload, ['PAGE_OP']);
       return;
     }
     var value = settingsOrFail(sequence);
@@ -296,7 +318,7 @@ function create(options) {
     var account = payload.ACCOUNT_ID;
     var chat = payload.ENTITY_ID;
     var op = payload.PAGE_OP;
-    if (!ACCOUNT_PATTERN.test(account || '') || !CHAT_PATTERN.test(chat || '')) { respond(sequence, protocol.result.protocol_error); return; }
+    if (!ACCOUNT_PATTERN.test(account || '') || !CHAT_PATTERN.test(chat || '')) { reject(sequence, payload, ['ACCOUNT_ID', 'ENTITY_ID']); return; }
     var bounds = limits(payload, 20, 300, Math.max(16, Math.min(1024, budget() - 200)));
     var key = account + '|' + chat;
     if (op === ops.first) { historyCursors[key] = {older: false, next: null, retry: null, tail: null}; }
@@ -317,7 +339,7 @@ function create(options) {
       if (!state.tail) { respond(sequence, protocol.result.cursor_lost); return; }
       used = params.cursor = state.tail;
     } else if (op !== ops.first && op !== ops.refresh) {
-      respond(sequence, protocol.result.protocol_error);
+      reject(sequence, payload, ['PAGE_OP']);
       return;
     }
     var value = settingsOrFail(sequence);
@@ -355,7 +377,7 @@ function create(options) {
     var chat = payload.ENTITY_ID;
     var id = payload.MESSAGE_ID;
     if (!ACCOUNT_PATTERN.test(account || '') || !CHAT_PATTERN.test(chat || '') || !MESSAGE_PATTERN.test(id || '')) {
-      respond(sequence, protocol.result.protocol_error);
+      reject(sequence, payload, ['ACCOUNT_ID', 'ENTITY_ID', 'MESSAGE_ID']);
       return;
     }
     var limit = Math.max(16, Math.min(FULL_TEXT_LIMIT, Number.isInteger(payload.TEXT_LIMIT) ? payload.TEXT_LIMIT : 4096));
@@ -405,7 +427,7 @@ function create(options) {
 
   function setDefault(sequence, payload) {
     var account = payload.ACCOUNT_ID;
-    if (account && !ACCOUNT_PATTERN.test(account)) { respond(sequence, protocol.result.protocol_error); return; }
+    if (account && !ACCOUNT_PATTERN.test(account)) { reject(sequence, payload, ['ACCOUNT_ID']); return; }
     var value = settingsOrFail(sequence);
     if (!value) { return; }
     var slot = begin(null, sequence);
@@ -417,7 +439,17 @@ function create(options) {
     });
   }
 
-  function handle(payload) {
+  function handle(raw) {
+    var payload = message.normalize(raw);
+    try {
+      dispatch(payload);
+    } catch (error) {
+      respond.detail = 'exception ' + (error && error.message ? error.message : String(error));
+      respond(payload.REQUEST_SEQ, protocol.result.protocol_error);
+    }
+  }
+
+  function dispatch(payload) {
     var sequence = payload.REQUEST_SEQ;
     var kinds = protocol.request;
     switch (payload.REQUEST_KIND) {
@@ -427,7 +459,7 @@ function create(options) {
       case kinds.message: fullText(sequence, payload); break;
       case kinds.view_close: viewClose(sequence, payload); break;
       case kinds.set_default: setDefault(sequence, payload); break;
-      default: respond(sequence, protocol.result.protocol_error);
+      default: reject(sequence, payload, ['REQUEST_KIND']);
     }
   }
 

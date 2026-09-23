@@ -35,6 +35,7 @@ typedef struct {
   char default_account[TB_ACCOUNT_ID_SIZE];
   uint8_t chat_list;
   char host[TB_HOST_SIZE];
+  const char *failure;
 } TbSession;
 
 void tb_session_init(TbSession *session, TbRequestLayer *requests, TbSessionPorts ports);

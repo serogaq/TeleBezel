@@ -137,6 +137,14 @@ static bool integer(const Tuple *tuple, int32_t *out) {
   return false;
 }
 
+static void log_tuple(const char *name, const Tuple *tuple) {
+  if (!tuple) {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "AppMessage %s missing", name);
+  } else {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "AppMessage %s type %d length %d", name, (int)tuple->type, (int)tuple->length);
+  }
+}
+
 static bool in_stack(Window *window) { return window && window_stack_contains_window(window); }
 
 static void show_connect(const char *body, const char *hint, TbNoticeAction action) {
@@ -241,6 +249,7 @@ static void route(void) {
     return;
   }
   if (s_session.error != TB_ERROR_NONE) {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "bootstrap failed: error %d %s", (int)s_session.error, s_session.failure ? s_session.failure : "");
     reset_to_connect(tb_error_text(s_strings, s_session.error), s_strings->retry_hint, retry_session);
     return;
   }
@@ -289,12 +298,16 @@ static bool handle_fatal(int32_t error) {
 
 static void chats_changed(void *context) {
   (void)context;
+  if (s_chats.error != TB_ERROR_NONE) { APP_LOG(APP_LOG_LEVEL_WARNING, "chats failed: error %d", (int)s_chats.error); }
   if (s_chats.error != TB_ERROR_NONE && handle_fatal(s_chats.error)) { return; }
   tb_chats_window_reload(&s_chats_view);
 }
 
 static void history_changed(void *context) {
   (void)context;
+  if (s_history.error != TB_ERROR_NONE || s_history.top_error != TB_ERROR_NONE || s_history.refresh_error != TB_ERROR_NONE) {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "history failed: %d/%d/%d", (int)s_history.error, (int)s_history.top_error, (int)s_history.refresh_error);
+  }
   if (s_history.error != TB_ERROR_NONE) {
     if (handle_fatal(s_history.error)) { return; }
     if (s_history.error == TB_RESULT_CHAT_NOT_FOUND) {
@@ -412,6 +425,9 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   memset(&response, 0, sizeof(response));
   if (!integer(dict_find(iter, MESSAGE_KEY_RESULT_CODE), &result) || !integer(dict_find(iter, MESSAGE_KEY_CHUNK_INDEX), &index) ||
       !integer(dict_find(iter, MESSAGE_KEY_CHUNK_TOTAL), &total) || index < 0 || total <= 0 || total > UINT16_MAX) {
+    log_tuple("RESULT_CODE", dict_find(iter, MESSAGE_KEY_RESULT_CODE));
+    log_tuple("CHUNK_INDEX", dict_find(iter, MESSAGE_KEY_CHUNK_INDEX));
+    log_tuple("CHUNK_TOTAL", dict_find(iter, MESSAGE_KEY_CHUNK_TOTAL));
     response.total = 0;
     tb_requests_chunk(&s_requests, (uint32_t)sequence, &response);
     return;
@@ -419,6 +435,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   integer(dict_find(iter, MESSAGE_KEY_PAGE_FLAGS), &flags);
   integer(dict_find(iter, MESSAGE_KEY_RETRY_AFTER), &retry_after);
   const Tuple *payload = dict_find(iter, MESSAGE_KEY_PAYLOAD);
+  if (payload && payload->type != TUPLE_BYTE_ARRAY) { log_tuple("PAYLOAD", payload); }
   response.result = result;
   response.flags = (uint32_t)flags;
   response.retry_after = retry_after > 0 ? (uint32_t)retry_after : 0;

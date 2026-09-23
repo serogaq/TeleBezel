@@ -263,3 +263,17 @@ defaults.request({REQUEST_KIND: R.set_default, REQUEST_SEQ: 81, ACCOUNT_ID: ''})
 assert.deepStrictEqual(defaults.calls[1].args[1], {default_account_id: null});
 defaults.request({REQUEST_KIND: 99, REQUEST_SEQ: 82});
 assert.strictEqual(defaults.response(82).code, protocol.result.protocol_error);
+
+var variants = harness();
+variants.request({REQUEST_KIND: '3', REQUEST_SEQ: '90', ACCOUNT_ID: ACCOUNT + '\u0000', LIST: undefined, PAGE_LIMIT: '5', TEXT_LIMIT: 40});
+assert.strictEqual(variants.calls.length, 1, 'a NUL-terminated id or a missing zero field was rejected');
+assert.deepStrictEqual(variants.calls[0].args.slice(1, 3), [ACCOUNT, {list: 'main', limit: 5, cursor: null}]);
+variants.reply('chats', ok(page([chat('42')])));
+assert.strictEqual(variants.response(90).code, protocol.result.ok);
+var logged = [];
+var rejecting = readerFactory.create({api: {}, settings: settings, storage: variants.storage, protocol: protocol, codec: codecFactory.create(protocol), text: text,
+  transport: transportFactory.create({sendAppMessage: function(_message, success) { success(); }}), leases: variants.leases,
+  log: function(line) { logged.push(line); }});
+rejecting.handle({REQUEST_KIND: protocol.request.chats, REQUEST_SEQ: 91, ACCOUNT_ID: 'broken', PAGE_OP: 0});
+assert.ok(/rejected ACCOUNT_ID=string:6 chars/.test(logged[0]), 'the rejected field was not reported: ' + logged[0]);
+assert.strictEqual(logged[0].indexOf('broken'), -1, 'a rejected value was logged verbatim');
