@@ -92,5 +92,21 @@ int main(void) {
   assert(chats.error == TB_RESULT_ACCOUNT_NEEDS_LOGIN && tb_error_is_account_level(chats.error));
   assert(chats.unread_chats == 0 && chats.unread_messages == 0 && !chats.proxy);
   tb_chats_deinit(&chats);
+
+  TbChatsConfig manual = config();
+  manual.refresh_interval = 0;
+  manual.stale_after = 0;
+  assert(tb_chats_init(&chats, &layer, fake_view_ports(&fake), manual));
+  tb_chats_open(&chats, ACCOUNT, TB_LIST_MAIN);
+  Buf single = {0};
+  chat_record(&single, "42", "Ada", "hello");
+  deliver(&layer, fake_last_sequence(&fake), TB_RESULT_OK, 0, &single, 0, 1);
+  assert(chats.loaded && !fake.view_timer);
+  const int quiet = fake.sends;
+  tb_chats_set_active(&chats, false);
+  fake.now += 600000;
+  tb_chats_set_active(&chats, true);
+  assert(fake.sends == quiet && chats.load == TB_CHATS_IDLE && !fake.view_timer);
+  tb_chats_deinit(&chats);
   return 0;
 }

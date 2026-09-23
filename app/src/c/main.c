@@ -550,7 +550,7 @@ __attribute__((noinline)) static void init(void) {
   tb_theme_init();
   tb_requests_init(&s_requests, (TbRequestPorts){send_request, request_schedule, request_cancel, now_ms, NULL});
   tb_session_init(&s_session, &s_requests, (TbSessionPorts){session_changed, NULL});
-  const TbChatsConfig chats_config = {TB_CHATS_CAPACITY, TB_CHATS_PAGE, TB_CHATS_TEXT, TB_CHATS_BUDGET, TB_DATA_TIMEOUT, 60000, 30000};
+  const TbChatsConfig chats_config = {TB_CHATS_CAPACITY, TB_CHATS_PAGE, TB_CHATS_TEXT, TB_CHATS_BUDGET, TB_DATA_TIMEOUT, 0, 0};
   const TbHistoryConfig history_config = {TB_HISTORY_CAPACITY, TB_HISTORY_PAGE, TB_HISTORY_TEXT, TB_HISTORY_BUDGET, TB_DATA_TIMEOUT, 60000, {3000, 8000}};
   const bool allocated = tb_chats_init(&s_chats, &s_requests, (TbViewPorts){chats_changed, chats_schedule, chats_cancel, now_ms, NULL}, chats_config) &&
                          tb_history_init(&s_history, &s_requests, (TbViewPorts){history_changed, history_schedule, history_cancel, now_ms, NULL},

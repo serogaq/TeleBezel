@@ -235,7 +235,7 @@ void tb_chats_set_active(TbChats *chats, bool active) {
     return;
   }
   const uint32_t now = chats->ports.now(chats->ports.context);
-  if (chats->loaded && chats->load == TB_CHATS_IDLE && (uint32_t)(now - chats->loaded_at) >= chats->config.stale_after) {
+  if (chats->config.stale_after > 0 && chats->loaded && chats->load == TB_CHATS_IDLE && (uint32_t)(now - chats->loaded_at) >= chats->config.stale_after) {
     tb_chats_refresh(chats);
   } else {
     schedule(chats);
