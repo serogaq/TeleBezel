@@ -189,6 +189,27 @@ int main(int argc, char **argv) {
         user->first_name_ = command.value("first_name", "");
         user->last_name_ = command.value("last_name", "");
         transport->emit_update(client, api::make_object<api::updateUser>(std::move(user)));
+      } else if (op == "unread") {
+        const auto archive = command.value("list", "main") == "archive";
+        const auto list = [archive]() -> api::object_ptr<api::ChatList> {
+          if (archive)
+            return api::make_object<api::chatListArchive>();
+          return api::make_object<api::chatListMain>();
+        };
+        const auto chats = command.value("chats", 0);
+        const auto messages = command.value("messages", 0);
+        transport->emit_update(client, api::make_object<api::updateUnreadChatCount>(list(), chats, chats, chats, 0, 0));
+        transport->emit_update(client, api::make_object<api::updateUnreadMessageCount>(list(), messages, messages));
+      } else if (op == "connection") {
+        const auto name = command.value("state", "ready");
+        api::object_ptr<api::ConnectionState> connection;
+        if (name == "connecting")
+          connection = api::make_object<api::connectionStateConnecting>();
+        else if (name == "updating")
+          connection = api::make_object<api::connectionStateUpdating>();
+        else
+          connection = api::make_object<api::connectionStateReady>();
+        transport->emit_update(client, api::make_object<api::updateConnectionState>(std::move(connection)));
       } else if (op == "title") {
         transport->emit_update(client, api::make_object<api::updateChatTitle>(std::stoll(command.value("chat", "42")),
                                                                               command.at("title")));

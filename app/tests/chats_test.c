@@ -23,6 +23,7 @@ int main(void) {
   assert(strcmp(args->account, ACCOUNT) == 0 && args->page_limit == 3 && args->text_limit == 40);
   assert(chats.load == TB_CHATS_FIRST);
   Buf page = {0};
+  summary_record(&page, TB_CONNECTION_UPDATING, 1, 4, 17);
   chat_record(&page, "-1009007199254740993", "Группа", "Привет");
   chat_record(&page, "42", "Ada", "hello");
   Buf rest = {0};
@@ -33,6 +34,8 @@ int main(void) {
   deliver(&layer, sequence, TB_RESULT_OK, TB_FLAG_HAS_MORE, &rest, 1, 2);
   assert(chats.count == 3 && chats.load == TB_CHATS_IDLE && chats.tail == TB_TAIL_MORE && chats.loaded);
   assert(chats.connection_not_ready && strcmp(chats.items[0].id, "-1009007199254740993") == 0);
+  assert(chats.connection == TB_CONNECTION_UPDATING && chats.proxy && chats.unread_chats == 4 && chats.unread_messages == 17);
+  assert(chats.summary_revision == 1);
   assert(strcmp(chats.items[0].title, "Группа") == 0 && strcmp(chats.items[1].preview, "hello") == 0 && chats.items[2].preview == NULL);
   assert(fake.view_timer && fake.view_delay == 60000);
 
@@ -87,6 +90,7 @@ int main(void) {
   assert(!tb_requests_pending(&layer, stale));
   deliver(&layer, fake_last_sequence(&fake), TB_RESULT_ACCOUNT_NEEDS_LOGIN, 0, NULL, 0, 1);
   assert(chats.error == TB_RESULT_ACCOUNT_NEEDS_LOGIN && tb_error_is_account_level(chats.error));
+  assert(chats.unread_chats == 0 && chats.unread_messages == 0 && !chats.proxy);
   tb_chats_deinit(&chats);
   return 0;
 }

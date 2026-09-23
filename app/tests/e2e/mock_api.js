@@ -20,11 +20,12 @@ function chat(id, title, type, unread, text, extra) {
 
 var main = [
   chat('-1009007199254740993', 'Семья 👋', 'supergroup', 3, 'Кто заберёт детей?'),
+  chat('1', 'Ada Lovelace', 'private', 0, 'Список покупок', {is_saved_messages: true, last_message: {id: '100', chat_id: '1', sender: {type: 'user', id: '1', name: 'Ada Lovelace', fallback: 'User 1'}, date: BASE_DATE - 600, edit_date: 0, is_outgoing: true, author_signature: '', content: {kind: 'text', text: 'Список покупок'}}}),
   chat('42', 'Ada Lovelace', 'private', 0, 'See you tomorrow', {last_message: {id: '100', chat_id: '42', sender: {type: 'user', id: '1', name: 'Me', fallback: 'User 1'}, date: BASE_DATE - 3600, edit_date: 0, is_outgoing: true, author_signature: '', content: {kind: 'voice_note', duration: 14, fallback_key: 'message.voice_note'}}}),
   chat('-1001234567890', 'Новости', 'channel', 120, 'Главное за день', {notifications: {use_default_mute_for: false, mute_for: 100000}}),
   chat('43', 'Борис', 'private', 1, '', {last_message: {id: '100', chat_id: '43', sender: {type: 'user', id: '43', name: 'Борис', fallback: 'User 43'}, date: BASE_DATE - 86400, edit_date: 0, is_outgoing: false, author_signature: '', content: {kind: 'photo', text: 'Смотри какой закат', fallback_key: 'message.photo'}}})
 ];
-for (var index = 0; index < 22; ++index) { main.push(chat(String(1000 + index), 'Chat ' + (index + 1), 'basic_group', index % 3, 'Message number ' + index)); }
+for (var index = 0; index < 21; ++index) { main.push(chat(String(1000 + index), 'Chat ' + (index + 1), 'basic_group', index % 3, 'Message number ' + index)); }
 var archive = [chat('2001', 'Старый проект', 'basic_group', 0, 'Архивное сообщение'), chat('2002', 'Bot', 'private', 0, '/start')];
 
 function messages(chatId) {
@@ -55,6 +56,15 @@ function create(options) {
   options = options || {};
   var log = [];
   var faults = {};
+  var states = options.connection && options.connection.length ? options.connection.slice() : ['ready'];
+  var step = 0;
+  var journal = 0;
+  function connection() { return states[Math.min(step, states.length - 1)]; }
+  function unread(list) {
+    var source = list === 'archive' ? archive : main;
+    var loud = source.filter(function(item) { return item.unread_count > 0 && item.notifications.use_default_mute_for !== false; });
+    return {chats: loud.length, messages: loud.reduce(function(total, item) { return total + item.unread_count; }, 0)};
+  }
   var server = http.createServer(function(request, response) {
     var parsed = url.parse(request.url, true);
     var query = parsed.query;
@@ -90,7 +100,14 @@ function create(options) {
       var limit = Number(query.limit || 20);
       var slice = source.slice(offset, offset + limit);
       var more = offset + limit < source.length;
-      send(200, envelope(page(slice, {has_more: more ? true : false, local_exhausted: !more, next_cursor: more ? 'c:' + (offset + limit) : null, source: 'tdlib_memory'})));
+      send(200, envelope(page(slice, {has_more: more ? true : false, local_exhausted: !more, next_cursor: more ? 'c:' + (offset + limit) : null, source: 'tdlib_memory',
+        connection: connection(), unread: unread(query.list)})));
+      return;
+    }
+    if (path.length === 5 && path[4] === 'updates') {
+      step += 1;
+      journal += 1;
+      send(200, envelope({items: [], cursor: 'u' + journal, has_more: false, connection: connection(), status: {connection: connection(), proxy: Boolean(options.proxy)}}));
       return;
     }
     if (path.length === 7 && path[6] === 'messages') {
@@ -126,6 +143,7 @@ function create(options) {
 module.exports = {create: create, TOKEN: TOKEN, FIRST: FIRST, SECOND: SECOND, LONG_TEXT: LONG_TEXT};
 
 if (require.main === module) {
-  var instance = create({defaultAccount: process.env.MOCK_DEFAULT_ACCOUNT || null, accounts: process.env.MOCK_ACCOUNTS === undefined ? undefined : Number(process.env.MOCK_ACCOUNTS)});
+  var instance = create({defaultAccount: process.env.MOCK_DEFAULT_ACCOUNT || null, accounts: process.env.MOCK_ACCOUNTS === undefined ? undefined : Number(process.env.MOCK_ACCOUNTS),
+    connection: process.env.MOCK_CONNECTION ? process.env.MOCK_CONNECTION.split(',') : null, proxy: process.env.MOCK_PROXY === '1'});
   instance.listen(Number(process.env.PORT || 8787), function(port) { process.stdout.write('mock api on 127.0.0.1:' + port + '\n'); });
 }

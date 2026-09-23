@@ -8,6 +8,14 @@ assert.strictEqual(settings.validate({address: 'https://bad:443', token: 'x'}).o
 assert.strictEqual(settings.validate({address: 'localhost:8080', ssl: false, token: 'tb_x'}).ok, true);
 settings.save(storage, {address: 'localhost:8080', ssl: false, token: 'tb_secret'});
 assert.strictEqual(settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, CONFIG_TOKEN: ''}, settings.load(storage)).token, 'tb_secret');
+var saved = settings.load(storage);
+assert.deepStrictEqual([saved.showArchive, saved.unreadMode], [true, 'chats'], 'older saved settings keep the archive and count chats');
+var hidden = settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, CONFIG_TOKEN: '', SHOW_ARCHIVE: false, UNREAD_MODE: {value: 'messages'}}, saved);
+assert.deepStrictEqual([hidden.showArchive, hidden.unreadMode, hidden.token], [false, 'messages', 'tb_secret']);
+settings.save(storage, hidden);
+assert.deepStrictEqual(settings.toClay(settings.load(storage)), {CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, SHOW_ARCHIVE: false, UNREAD_MODE: 'messages'});
+assert.strictEqual(settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false}, hidden).showArchive, false, 'a missing toggle keeps the saved value');
+assert.strictEqual(settings.normalize({unreadMode: 'bogus'}).unreadMode, 'chats');
 require('./runtime_test');
 require('./api_test');
 require('./text_test');

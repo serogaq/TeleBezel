@@ -50,8 +50,16 @@ function create(protocol) {
       return record(types.account, body.bytes);
     },
     prefs: function(value) {
-      var body = new Writer().ascii8(value.defaultAccount).u8(value.chatList).str8(value.host, 64, {singleLine: true});
+      var body = new Writer().ascii8(value.defaultAccount).u8(value.chatList).str8(value.host, 64, {singleLine: true})
+        .u8(value.showArchive ? 1 : 0).u8(value.unreadMode);
       return record(types.prefs, body.bytes);
+    },
+    summary: function(value) {
+      var body = new Writer().u8(value.connection).u8(value.proxy ? 1 : 0).u32(value.unreadChats).u32(value.unreadMessages);
+      return record(types.summary, body.bytes);
+    },
+    status: function(value) {
+      return record(types.status, new Writer().u8(value.connection).u8(value.proxy ? 1 : 0).bytes);
     },
     chat: function(value, textLimit) {
       var body = new Writer()

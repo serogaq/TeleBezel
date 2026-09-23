@@ -420,6 +420,7 @@ nlohmann::json chat_projection(const td_api::chat &chat) {
       {"id", std::to_string(chat.id_)},
       {"type", chat_type(chat.type_.get())},
       {"title", chat.title_},
+      {"is_saved_messages", false},
       {"is_forum", chat.view_as_topics_},
       {"is_marked_unread", chat.is_marked_as_unread_},
       {"unread_count", chat.unread_count_},
@@ -433,6 +434,13 @@ nlohmann::json chat_projection(const td_api::chat &chat) {
   for (const auto &position : chat.positions_)
     apply_position(projection, position.get());
   return projection;
+}
+
+void decorate_chat(const Account &account, nlohmann::json &chat) {
+  chat["is_saved_messages"] = chat.value("type", "") == "private" && account.telegram_identity.is_object() &&
+                              chat.value("id", "") == account.telegram_identity.value("id", "");
+  if (chat.value("last_message", nlohmann::json(nullptr)).is_object())
+    decorate_sender(account, chat["last_message"]);
 }
 
 nlohmann::json notification_projection(const td_api::chatNotificationSettings *settings) {

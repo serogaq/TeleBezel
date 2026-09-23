@@ -99,19 +99,23 @@ function run() {
       function page(op) {
         return h.request({REQUEST_KIND: R.chats, ACCOUNT_ID: mockApi.FIRST, LIST: protocol.list.main, PAGE_OP: op, PAGE_LIMIT: 10, TEXT_LIMIT: 64}).then(function(response) {
           assert.strictEqual(response.code, protocol.result.ok);
-          consistent(response);
-          chats = chats.concat(response.records);
+          var watch = consistent(response);
+          assert.strictEqual(watch[0].type, 'summary', 'a chat page did not start with the summary');
+          assert.deepStrictEqual([watch[0].connection, watch[0].unreadChats, watch[0].unreadMessages], [protocol.connection.ready, 16, 25]);
+          chats = chats.concat(response.records.filter(function(record) { return record.type === 'chat'; }));
           return response.flags & protocol.flag.has_more ? page(OP.next) : null;
         });
       }
       return page(OP.first).then(function() {
         assert.strictEqual(chats.length, 26);
         assert.strictEqual(chats[0].id, '-1009007199254740993', 'a 64-bit chat id lost precision');
-        assert.strictEqual(chats[1].previewKind, protocol.kind.voice_note);
+        assert.strictEqual(chats[1].flags & protocol.chat_flag.saved, protocol.chat_flag.saved, 'saved messages lost their flag');
+        assert.strictEqual(chats[2].flags & protocol.chat_flag.saved, 0);
+        assert.strictEqual(chats[2].previewKind, protocol.kind.voice_note);
         return h.request({REQUEST_KIND: R.chats, ACCOUNT_ID: mockApi.FIRST, LIST: protocol.list.archive, PAGE_OP: OP.first, PAGE_LIMIT: 10, TEXT_LIMIT: 64});
       });
     }).then(function(archive) {
-      assert.strictEqual(archive.records.length, 2);
+      assert.strictEqual(archive.records.filter(function(record) { return record.type === 'chat'; }).length, 2);
       var history = [];
       function older(op) {
         return h.request({REQUEST_KIND: R.history, ACCOUNT_ID: mockApi.FIRST, ENTITY_ID: '-1009007199254740993', PAGE_OP: op, PAGE_LIMIT: 20, TEXT_LIMIT: 200}).then(function(response) {
@@ -158,6 +162,42 @@ function run() {
     }).then(function(revoked) {
       assert.strictEqual(revoked.code, protocol.result.api_unauthorized);
       assert.ok(mock.log.every(function(entry) { return JSON.stringify(entry).indexOf(mockApi.TOKEN) === -1; }));
+      return new Promise(function(resolve) { mock.close(resolve); });
+    });
+  }).then(connectionSequence);
+}
+
+function connectionSequence() {
+  var mock = mockApi.create({connection: ['connecting', 'updating', 'ready'], proxy: true});
+  return new Promise(function(resolve) { mock.listen(0, resolve); }).then(function(port) {
+    var h = harness('127.0.0.1:' + port, mockApi.TOKEN);
+    var R = protocol.request;
+    function chats() {
+      return h.request({REQUEST_KIND: R.chats, ACCOUNT_ID: mockApi.FIRST, LIST: protocol.list.main, PAGE_OP: protocol.page_op.first, PAGE_LIMIT: 5, TEXT_LIMIT: 64});
+    }
+    function events() { return h.request({REQUEST_KIND: R.events, ACCOUNT_ID: mockApi.FIRST}); }
+    function status(response) {
+      var watch = consistent(response);
+      assert.strictEqual(watch.length, 1);
+      assert.strictEqual(watch[0].type, 'status');
+      return watch[0];
+    }
+    return h.request({REQUEST_KIND: R.hello, INBOX_SIZE: 2048}, 1000).catch(function() { return null; }).then(chats).then(function(first) {
+      var watch = consistent(first);
+      assert.deepStrictEqual([watch[0].type, watch[0].connection, watch[0].proxy], ['summary', protocol.connection.connecting, 0],
+        'the proxy is unknown until the first status');
+      return events();
+    }).then(function(updating) {
+      assert.deepStrictEqual(status(updating), {type: 'status', connection: protocol.connection.updating, proxy: 1});
+      return events();
+    }).then(function(ready) {
+      assert.deepStrictEqual(status(ready), {type: 'status', connection: protocol.connection.ready, proxy: 1});
+      var polls = mock.log.filter(function(entry) { return /\/updates$/.test(entry.path); });
+      assert.deepStrictEqual(polls.map(function(entry) { return entry.query.cursor || null; }), [null, 'u1'], 'the events cursor was not carried forward');
+      return chats();
+    }).then(function(reloaded) {
+      var watch = consistent(reloaded);
+      assert.deepStrictEqual([watch[0].connection, watch[0].proxy], [protocol.connection.ready, 1]);
       return new Promise(function(resolve) { mock.close(resolve); });
     });
   });

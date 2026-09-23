@@ -377,7 +377,10 @@ nlohmann::json ReadModelService::updates(const std::string &uuid, const std::str
       if (items.size() == limit)
         break;
     }
-    return {{"items", items}, {"cursor", cursors_.encode(account, last)}, {"has_more", last < account.event_sequence}};
+    return {{"items", items},
+            {"cursor", cursors_.encode(account, last)},
+            {"has_more", last < account.event_sequence},
+            {"connection", account.connection_state}};
   }
 }
 

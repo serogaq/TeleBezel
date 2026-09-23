@@ -91,8 +91,19 @@ static bool parse(TbChats *chats, const TbResponse *response) {
   while (cursor.offset < cursor.length) {
     uint8_t type = 0;
     TbCursor body;
+    if (!tb_codec_next(&cursor, &type, &body)) { return false; }
+    if (type == TB_RECORD_SUMMARY) {
+      TbSummaryRecord summary;
+      if (!tb_codec_summary(&body, &summary)) { return false; }
+      chats->connection = summary.connection;
+      chats->proxy = summary.proxy != 0;
+      chats->unread_chats = summary.unread_chats;
+      chats->unread_messages = summary.unread_messages;
+      ++chats->summary_revision;
+      continue;
+    }
     TbChatRecord record;
-    if (!tb_codec_next(&cursor, &type, &body) || type != TB_RECORD_CHAT || !tb_codec_chat(&body, &record)) { return false; }
+    if (type != TB_RECORD_CHAT || !tb_codec_chat(&body, &record)) { return false; }
     if (chats->tail == TB_TAIL_FULL) { continue; }
     if (!append(chats, &record)) { return false; }
   }
@@ -258,6 +269,10 @@ void tb_chats_close(TbChats *chats) {
   chats->active = false;
   chats->resynced = false;
   chats->connection_not_ready = false;
+  chats->connection = TB_CONNECTION_CONNECTING;
+  chats->proxy = false;
+  chats->unread_chats = 0;
+  chats->unread_messages = 0;
   chats->refresh_due = 0;
 }
 

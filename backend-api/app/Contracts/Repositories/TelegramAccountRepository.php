@@ -32,6 +32,8 @@ interface TelegramAccountRepository
     /** @return array<string, mixed> */
     public function configuration(): array;
 
+    public function usesProxy(AccountData $account): bool;
+
     /** @param list<string> $lifecycles
      * @return array<int, AccountData> */
     public function batch(array $lifecycles, ?string $after, ?string $through = null): array;

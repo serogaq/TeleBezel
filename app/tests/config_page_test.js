@@ -14,4 +14,12 @@ assert.ok(unavailable.some(function(item) { return item.type === 'text' && item.
 var fresh = page.build(strings, {});
 assert.ok(!select(fresh) && !fresh.some(function(item) { return item.type === 'text'; }));
 assert.strictEqual(fresh[fresh.length - 1].type, 'submit');
+function byKey(items, key) { return items.filter(function(item) { return item.messageKey === key; })[0]; }
+var archiveToggle = byKey(fresh, 'SHOW_ARCHIVE');
+assert.strictEqual(archiveToggle.type, 'toggle');
+assert.strictEqual(archiveToggle.defaultValue, true);
+var unreadMode = byKey(fresh, 'UNREAD_MODE');
+assert.deepStrictEqual(unreadMode.options.map(function(option) { return option.value; }), ['chats', 'messages']);
+assert.strictEqual(unreadMode.defaultValue, 'chats');
+assert.ok(fresh.indexOf(archiveToggle) < fresh.length - 1 && fresh.indexOf(unreadMode) < fresh.length - 1);
 process.stdout.write('Settings page tests passed\n');

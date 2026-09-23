@@ -118,6 +118,8 @@ struct AccountStore {
     account.archive_load_error.clear();
     account.main_orders.reset();
     account.archive_orders.reset();
+    account.main_unread = {};
+    account.archive_unread = {};
   }
 
   std::size_t cached_messages() const { return total_messages_; }

@@ -63,7 +63,17 @@ bool tb_codec_account(TbCursor *body, TbAccountRecord *out) {
 }
 
 bool tb_codec_prefs(TbCursor *body, TbPrefsRecord *out) {
-  return str8(body, &out->default_account) && u8(body, &out->chat_list) && str8(body, &out->host) && done(body);
+  return str8(body, &out->default_account) && u8(body, &out->chat_list) && str8(body, &out->host) && u8(body, &out->show_archive) &&
+         u8(body, &out->unread_mode) && done(body);
+}
+
+bool tb_codec_summary(TbCursor *body, TbSummaryRecord *out) {
+  return u8(body, &out->connection) && u8(body, &out->proxy) && u32(body, &out->unread_chats) && u32(body, &out->unread_messages) &&
+         done(body);
+}
+
+bool tb_codec_status(TbCursor *body, TbStatusRecord *out) {
+  return u8(body, &out->connection) && u8(body, &out->proxy) && done(body);
 }
 
 bool tb_codec_chat(TbCursor *body, TbChatRecord *out) {

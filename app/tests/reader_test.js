@@ -29,7 +29,7 @@ function harness(configured) {
       return {abort: function() { call.aborted = true; }};
     };
   }
-  var fakeApi = {preferences: api('preferences'), accounts: api('accounts'), chats: api('chats'), history: api('history'),
+  var fakeApi = {preferences: api('preferences'), accounts: api('accounts'), chats: api('chats'), history: api('history'), updates: api('updates'),
     message: api('message'), releaseInterest: api('releaseInterest'), updatePreferences: api('updatePreferences')};
   var leases = leasesFactory.create(storage, function() { return 0.5; });
   var reader = readerFactory.create({api: fakeApi, settings: settings, storage: storage, protocol: protocol,
@@ -54,6 +54,7 @@ function harness(configured) {
     response: function(sequence) { return collect(protocol, messages, sequence); }
   };
 }
+function only(response, type) { return response.records.filter(function(record) { return record.type === type; }); }
 function ok(data) { return {ok: true, status: 200, data: data}; }
 function failure(status, code, retryAfter) {
   var api = require('../src/pkjs/lib/api');
@@ -101,6 +102,8 @@ assert.strictEqual(booted.code, protocol.result.ok);
 assert.deepStrictEqual(booted.records.map(function(record) { return record.type; }), ['prefs', 'account', 'account']);
 assert.strictEqual(booted.records[0].chatList, protocol.list.archive);
 assert.strictEqual(booted.records[0].host, 'tg.example:443');
+assert.strictEqual(booted.records[0].showArchive, 1);
+assert.strictEqual(booted.records[0].unreadMode, protocol.unread_mode.chats);
 assert.strictEqual(booted.records[1].name, 'Ада Лавлейс');
 assert.strictEqual(booted.records[1].state, protocol.account_state.ready);
 assert.strictEqual(booted.records[2].state, protocol.account_state.needs_login);
@@ -127,13 +130,18 @@ assert.strictEqual(offline.response(3).code, protocol.result.backend_unavailable
 var lists = harness();
 lists.request({REQUEST_KIND: R.chats, REQUEST_SEQ: 10, ACCOUNT_ID: ACCOUNT, LIST: protocol.list.main, PAGE_OP: OP.first, PAGE_LIMIT: 2, TEXT_LIMIT: 40});
 assert.deepStrictEqual(lists.calls[0].args.slice(1, 3), [ACCOUNT, {list: 'main', limit: 2, cursor: null}]);
-lists.reply('chats', ok(page([chat(CHAT), chat('42', {type: 'private', unread_mention_count: 1, notifications: {use_default_mute_for: false, mute_for: 100}})], {has_more: true, next_cursor: 'c1'})));
+lists.reply('chats', ok(page([chat(CHAT), chat('42', {type: 'private', is_saved_messages: true, unread_mention_count: 1, notifications: {use_default_mute_for: false, mute_for: 100}})],
+  {has_more: true, next_cursor: 'c1', connection: 'connecting_to_proxy', unread: {chats: 3, messages: 70000}})));
 var listed = lists.response(10);
-assert.strictEqual(listed.records.length, 2);
-assert.strictEqual(listed.records[0].id, CHAT);
-assert.strictEqual(listed.records[0].previewSender, 'Ada');
-assert.strictEqual(listed.records[1].flags & protocol.chat_flag.muted, protocol.chat_flag.muted);
-assert.strictEqual(listed.records[1].flags & protocol.chat_flag.mention, protocol.chat_flag.mention);
+assert.deepStrictEqual(listed.records.map(function(record) { return record.type; }), ['summary', 'chat', 'chat']);
+assert.deepStrictEqual(listed.records[0], {type: 'summary', connection: protocol.connection.connecting, proxy: 0, unreadChats: 3, unreadMessages: 70000});
+var listedChats = only(listed, 'chat');
+assert.strictEqual(listedChats[0].id, CHAT);
+assert.strictEqual(listedChats[0].previewSender, 'Ada');
+assert.strictEqual(listedChats[0].flags & protocol.chat_flag.saved, 0);
+assert.strictEqual(listedChats[1].flags & protocol.chat_flag.saved, protocol.chat_flag.saved);
+assert.strictEqual(listedChats[1].flags & protocol.chat_flag.muted, protocol.chat_flag.muted);
+assert.strictEqual(listedChats[1].flags & protocol.chat_flag.mention, protocol.chat_flag.mention);
 assert.strictEqual(listed.flags & protocol.flag.has_more, protocol.flag.has_more);
 lists.request({REQUEST_KIND: R.chats, REQUEST_SEQ: 11, ACCOUNT_ID: ACCOUNT, LIST: protocol.list.main, PAGE_OP: OP.next, PAGE_LIMIT: 2, TEXT_LIMIT: 40});
 assert.strictEqual(lists.calls[1].args[2].cursor, 'c1');
@@ -158,7 +166,7 @@ assert.ok(superseded.calls[0].aborted, 'a superseded request is aborted');
 superseded.reply('chats', ok(page([chat('1')])), 0);
 assert.strictEqual(superseded.response(20), null, 'a late response of another account reached the watch');
 superseded.reply('chats', ok(page([chat('2')])), 1);
-assert.strictEqual(superseded.response(21).records[0].id, '2');
+assert.strictEqual(only(superseded.response(21), 'chat')[0].id, '2');
 
 var reading = harness();
 reading.request({REQUEST_KIND: R.history, REQUEST_SEQ: 30, ACCOUNT_ID: ACCOUNT, ENTITY_ID: CHAT, PAGE_OP: OP.first, PAGE_LIMIT: 3, TEXT_LIMIT: 200});
@@ -277,3 +285,38 @@ var rejecting = readerFactory.create({api: {}, settings: settings, storage: vari
 rejecting.handle({REQUEST_KIND: protocol.request.chats, REQUEST_SEQ: 91, ACCOUNT_ID: 'broken', PAGE_OP: 0});
 assert.ok(/rejected ACCOUNT_ID=string:6 chars/.test(logged[0]), 'the rejected field was not reported: ' + logged[0]);
 assert.strictEqual(logged[0].indexOf('broken'), -1, 'a rejected value was logged verbatim');
+
+var hidden = harness();
+settings.save(hidden.storage, {address: 'tg.example:443', ssl: true, token: 'tb_' + new Array(44).join('a'), showArchive: false, unreadMode: 'messages'});
+hidden.request({REQUEST_KIND: R.bootstrap, REQUEST_SEQ: 100});
+hidden.reply('preferences', ok({id: 'd', name: 'Watch', locale: 'auto', default_account_id: null, chat_list: 'archive'}));
+hidden.reply('accounts', ok([]));
+var hiddenPrefs = hidden.response(100).records[0];
+assert.deepStrictEqual([hiddenPrefs.chatList, hiddenPrefs.showArchive, hiddenPrefs.unreadMode], [protocol.list.main, 0, protocol.unread_mode.messages]);
+
+var polling = harness();
+polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 110, ACCOUNT_ID: ACCOUNT});
+assert.deepStrictEqual(polling.calls[0].args.slice(1, 3), [ACCOUNT, {cursor: null}], 'the first poll carries no cursor');
+polling.reply('updates', ok({items: [{type: 'chat_changed', chat_id: '1', sequence: 1}], cursor: 'e1', has_more: false, connection: 'updating',
+  status: {connection: 'updating', proxy: true}}));
+assert.deepStrictEqual(polling.response(110).records, [{type: 'status', connection: protocol.connection.updating, proxy: 1}]);
+polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 111, ACCOUNT_ID: ACCOUNT});
+assert.strictEqual(polling.calls[1].args[2].cursor, 'e1', 'the cursor from the last poll is reused');
+polling.reply('updates', failure(409, 'sync.resync_required'));
+assert.strictEqual(polling.calls[2].args[2].cursor, null, 'a lost cursor restarts the journal');
+polling.reply('updates', ok({items: [], cursor: 'e2', has_more: false, status: {connection: 'waiting_for_network', proxy: false}}));
+assert.deepStrictEqual(polling.response(111).records, [{type: 'status', connection: protocol.connection.connecting, proxy: 0}]);
+polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 112, ACCOUNT_ID: ACCOUNT});
+assert.strictEqual(polling.calls[3].args[2].cursor, 'e2');
+polling.reply('updates', ok({items: [], cursor: 'e3', has_more: false, status: {connection: 'ready', proxy: true}}));
+polling.request({REQUEST_KIND: R.chats, REQUEST_SEQ: 113, ACCOUNT_ID: ACCOUNT, LIST: 0, PAGE_OP: OP.first});
+polling.reply('chats', ok(page([chat('1')], {connection: 'ready'})));
+assert.deepStrictEqual(polling.response(113).records[0], {type: 'summary', connection: protocol.connection.ready, proxy: 1, unreadChats: 0, unreadMessages: 0});
+polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 114, ACCOUNT_ID: ACCOUNT});
+polling.reply('updates', failure(409, 'authorization.invalid_state'));
+assert.strictEqual(polling.response(114).code, protocol.result.account_needs_login);
+polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 115, ACCOUNT_ID: 'broken'});
+assert.strictEqual(polling.response(115).code, protocol.result.protocol_error);
+polling.reader.reset();
+polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 116, ACCOUNT_ID: ACCOUNT});
+assert.strictEqual(polling.calls[polling.calls.length - 1].args[2].cursor, null, 'a reset forgets event cursors');

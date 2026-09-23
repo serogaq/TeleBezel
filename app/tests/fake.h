@@ -77,6 +77,11 @@ static inline void chat_record(Buf *buf, const char *id, const char *title, cons
   put8(buf, TB_KIND_TEXT); put8(buf, 0); put16(buf, 0); putstr8(buf, "Ada"); putstr8(buf, ""); putstr16(buf, preview);
   end(buf);
 }
+static inline void summary_record(Buf *buf, uint8_t connection, uint8_t proxy, uint32_t chats, uint32_t messages) {
+  begin(buf, TB_RECORD_SUMMARY);
+  put8(buf, connection); put8(buf, proxy); put32(buf, chats); put32(buf, messages);
+  end(buf);
+}
 static inline void message_record(Buf *buf, const char *id, const char *text) {
   begin(buf, TB_RECORD_MESSAGE);
   putstr8(buf, id); put32(buf, 1700000000); put8(buf, 0); put8(buf, TB_KIND_TEXT); put8(buf, 0); put16(buf, 0);

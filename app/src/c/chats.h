@@ -49,6 +49,11 @@ typedef struct {
   int32_t error;
   uint32_t retry_after;
   bool connection_not_ready;
+  uint8_t connection;
+  bool proxy;
+  uint32_t unread_chats;
+  uint32_t unread_messages;
+  uint32_t summary_revision;
   bool loaded;
   bool active;
   bool resynced;

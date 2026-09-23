@@ -7,6 +7,8 @@ var suites = {
   request_layer_test: ['src/c/request_layer.c'],
   codec_test: ['src/c/codec.c', 'src/c/text.c'],
   session_test: ['src/c/session.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
+  pull_test: ['src/c/pull.c'],
+  connection_test: ['src/c/connection.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c'],
   chats_test: ['src/c/chats.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
   history_test: ['src/c/history.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
   message_text_test: ['src/c/message_text.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],

@@ -54,6 +54,10 @@ struct CachedMessageMeta {
   std::size_t bytes{0};
   std::int64_t date{0};
 };
+struct UnreadCounters {
+  std::int32_t chats{0};
+  std::int32_t messages{0};
+};
 struct AccountState {
   using MessageKey = std::pair<std::int64_t, std::int64_t>;
   std::uint64_t revision{0};
@@ -102,6 +106,8 @@ struct AccountState {
   std::deque<nlohmann::json> events;
   ChatOrderLog main_orders;
   ChatOrderLog archive_orders;
+  UnreadCounters main_unread;
+  UnreadCounters archive_unread;
   std::int32_t client_id{0};
   std::int32_t telegram_api_id{0};
   std::int32_t applied_telegram_api_id{0};

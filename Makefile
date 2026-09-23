@@ -42,10 +42,9 @@ app-build: ## Build and validate app/build/app.pbw
 app-check: app-build ## Build, lint, and test the Pebble app
 	cd app && PATH="$(NODE_BIN):$$PATH" npm test
 
-app-qemu: ## Install an existing PBW in QEMU: PLATFORM=emery QEMU_FLAGS=--vnc
+app-qemu: ## Run the PBW in QEMU against the mock API until closed or Ctrl+C; BACKEND=docker [TOKEN=tb_...] uses the Docker backend; LANG_PACK=ru installs Cyrillic fonts
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
-	@test -f "$(PBW)" || { printf 'PBW not found: %s\nRun make app-build first or set PBW=/path/to/app.pbw\n' "$(PBW)" >&2; exit 1; }
-	"$(PEBBLE)" install "$(PBW)" --emulator "$(PLATFORM)" $(QEMU_FLAGS)
+	@PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" PBW="$(abspath $(PBW))" QEMU_FLAGS="$(QEMU_FLAGS)" bash tests/emulator/qemu.sh "$(PLATFORM)"
 
 app-emulator-check: ## Walk the read path in QEMU against the mock API and save screenshots: PLATFORM=emery
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }

@@ -30,6 +30,18 @@ int main(void) {
   TbPrefsRecord prefs;
   assert(tb_codec_prefs(&body, &prefs));
   assert(prefs.chat_list == TB_LIST_ARCHIVE && equals(prefs.host, "tg.example:443"));
+  assert(prefs.show_archive == 0 && prefs.unread_mode == TB_UNREAD_MODE_MESSAGES);
+
+  body = single(tb_vector_summary, sizeof(tb_vector_summary), TB_RECORD_SUMMARY);
+  TbSummaryRecord summary;
+  assert(tb_codec_summary(&body, &summary));
+  assert(summary.connection == TB_CONNECTION_UPDATING && summary.proxy == 1 && summary.unread_chats == 70000 &&
+         summary.unread_messages == UINT32_MAX);
+
+  body = single(tb_vector_status, sizeof(tb_vector_status), TB_RECORD_STATUS);
+  TbStatusRecord status;
+  assert(tb_codec_status(&body, &status));
+  assert(status.connection == TB_CONNECTION_READY && status.proxy == 0);
 
   body = single(tb_vector_chat, sizeof(tb_vector_chat), TB_RECORD_CHAT);
   TbChatRecord chat;

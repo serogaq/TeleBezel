@@ -82,6 +82,7 @@ function create(XMLHttpRequestCtor, settingsStore, protocol, now, log) {
     message: function(settings, id, chat, message, params, callback) {
       return request(settings, 'GET', account(id) + '/chats/' + encodeURIComponent(chat) + '/messages/' + encodeURIComponent(message) + query(params), callback);
     },
+    updates: function(settings, id, params, callback) { return request(settings, 'GET', account(id) + '/updates' + query(params), callback); },
     releaseInterest: function(settings, id, chat, view, callback) {
       return request(settings, 'DELETE', account(id) + '/chats/' + encodeURIComponent(chat) + '/interests/' + encodeURIComponent(view), callback);
     }

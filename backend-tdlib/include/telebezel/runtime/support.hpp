@@ -50,6 +50,7 @@ void decorate_sender(const Account &account, nlohmann::json &message);
 std::string chat_type(const td_api::ChatType *type);
 void apply_position(nlohmann::json &projection, const td_api::chatPosition *position);
 nlohmann::json chat_projection(const td_api::chat &chat);
+void decorate_chat(const Account &account, nlohmann::json &chat);
 // Returns nullptr when no updateNewChat has been seen for `chat_id`.
 nlohmann::json *existing_chat(Account &account, std::int64_t chat_id);
 ChatOrderLog &order_log(Account &account, const std::string &list);

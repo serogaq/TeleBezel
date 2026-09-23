@@ -22,13 +22,47 @@
     "input": {
       "defaultAccount": "00112233-4455-4677-8899-aabbccddeeff",
       "chatList": 1,
-      "host": "tg.example:443"
+      "host": "tg.example:443",
+      "showArchive": false,
+      "unreadMode": 1
     },
-    "hex": "0235002430303131323233332d343435352d343637372d383839392d616162626363646465656666010e74672e6578616d706c653a343433",
+    "hex": "0237002430303131323233332d343435352d343637372d383839392d616162626363646465656666010e74672e6578616d706c653a3434330001",
     "decoded": {
       "defaultAccount": "00112233-4455-4677-8899-aabbccddeeff",
       "chatList": 1,
-      "host": "tg.example:443"
+      "host": "tg.example:443",
+      "showArchive": 0,
+      "unreadMode": 1
+    }
+  },
+  {
+    "name": "summary",
+    "record": "summary",
+    "input": {
+      "connection": 1,
+      "proxy": true,
+      "unreadChats": 70000,
+      "unreadMessages": 4294967295
+    },
+    "hex": "060a00010170110100ffffffff",
+    "decoded": {
+      "connection": 1,
+      "proxy": 1,
+      "unreadChats": 70000,
+      "unreadMessages": 4294967295
+    }
+  },
+  {
+    "name": "status",
+    "record": "status",
+    "input": {
+      "connection": 2,
+      "proxy": false
+    },
+    "hex": "0702000200",
+    "decoded": {
+      "connection": 2,
+      "proxy": 0
     }
   },
   {

@@ -34,6 +34,8 @@ typedef struct {
   uint8_t count;
   char default_account[TB_ACCOUNT_ID_SIZE];
   uint8_t chat_list;
+  bool show_archive;
+  uint8_t unread_mode;
   char host[TB_HOST_SIZE];
   const char *failure;
 } TbSession;

@@ -132,15 +132,20 @@ bool tb_same_day(time_t left, time_t right) {
   return a.tm_year == b.tm_year && a.tm_yday == b.tm_yday;
 }
 
+void tb_format_clock(char *out, size_t size, time_t date, bool clock24) {
+  struct tm value = *localtime(&date);
+  if (clock24) {
+    snprintf(out, size, "%02d:%02d", value.tm_hour, value.tm_min);
+  } else {
+    const int hour = value.tm_hour % 12 == 0 ? 12 : value.tm_hour % 12;
+    snprintf(out, size, "%d:%02d%s", hour, value.tm_min, value.tm_hour < 12 ? "am" : "pm");
+  }
+}
+
 void tb_format_time(char *out, size_t size, time_t date, time_t now, bool clock24) {
   struct tm value = *localtime(&date);
   if (tb_same_day(date, now)) {
-    if (clock24) {
-      snprintf(out, size, "%02d:%02d", value.tm_hour, value.tm_min);
-    } else {
-      const int hour = value.tm_hour % 12 == 0 ? 12 : value.tm_hour % 12;
-      snprintf(out, size, "%d:%02d%s", hour, value.tm_min, value.tm_hour < 12 ? "am" : "pm");
-    }
+    tb_format_clock(out, size, date, clock24);
     return;
   }
   struct tm current = *localtime(&now);
@@ -148,6 +153,30 @@ void tb_format_time(char *out, size_t size, time_t date, time_t now, bool clock2
     snprintf(out, size, "%02d.%02d", value.tm_mday, value.tm_mon + 1);
   } else {
     snprintf(out, size, "%02d.%02d.%02d", value.tm_mday, value.tm_mon + 1, value.tm_year % 100);
+  }
+}
+
+void tb_format_ago(char *out, size_t size, const TbStrings *strings, time_t date, time_t now, bool clock24) {
+  const time_t elapsed = now > date ? now - date : 0;
+  if (elapsed < 60) {
+    snprintf(out, size, "%s", strings->just_now);
+    return;
+  }
+  if (elapsed < 3600) {
+    snprintf(out, size, strings->minutes_ago, (int)(elapsed / 60));
+    return;
+  }
+  char clock[16];
+  tb_format_clock(clock, sizeof(clock), date, clock24);
+  if (elapsed < 86400) {
+    snprintf(out, size, "%s", clock);
+  } else if (elapsed < 172800) {
+    snprintf(out, size, strings->yesterday_at, clock);
+  } else {
+    struct tm value = *localtime(&date);
+    char day[16];
+    snprintf(day, sizeof(day), "%02d.%02d", value.tm_mday, value.tm_mon + 1);
+    snprintf(out, size, strings->day_at, day, clock);
   }
 }
 
@@ -162,6 +191,14 @@ void tb_format_day(char *out, size_t size, const TbStrings *strings, time_t date
   }
   struct tm value = *localtime(&date);
   snprintf(out, size, "%02d.%02d.%04d", value.tm_mday, value.tm_mon + 1, value.tm_year + 1900);
+}
+
+void tb_format_count(char *out, size_t size, uint32_t value) {
+  if (value > 9999) {
+    snprintf(out, size, "%luk", (unsigned long)(value / 1000 > 999 ? 999 : value / 1000));
+  } else {
+    snprintf(out, size, "%lu", (unsigned long)value);
+  }
 }
 
 void tb_format_badge(char *out, size_t size, uint16_t unread, uint8_t flags) {

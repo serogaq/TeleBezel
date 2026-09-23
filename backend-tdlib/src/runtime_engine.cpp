@@ -50,6 +50,16 @@ std::optional<std::int64_t> update_chat_id(const td_api::Object &object) {
   }
 }
 
+UnreadCounters *unread_counters(Account &account, const td_api::ChatList *list) {
+  if (list == nullptr)
+    return nullptr;
+  if (list->get_id() == td_api::chatListMain::ID)
+    return &account.main_unread;
+  if (list->get_id() == td_api::chatListArchive::ID)
+    return &account.archive_unread;
+  return nullptr;
+}
+
 void report_unknown_chat(const std::string &uuid, std::int64_t chat_id, std::int32_t update_id) {
   std::cerr << nlohmann::json{{"event", "chat_projection_missing"},
                               {"account_uuid", uuid},
@@ -379,6 +389,14 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   } else if (object.get_id() == td_api::updateConnectionState::ID) {
     auto &update = static_cast<td_api::updateConnectionState &>(object);
     account.connection_state = update.state_ ? connection_name(update.state_->get_id()) : "unknown";
+  } else if (object.get_id() == td_api::updateUnreadChatCount::ID) {
+    const auto &update = static_cast<td_api::updateUnreadChatCount &>(object);
+    if (auto *const counters = unread_counters(account, update.chat_list_.get()))
+      counters->chats = update.unread_unmuted_count_;
+  } else if (object.get_id() == td_api::updateUnreadMessageCount::ID) {
+    const auto &update = static_cast<td_api::updateUnreadMessageCount &>(object);
+    if (auto *const counters = unread_counters(account, update.chat_list_.get()))
+      counters->messages = update.unread_unmuted_count_;
   } else if (object.get_id() == td_api::updateUser::ID) {
     const auto &update = static_cast<td_api::updateUser &>(object);
     if (update.user_) {

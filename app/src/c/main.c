@@ -2,6 +2,7 @@
 #include "accounts_window.h"
 #include "chats.h"
 #include "chats_window.h"
+#include "connection.h"
 #include "errors.h"
 #include "format.h"
 #include "generated/localization.h"
@@ -18,6 +19,7 @@
 #define TB_PERSIST_LAST_ACCOUNT 1
 #define TB_DATA_TIMEOUT 25000
 #define TB_OUTBOX_SIZE 512
+#define TB_EVENTS_TIMEOUT 10000
 
 #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
 #define TB_INBOX_SIZE 4096
@@ -50,6 +52,11 @@ static AppTimer *s_request_timer;
 static TbSession s_session;
 static TbChats s_chats;
 static AppTimer *s_chats_timer;
+static TbConnection s_connection;
+static AppTimer *s_connection_timer;
+static uint32_t s_summary_revision;
+static AppTimer *s_reload_timer;
+static uint8_t s_reload_pending;
 static TbHistory s_history;
 static AppTimer *s_history_timer;
 static TbMessageText s_text;
@@ -155,6 +162,7 @@ static void show_connect(const char *body, const char *hint, TbNoticeAction acti
 static void close_views(void) {
   tb_message_text_close(&s_text);
   tb_history_close(&s_history);
+  tb_connection_close(&s_connection);
   tb_chats_close(&s_chats);
 }
 
@@ -211,6 +219,8 @@ static void open_account(void *context, int index) {
   s_account = index;
   remember_account(account->id);
   tb_chats_window_reset(&s_chats_view);
+  tb_chats_window_configure(&s_chats_view, s_session.show_archive, s_session.unread_mode);
+  tb_connection_open(&s_connection, account->id);
   tb_chats_open(&s_chats, account->id, s_session.chat_list);
   if (!in_stack(s_chats_view.window)) { window_stack_push(s_chats_view.window, true); }
 }
@@ -296,11 +306,60 @@ static bool handle_fatal(int32_t error) {
   return true;
 }
 
+#define TB_RELOAD_CHATS 1
+#define TB_RELOAD_HISTORY 2
+#define TB_RELOAD_READER 4
+
+static void reload_fired(void *context) {
+  (void)context;
+  s_reload_timer = NULL;
+  const uint8_t pending = s_reload_pending;
+  s_reload_pending = 0;
+  if (pending & TB_RELOAD_CHATS) { tb_chats_window_reload(&s_chats_view); }
+  if (pending & TB_RELOAD_HISTORY) { tb_history_window_reload(&s_history_view); }
+  if (pending & TB_RELOAD_READER) { tb_reader_window_reload(&s_reader); }
+}
+
+static void reload_later(uint8_t views) {
+  s_reload_pending |= views;
+  if (!s_reload_timer) { s_reload_timer = app_timer_register(0, reload_fired, NULL); }
+}
+
 static void chats_changed(void *context) {
   (void)context;
   if (s_chats.error != TB_ERROR_NONE) { APP_LOG(APP_LOG_LEVEL_WARNING, "chats failed: error %d", (int)s_chats.error); }
   if (s_chats.error != TB_ERROR_NONE && handle_fatal(s_chats.error)) { return; }
-  tb_chats_window_reload(&s_chats_view);
+  if (s_chats.summary_revision != s_summary_revision) {
+    s_summary_revision = s_chats.summary_revision;
+    tb_connection_summary(&s_connection, s_chats.connection, s_chats.proxy);
+  }
+  reload_later(TB_RELOAD_CHATS);
+}
+
+static void connection_changed(void *context) {
+  (void)context;
+  reload_later(TB_RELOAD_CHATS);
+}
+
+static void connection_reload(void *context) {
+  (void)context;
+  tb_chats_refresh(&s_chats);
+}
+
+static void connection_timer_fired(void *context) {
+  (void)context;
+  s_connection_timer = NULL;
+  tb_connection_timer(&s_connection);
+}
+static bool connection_schedule(void *context, uint32_t milliseconds) {
+  (void)context;
+  if (s_connection_timer) { app_timer_cancel(s_connection_timer); }
+  s_connection_timer = app_timer_register(milliseconds, connection_timer_fired, NULL);
+  return s_connection_timer != NULL;
+}
+static void connection_cancel(void *context) {
+  (void)context;
+  if (s_connection_timer) { app_timer_cancel(s_connection_timer); s_connection_timer = NULL; }
 }
 
 static void history_changed(void *context) {
@@ -319,13 +378,13 @@ static void history_changed(void *context) {
       return;
     }
   }
-  tb_history_window_reload(&s_history_view);
+  reload_later(TB_RELOAD_HISTORY);
 }
 
 static void text_changed(void *context) {
   (void)context;
   if (s_text.error != TB_ERROR_NONE && handle_fatal(s_text.error)) { return; }
-  tb_reader_window_reload(&s_reader);
+  reload_later(TB_RELOAD_READER);
 }
 
 static void chats_timer_fired(void *context) {
@@ -479,11 +538,14 @@ static void phone_connection(bool connected) {
 
 static void focus_changed(bool in_focus) {
   Window *top = window_stack_get_top_window();
-  if (top == s_chats_view.window) { tb_chats_set_active(&s_chats, in_focus); }
+  if (top == s_chats_view.window) {
+    tb_chats_set_active(&s_chats, in_focus);
+    tb_connection_set_active(&s_connection, in_focus);
+  }
   if (top == s_history_view.window) { tb_history_set_active(&s_history, in_focus); }
 }
 
-static void init(void) {
+__attribute__((noinline)) static void init(void) {
   s_strings = tb_localization_current();
   tb_theme_init();
   tb_requests_init(&s_requests, (TbRequestPorts){send_request, request_schedule, request_cancel, now_ms, NULL});
@@ -493,11 +555,14 @@ static void init(void) {
   const bool allocated = tb_chats_init(&s_chats, &s_requests, (TbViewPorts){chats_changed, chats_schedule, chats_cancel, now_ms, NULL}, chats_config) &&
                          tb_history_init(&s_history, &s_requests, (TbViewPorts){history_changed, history_schedule, history_cancel, now_ms, NULL},
                                          history_config);
+  tb_connection_init(&s_connection, &s_requests,
+                     (TbConnectionPorts){connection_changed, connection_reload, connection_schedule, connection_cancel, now_ms, NULL},
+                     TB_EVENTS_TIMEOUT);
   tb_message_text_init(&s_text, &s_requests, (TbViewPorts){text_changed, text_schedule, text_cancel, now_ms, NULL}, TB_FULL_TEXT, TB_DATA_TIMEOUT);
   tb_notice_init(&s_connect);
   tb_notice_init(&s_info);
   tb_accounts_window_init(&s_accounts, &s_session, s_strings, (TbAccountsActions){open_account, make_default, NULL});
-  tb_chats_window_init(&s_chats_view, &s_chats, s_strings, (TbChatsActions){open_chat, NULL});
+  tb_chats_window_init(&s_chats_view, &s_chats, &s_connection, s_strings, (TbChatsActions){open_chat, NULL});
   tb_history_window_init(&s_history_view, &s_history, s_strings, (TbHistoryActions){open_message, history_closed, NULL});
   tb_reader_window_init(&s_reader, &s_text, s_strings);
   show_connect(s_strings->checking, NULL, NULL);
@@ -517,13 +582,15 @@ static void init(void) {
   tb_session_start(&s_session, opened);
 }
 
-static void deinit(void) {
+__attribute__((noinline)) static void deinit(void) {
+  if (s_reload_timer) { app_timer_cancel(s_reload_timer); }
   tb_session_stop(&s_session);
   tb_requests_cancel_all(&s_requests);
   app_message_deregister_callbacks();
   connection_service_unsubscribe();
   app_focus_service_unsubscribe();
   tb_message_text_close(&s_text);
+  tb_connection_close(&s_connection);
   tb_history_deinit(&s_history);
   tb_chats_deinit(&s_chats);
   tb_reader_window_deinit(&s_reader);

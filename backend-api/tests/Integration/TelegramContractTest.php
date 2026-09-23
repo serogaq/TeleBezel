@@ -538,6 +538,22 @@ test('the chat list of an account that is not authorized asks for authorization 
     $this->getJson($this->base.'/chats')->assertStatus(409)->assertJsonPath('error.code', 'authorization.invalid_state');
 });
 
+test('the account owner chat is marked as saved messages', function (): void {
+    contractState($this, 'ready');
+    $this->td->control([
+        'op' => 'chat',
+        'id' => '9007199254740000',
+        'type' => 'private',
+        'title' => 'Ада Лавлейс',
+    ]);
+    contractEventually(fn () => count(app(TdlibGateway::class)->chats($this->account, [
+        'list' => 'main',
+        'limit' => 20,
+    ], (string) Str::uuid())['items']) === 1);
+    contractEventually(fn () => $this->getJson($this->base.'/chats?limit=20')->json('data.items.0.is_saved_messages') === true);
+    $this->getJson($this->base.'/chats/9007199254740000?view_id='.$this->view)->assertOk()->assertJsonPath('data.item.is_saved_messages', true);
+});
+
 test('watch read contract shapes match the shared fixtures', function (): void {
     contractState($this, 'ready');
     $this->td->control([
@@ -560,6 +576,16 @@ test('watch read contract shapes match the shared fixtures', function (): void {
             'text' => 'Привет 👋',
         ],
     ]);
+    $this->td->control([
+        'op' => 'unread',
+        'list' => 'main',
+        'chats' => 1,
+        'messages' => 3,
+    ]);
+    $this->td->control([
+        'op' => 'connection',
+        'state' => 'updating',
+    ]);
     contractEventually(fn () => count(app(TdlibGateway::class)->chats($this->account, [
         'list' => 'main',
         'limit' => 20,
@@ -567,6 +593,14 @@ test('watch read contract shapes match the shared fixtures', function (): void {
     $chats = $this->getJson($this->base.'/chats?limit=20')->assertOk()
         ->assertJsonPath('data.items.0.last_message.sender.name', 'Ада Лавлейс')
         ->assertJsonPath('data.items.0.unread_count', 3)
+        ->assertJsonPath('data.items.0.is_saved_messages', false)
+        ->assertJsonPath('data.unread.chats', 1)
+        ->assertJsonPath('data.unread.messages', 3)
+        ->assertJsonPath('data.connection', 'updating')
+        ->json();
+    $updates = $this->getJson($this->base.'/updates')->assertOk()
+        ->assertJsonPath('data.status.connection', 'updating')
+        ->assertJsonPath('data.status.proxy', false)
         ->json();
     $this->td->control([
         'op' => 'response',
@@ -598,6 +632,7 @@ test('watch read contract shapes match the shared fixtures', function (): void {
     ])['pending'] === 0);
     contractFixture('chats', $chats);
     contractFixture('history', $history);
+    contractFixture('updates', $updates);
 });
 
 /** @param array<string, mixed> $response */

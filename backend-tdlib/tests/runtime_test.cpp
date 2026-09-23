@@ -499,6 +499,64 @@ TEST_F(RuntimeTest, ChatListRequiresAuthorizationAndNamesLastSender) {
   ASSERT_EQ(page["items"][0]["last_message"]["sender"].value("name", ""), "Ada Lovelace");
 }
 
+TEST_F(RuntimeTest, ChatPagesCarryUnmutedUnreadCountersPerList) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->emit_update(1, td_api::make_object<td_api::updateUnreadChatCount>(
+                                td_api::make_object<td_api::chatListMain>(), 9, 5, 3, 1, 0));
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateUnreadMessageCount>(td_api::make_object<td_api::chatListMain>(), 40, 12));
+  transport->emit_update(1, td_api::make_object<td_api::updateUnreadChatCount>(
+                                td_api::make_object<td_api::chatListArchive>(), 4, 2, 1, 0, 0));
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateUnreadMessageCount>(td_api::make_object<td_api::chatListArchive>(), 8, 2));
+  wait_until([&] { return runtime->chats(first, "archive", 20, "")["unread"].value("messages", 0) == 2; });
+  const auto main = runtime->chats(first, "main", 20, "");
+  ASSERT_EQ(main["unread"].value("chats", 0), 3);
+  ASSERT_EQ(main["unread"].value("messages", 0), 12);
+  const auto archive = runtime->chats(first, "archive", 20, "");
+  ASSERT_EQ(archive["unread"].value("chats", 0), 1);
+  ASSERT_EQ(archive["unread"].value("messages", 0), 2);
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateWaitPhoneNumber>());
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  runtime->reconcile(first, command(first));
+  wait_until([&] { return runtime->chats(first, "main", 20, "").contains("unread"); });
+  ASSERT_EQ(runtime->chats(first, "main", 20, "")["unread"].value("messages", -1), 0)
+      << "counters survived the end of the session";
+}
+
+TEST_F(RuntimeTest, SavedMessagesChatIsFlagged) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).contains("telegram_identity"); });
+  for (const std::int64_t id : {9007199254740000LL, 42LL}) {
+    auto chat = td_api::make_object<td_api::chat>();
+    chat->id_ = id;
+    chat->title_ = id == 42 ? "Friend" : "Ada Lovelace";
+    chat->type_ = td_api::make_object<td_api::chatTypePrivate>(id);
+    chat->positions_.push_back(td_api::make_object<td_api::chatPosition>(td_api::make_object<td_api::chatListMain>(),
+                                                                         id == 42 ? 100 : 200, false, nullptr));
+    transport->emit_update(1, td_api::make_object<td_api::updateNewChat>(std::move(chat)));
+  }
+  wait_until([&] { return runtime->chats(first, "main", 20, "")["items"].size() == 2; });
+  const auto page = runtime->chats(first, "main", 20, "");
+  ASSERT_TRUE(page["items"][0].value("is_saved_messages", false));
+  ASSERT_FALSE(page["items"][1].value("is_saved_messages", true));
+  ASSERT_TRUE(runtime->chat(first, 9007199254740000LL)["item"].value("is_saved_messages", false));
+}
+
+TEST_F(RuntimeTest, UpdatesReportConnectionState) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateConnectionState>(td_api::make_object<td_api::connectionStateUpdating>()));
+  wait_until([&] { return runtime->updates(first, "", 100).value("connection", "") == "updating"; });
+  transport->emit_update(
+      1, td_api::make_object<td_api::updateConnectionState>(td_api::make_object<td_api::connectionStateReady>()));
+  wait_until([&] { return runtime->updates(first, "", 100).value("connection", "") == "ready"; });
+  ASSERT_EQ(runtime->chats(first, "main", 20, "").value("connection", ""), "ready");
+}
+
 TEST_F(RuntimeTest, HistoryUsesLocalResultsAndInvalidatesAfterLogout) {
   transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
   wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });

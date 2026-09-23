@@ -1,5 +1,5 @@
 {
-  "request": {"bootstrap": 1, "hello": 2, "chats": 3, "history": 4, "message": 5, "view_close": 6, "set_default": 7},
+  "request": {"bootstrap": 1, "hello": 2, "chats": 3, "history": 4, "message": 5, "view_close": 6, "set_default": 7, "events": 8},
   "response": {"data": 1, "ready": 2, "refresh": 3},
   "result": {
     "ok": 0,
@@ -30,7 +30,9 @@
     "connection_not_ready": 32,
     "truncated": 64
   },
-  "record": {"account": 1, "prefs": 2, "chat": 3, "message": 4, "text": 5},
+  "record": {"account": 1, "prefs": 2, "chat": 3, "message": 4, "text": 5, "summary": 6, "status": 7},
+  "connection": {"connecting": 0, "updating": 1, "ready": 2},
+  "unread_mode": {"chats": 0, "messages": 1},
   "kind": {
     "text": 0,
     "photo": 1,
@@ -73,7 +75,7 @@
     "custom": 14
   },
   "chat_type": {"private": 0, "basic_group": 1, "supergroup": 2, "channel": 3, "secret": 4, "unknown": 5},
-  "chat_flag": {"muted": 1, "pinned": 2, "marked_unread": 4, "mention": 8, "preview_outgoing": 16},
+  "chat_flag": {"muted": 1, "pinned": 2, "marked_unread": 4, "mention": 8, "preview_outgoing": 16, "saved": 32},
   "message_flag": {"outgoing": 1, "edited": 2, "truncated": 4},
   "account_state": {"ready": 0, "needs_login": 1, "connecting": 2, "logging_out": 3, "removing": 4},
   "account_flag": {"default": 1},

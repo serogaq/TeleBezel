@@ -23,6 +23,8 @@ function create(options) {
   var slots = {};
   var chatCursors = {};
   var historyCursors = {};
+  var eventCursors = {};
+  var proxies = {};
   var texts = {};
   var textOrder = [];
 
@@ -170,8 +172,10 @@ function create(options) {
         var defaultAccount = typeof preferences.data.default_account_id === 'string' ? preferences.data.default_account_id : '';
         var records = [codec.prefs({
           defaultAccount: defaultAccount,
-          chatList: preferences.data.chat_list === 'archive' ? protocol.list.archive : protocol.list.main,
-          host: value.address
+          chatList: value.showArchive && preferences.data.chat_list === 'archive' ? protocol.list.archive : protocol.list.main,
+          host: value.address,
+          showArchive: value.showArchive,
+          unreadMode: value.unreadMode === 'messages' ? protocol.unread_mode.messages : protocol.unread_mode.chats
         })];
         accounts.data.filter(function(account) { return account && ACCOUNT_PATTERN.test(account.id); }).slice(0, 8).forEach(function(account) {
           records.push(codec.account({
@@ -216,6 +220,7 @@ function create(options) {
     var last = chat.last_message;
     var preview = last ? describe(last, chat.id) : {kind: protocol.kind.none, action: 0, duration: 0, text: '', extra: '', sender: ''};
     if (last && last.is_outgoing) { value |= flags.preview_outgoing; }
+    if (chat.is_saved_messages === true) { value |= flags.saved; }
     return codec.chat({
       id: chat.id,
       title: typeof chat.title === 'string' ? chat.title : '',
@@ -242,6 +247,25 @@ function create(options) {
     if (data.refresh === 'queued' || data.refresh === 'pending') { value |= flags.refresh_pending; }
     if (typeof data.connection === 'string' && data.connection !== 'ready') { value |= flags.connection_not_ready; }
     return value;
+  }
+
+  function connectionState(name) {
+    var states = protocol.connection;
+    if (name === 'ready') { return states.ready; }
+    if (name === 'updating') { return states.updating; }
+    return states.connecting;
+  }
+
+  function counter(value) { return Number.isInteger(value) && value > 0 ? value : 0; }
+
+  function summaryRecord(account, data) {
+    var unread = data.unread && typeof data.unread === 'object' ? data.unread : {};
+    return codec.summary({
+      connection: connectionState(data.connection),
+      proxy: proxies[account] === true,
+      unreadChats: counter(unread.chats),
+      unreadMessages: counter(unread.messages)
+    });
   }
 
   function limits(payload, defaultPage, defaultText, maxText) {
@@ -283,9 +307,9 @@ function create(options) {
       }
       var data = result.data;
       chatCursors[key] = {next: data.next_cursor || null, retry: data.partial ? data.retry_cursor || cursor : null};
-      var records = (Array.isArray(data.items) ? data.items : []).filter(function(chat) {
+      var records = [summaryRecord(account, data)].concat((Array.isArray(data.items) ? data.items : []).filter(function(chat) {
         return chat && CHAT_PATTERN.test(chat.id);
-      }).map(function(chat) { return chatRecord(chat, list, bounds.text); });
+      }).map(function(chat) { return chatRecord(chat, list, bounds.text); }));
       respond(sequence, protocol.result.ok, records, pageFlags(data));
     });
   }
@@ -402,6 +426,41 @@ function create(options) {
     });
   }
 
+  function events(sequence, payload) {
+    var account = payload.ACCOUNT_ID;
+    if (!ACCOUNT_PATTERN.test(account || '')) { reject(sequence, payload, ['ACCOUNT_ID']); return; }
+    var value = settingsOrFail(sequence);
+    if (!value) { return; }
+    var slot = begin('events', sequence);
+    var resynced = false;
+    function poll() {
+      var cursor = eventCursors[account] || null;
+      call('events', slot, function(callback) { return options.api.updates(value, account, {cursor: cursor}, callback); }, function(result) {
+        if (!result.ok) {
+          if (failureCode(result) === protocol.result.cursor_lost && cursor && !resynced) {
+            resynced = true;
+            delete eventCursors[account];
+            poll();
+            return;
+          }
+          finish('events', slot);
+          fail(sequence, result);
+          return;
+        }
+        finish('events', slot);
+        var data = result.data;
+        if (typeof data.cursor === 'string' && data.cursor) { eventCursors[account] = data.cursor; }
+        var status = data.status && typeof data.status === 'object' ? data.status : {};
+        proxies[account] = status.proxy === true;
+        respond(sequence, protocol.result.ok, [codec.status({
+          connection: connectionState(typeof status.connection === 'string' ? status.connection : data.connection),
+          proxy: proxies[account]
+        })], 0);
+      });
+    }
+    poll();
+  }
+
   function release(value) {
     return function(target) {
       options.api.releaseInterest(value, target.account, target.chat, options.leases.viewId(), function() {});
@@ -459,6 +518,7 @@ function create(options) {
       case kinds.message: fullText(sequence, payload); break;
       case kinds.view_close: viewClose(sequence, payload); break;
       case kinds.set_default: setDefault(sequence, payload); break;
+      case kinds.events: events(sequence, payload); break;
       default: reject(sequence, payload, ['REQUEST_KIND']);
     }
   }
@@ -475,6 +535,8 @@ function create(options) {
     slots = {};
     chatCursors = {};
     historyCursors = {};
+    eventCursors = {};
+    proxies = {};
     texts = {};
     textOrder = [];
     options.leases.reset();

@@ -1,6 +1,6 @@
 {
     "data": {
-        "connection": "unknown",
+        "connection": "updating",
         "fallback_reason": null,
         "has_more": null,
         "items": [
@@ -8,6 +8,7 @@
                 "id": "-100200",
                 "is_forum": false,
                 "is_marked_unread": false,
+                "is_saved_messages": false,
                 "last_message": {
                     "author_signature": "",
                     "chat_id": "-100200",
@@ -47,11 +48,15 @@
         ],
         "local_exhausted": false,
         "next_cursor": null,
-        "observed_at": 1790150064,
+        "observed_at": 1790171572,
         "partial": true,
         "retry_cursor": null,
         "source": "tdlib_memory",
         "stale": true,
-        "updates_cursor": "1:f597c019-127e-4b3b-bbf4-ef3cd9a44fe7:1.207dbb801bc64bda3686090339b95bb9ea3975066ac8c99cb10be3783208a35c"
+        "unread": {
+            "chats": 1,
+            "messages": 3
+        },
+        "updates_cursor": "1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:1.586b8fa6d8230d180704154dac1c55a7a597ca4ecd72973b45b10e7c6815a7ac"
     }
 }

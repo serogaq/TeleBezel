@@ -24,7 +24,11 @@ function decode(protocol, bytes) {
     if (type === types.account) {
       records.push({type: 'account', id: body.str8(), name: body.str8(), state: body.u8(), flags: body.u8()});
     } else if (type === types.prefs) {
-      records.push({type: 'prefs', defaultAccount: body.str8(), chatList: body.u8(), host: body.str8()});
+      records.push({type: 'prefs', defaultAccount: body.str8(), chatList: body.u8(), host: body.str8(), showArchive: body.u8(), unreadMode: body.u8()});
+    } else if (type === types.summary) {
+      records.push({type: 'summary', connection: body.u8(), proxy: body.u8(), unreadChats: body.u32(), unreadMessages: body.u32()});
+    } else if (type === types.status) {
+      records.push({type: 'status', connection: body.u8(), proxy: body.u8()});
     } else if (type === types.chat) {
       records.push({type: 'chat', id: body.str8(), title: body.str8(), chatType: body.u8(), flags: body.u8(), unread: body.u16(),
         lastDate: body.u32(), previewKind: body.u8(), previewAction: body.u8(), previewDuration: body.u16(),

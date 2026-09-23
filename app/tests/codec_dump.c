@@ -41,7 +41,16 @@ int main(void) {
         print_span("defaultAccount", record.default_account);
         printf(",\"chatList\":%d,", record.chat_list);
         print_span("host", record.host);
-        printf("}\n");
+        printf(",\"showArchive\":%d,\"unreadMode\":%d}\n", record.show_archive, record.unread_mode);
+      } else if (type == TB_RECORD_SUMMARY) {
+        TbSummaryRecord record;
+        if (!tb_codec_summary(&body, &record)) { printf("{\"error\":\"summary\"}\n"); return 1; }
+        printf("{\"type\":\"summary\",\"connection\":%d,\"proxy\":%d,\"unreadChats\":%lu,\"unreadMessages\":%lu}\n", record.connection,
+               record.proxy, (unsigned long)record.unread_chats, (unsigned long)record.unread_messages);
+      } else if (type == TB_RECORD_STATUS) {
+        TbStatusRecord record;
+        if (!tb_codec_status(&body, &record)) { printf("{\"error\":\"status\"}\n"); return 1; }
+        printf("{\"type\":\"status\",\"connection\":%d,\"proxy\":%d}\n", record.connection, record.proxy);
       } else if (type == TB_RECORD_CHAT) {
         TbChatRecord record;
         if (!tb_codec_chat(&body, &record)) { printf("{\"error\":\"chat\"}\n"); return 1; }

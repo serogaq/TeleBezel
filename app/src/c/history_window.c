@@ -50,7 +50,7 @@ static const char *bottom_text(TbHistoryWindow *view) {
   if (history->truncated) { return strings->newer_hidden; }
   if (history->op == TB_HISTORY_REFRESH && !history->refreshing_silently) { return strings->refreshing; }
   if (history->refresh_error != TB_ERROR_NONE) {
-    char reason[160];
+    static char reason[160];
     snprintf(reason, sizeof(reason), "%s: %s", strings->not_updated, tb_error_text(strings, history->refresh_error));
     snprintf(view->buffer, sizeof(view->buffer), "%s. %s", reason, strings->refresh);
     return view->buffer;
@@ -140,16 +140,16 @@ static void draw_message(TbHistoryWindow *view, GContext *ctx, const Layer *cell
   const bool outgoing = (message->flags & TB_MESSAGE_FLAG_OUTGOING) != 0;
   int16_t y = 0;
   if (starts_day(view, index)) {
-    char day[32];
+    static char day[32];
     tb_format_day(day, sizeof(day), view->strings, (time_t)message->date, time(NULL));
     graphics_context_set_text_color(ctx, tb_theme_muted(highlighted));
     graphics_draw_text(ctx, day, theme->meta_bold, GRect(left, y - 2, width, theme->meta_height), GTextOverflowModeTrailingEllipsis,
                        GTextAlignmentCenter, NULL);
     y = (int16_t)(y + theme->meta_height);
   }
-  char stamp[24];
+  static char stamp[24];
   tb_format_time(stamp, sizeof(stamp), (time_t)message->date, (time_t)message->date, clock_is_24h_style());
-  char meta[48];
+  static char meta[48];
   snprintf(meta, sizeof(meta), "%s%s", (message->flags & TB_MESSAGE_FLAG_EDITED) ? "* " : "", stamp);
   graphics_context_set_text_color(ctx, tb_theme_muted(highlighted));
   graphics_draw_text(ctx, meta, theme->meta, GRect(left, y - 2, width, theme->meta_height), GTextOverflowModeTrailingEllipsis,

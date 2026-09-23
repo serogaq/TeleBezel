@@ -44,6 +44,8 @@ static bool parse(TbSession *session, const TbResponse *response) {
     session->default_account[0] = '\0';
     session->host[0] = '\0';
     session->chat_list = TB_LIST_MAIN;
+    session->show_archive = true;
+    session->unread_mode = TB_UNREAD_MODE_CHATS;
   }
   TbCursor cursor;
   tb_cursor_init(&cursor, response->payload, response->length);
@@ -57,7 +59,9 @@ static bool parse(TbSession *session, const TbResponse *response) {
       if (!tb_copy_uuid(session->default_account, sizeof(session->default_account), prefs.default_account)) {
         session->default_account[0] = '\0';
       }
-      session->chat_list = prefs.chat_list == TB_LIST_ARCHIVE ? TB_LIST_ARCHIVE : TB_LIST_MAIN;
+      session->show_archive = prefs.show_archive != 0;
+      session->chat_list = session->show_archive && prefs.chat_list == TB_LIST_ARCHIVE ? TB_LIST_ARCHIVE : TB_LIST_MAIN;
+      session->unread_mode = prefs.unread_mode == TB_UNREAD_MODE_MESSAGES ? TB_UNREAD_MODE_MESSAGES : TB_UNREAD_MODE_CHATS;
       tb_copy_span(session->host, sizeof(session->host), prefs.host);
     } else if (type == TB_RECORD_ACCOUNT) {
       TbAccountRecord record;

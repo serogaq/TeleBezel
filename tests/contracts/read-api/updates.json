@@ -1,0 +1,12 @@
+{
+    "data": {
+        "connection": "updating",
+        "cursor": "1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:1.586b8fa6d8230d180704154dac1c55a7a597ca4ecd72973b45b10e7c6815a7ac",
+        "has_more": false,
+        "items": [],
+        "status": {
+            "connection": "updating",
+            "proxy": false
+        }
+    }
+}

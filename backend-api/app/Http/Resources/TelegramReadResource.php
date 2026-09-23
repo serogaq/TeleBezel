@@ -21,7 +21,13 @@ final class TelegramReadResource extends ApiResource
         } elseif ($kind === 'interest') {
             $data = self::pick($data, ['active', 'expires_in', 'expires_in_seconds', 'lease_seconds', 'released', 'chat_id']);
         } else {
-            $data = self::pick($data, ['items', 'events', 'stale', 'partial', 'has_more', 'next_cursor', 'retry_cursor', 'updates_cursor', 'observed_at', 'source', 'cursor', 'refresh', 'connection', 'local_exhausted', 'fallback_reason']);
+            $data = self::pick($data, ['items', 'events', 'stale', 'partial', 'has_more', 'next_cursor', 'retry_cursor', 'updates_cursor', 'observed_at', 'source', 'cursor', 'refresh', 'connection', 'local_exhausted', 'fallback_reason', 'unread', 'status']);
+            if (is_array($data['unread'] ?? null)) {
+                $data['unread'] = self::pick(Values::object($data['unread']), ['chats', 'messages']);
+            }
+            if (is_array($data['status'] ?? null)) {
+                $data['status'] = self::pick(Values::object($data['status']), ['connection', 'proxy']);
+            }
             foreach (['items', 'events'] as $key) {
                 if (isset($data[$key]) && is_array($data[$key])) {
                     $data[$key] = array_values(array_map(function (mixed $item) use ($kind): array {
@@ -43,7 +49,7 @@ final class TelegramReadResource extends ApiResource
      * @return array<string, mixed> */
     private static function chat(array $value): array
     {
-        $value = self::pick($value, ['id', 'type', 'title', 'is_forum', 'is_marked_unread', 'unread_count', 'unread_mention_count', 'unread_reaction_count', 'notifications', 'last_read_inbox_message_id', 'last_read_outbox_message_id', 'positions', 'last_message', 'stale', 'observed_at', 'source']);
+        $value = self::pick($value, ['id', 'type', 'title', 'is_saved_messages', 'is_forum', 'is_marked_unread', 'unread_count', 'unread_mention_count', 'unread_reaction_count', 'notifications', 'last_read_inbox_message_id', 'last_read_outbox_message_id', 'positions', 'last_message', 'stale', 'observed_at', 'source']);
         if (is_array($value['notifications'] ?? null)) {
             $value['notifications'] = self::pick(Values::object($value['notifications']), ['use_default_mute_for', 'mute_for']);
         }

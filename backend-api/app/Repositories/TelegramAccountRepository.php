@@ -181,6 +181,20 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
         ];
     }
 
+    public function usesProxy(AccountData $account): bool
+    {
+        if ($account->proxy_type !== null) {
+            return $account->proxy_type !== 'direct';
+        }
+        $instance = Instance::query()->first();
+        if ($instance?->active_proxy_profile_id === null) {
+            return false;
+        }
+        $profile = ProxyProfile::query()->find($instance->active_proxy_profile_id);
+
+        return $profile instanceof ProxyProfile && $profile->mode !== 'direct';
+    }
+
     /** @param list<string> $lifecycles
      * @return array<int, AccountData> */
     public function batch(array $lifecycles, ?string $after, ?string $through = null): array
