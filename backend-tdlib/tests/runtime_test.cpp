@@ -33,6 +33,10 @@ template <class Predicate> void wait_until(Predicate predicate, int attempts = 1
   }
   throw std::runtime_error("runtime test wait timed out");
 }
+std::string item_field(const nlohmann::json &result, const char *key) {
+  const auto item = result.find("item");
+  return item != result.end() && item->is_object() ? item->value(key, std::string{}) : std::string{};
+}
 std::string nullable(const nlohmann::json &value, const char *key) {
   const auto found = value.find(key);
   return found != value.end() && found->is_string() ? found->get<std::string>() : std::string{};
@@ -184,7 +188,7 @@ TEST_F(RuntimeTest, MultiAccountReadsAndInterests) {
   wait_until([&] { return runtime->chats(first, "main", 20, "")["items"].size() == 1; });
   const auto initial_cursor = runtime->chats(first, "main", 20, "").value("updates_cursor", "");
   transport->emit_update(1, td_api::make_object<td_api::updateChatTitle>(42, "Renamed"));
-  wait_until([&] { return runtime->chat(first, 42)["item"].value("title", "") == "Renamed"; });
+  wait_until([&] { return item_field(runtime->chat(first, 42), "title") == "Renamed"; });
   ASSERT_TRUE((runtime->updates(first, initial_cursor, 100)["items"].size() == 1));
   const std::string device = "80112233-4455-4677-8899-aabbccddeeff";
   const std::string view = "90112233-4455-4677-8899-aabbccddeeff";
@@ -356,7 +360,7 @@ TEST_F(RuntimeTest, BackgroundRefreshExcludesTheAnchorLikeTheLocalRead) {
                                     [](const auto &item) { return !item.only_local && item.from_message_id == 100; });
   ASSERT_NE(refresh, requests.end());
   ASSERT_EQ(refresh->limit, 2) << "the refresh gave the anchor's own slot away";
-  wait_until([&] { return runtime->message(first, 42, 99)["item"].value("id", "") == "99"; }, 400);
+  wait_until([&] { return item_field(runtime->message(first, 42, 99), "id") == "99"; }, 400);
 }
 
 // Reading the same unchanged message again must not append journal entries, or
