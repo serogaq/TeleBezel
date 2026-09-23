@@ -1,4 +1,5 @@
 'use strict';
+var accountInfo = require('./accounts');
 var ACCOUNT_PATTERN = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 var CHAT_PATTERN = /^-?[1-9][0-9]{0,18}$/;
 var MESSAGE_PATTERN = /^[1-9][0-9]{0,18}$/;
@@ -123,17 +124,6 @@ function create(options) {
     respond(sequence, failureCode(result), null, 0, result.code === 'rate_limit.exceeded' || result.code === 'interest.limit_reached' ? result.retryAfter || 5 : 0);
   }
 
-  function accountName(account) {
-    if (typeof account.label === 'string' && account.label.trim()) { return account.label; }
-    var identity = account.telegram_identity;
-    if (identity) {
-      var name = [identity.first_name, identity.last_name].filter(function(part) { return typeof part === 'string' && part; }).join(' ');
-      if (name) { return name; }
-      if (identity.usernames && identity.usernames[0]) { return '@' + identity.usernames[0]; }
-    }
-    return String(account.id || '').slice(0, 8);
-  }
-
   function accountState(account) {
     var states = protocol.account_state;
     var runtime = account.runtime || {};
@@ -164,7 +154,7 @@ function create(options) {
         accounts.data.filter(function(account) { return account && ACCOUNT_PATTERN.test(account.id); }).slice(0, 8).forEach(function(account) {
           records.push(codec.account({
             id: account.id,
-            name: accountName(account),
+            name: accountInfo.name(account),
             state: accountState(account),
             flags: account.id === defaultAccount ? protocol.account_flag.default : 0
           }));

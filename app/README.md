@@ -25,7 +25,8 @@ previous screen with its data and selection kept. With one ready account, or a
 ready default account, the app opens its chats directly.
 
 - Accounts: Select opens a ready account or explains what is needed; a long
-  Select makes the account the default.
+  Select makes the account the default. The default account can also be chosen
+  on the phone in the app settings.
 - Chats: the first row switches between the main list and the archive, the
   second shows freshness and refreshes on Select, the last loads more chats.
 - History: oldest at the top, newest at the bottom. The top row loads earlier

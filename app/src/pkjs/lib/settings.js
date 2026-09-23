@@ -26,4 +26,4 @@ function clayValue(values, key) {
 function fromClay(values, previous) { return normalize({address: clayValue(values, 'CONFIG_ADDRESS'), ssl: clayValue(values, 'CONFIG_SSL'), token: clayValue(values, 'CONFIG_TOKEN') || normalize(previous).token}); }
 function toClay(value) { value = normalize(value); return {CONFIG_ADDRESS: value.address, CONFIG_SSL: value.ssl}; }
 function baseUrl(value) { var valid = validateEndpoint(value); return valid.ok ? (valid.settings.ssl ? 'https://' : 'http://') + valid.settings.address : null; }
-module.exports = {STORAGE_KEY: STORAGE_KEY, normalize: normalize, validate: validate, validateEndpoint: validateEndpoint, load: load, save: save, fromClay: fromClay, toClay: toClay, baseUrl: baseUrl};
+module.exports = {clayValue: clayValue, STORAGE_KEY: STORAGE_KEY, normalize: normalize, validate: validate, validateEndpoint: validateEndpoint, load: load, save: save, fromClay: fromClay, toClay: toClay, baseUrl: baseUrl};

@@ -56,6 +56,7 @@
       "CONFIG_ADDRESS",
       "CONFIG_SSL",
       "CONFIG_TOKEN",
+      "CONFIG_DEFAULT_ACCOUNT",
       "ACCOUNT_ID",
       "MESSAGE_ID",
       "PAGE_OP",

@@ -15,4 +15,5 @@ require('./codec_test');
 require('./transport_test');
 require('./reader_test');
 require('./contract_test');
+require('./config_page_test');
 process.stdout.write('PKJS tests passed\n');
