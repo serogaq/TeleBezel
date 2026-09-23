@@ -17,8 +17,8 @@ actual = __import__("json").loads(source.read_text())["version"] if component ==
 if actual != version:
     raise SystemExit(f"tag version {version} does not match {source}: {actual}")
 changelog = (Path(component) / "CHANGELOG.md").read_text()
-if not re.search(r"^## " + re.escape(version) + r"(?:\s|$)", changelog, re.MULTILINE):
-    raise SystemExit("exact version heading is missing from component changelog")
+if not re.search(r"^## \[" + re.escape(version) + r"\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$", changelog, re.MULTILINE):
+    raise SystemExit("changelog needs a '## [" + version + "] - YYYY-MM-DD' heading")
 subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], check=True)
 
 current = tuple(map(int, match.groups()))

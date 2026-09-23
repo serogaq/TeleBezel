@@ -1,8 +1,10 @@
 import contextlib
 import io
+import os
 import runpy
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,7 +16,25 @@ major, minor, patch_version = map(int, version.split("."))
 newer = f"{major}.{minor + 1}.0-api"
 
 
-def execute(tag, tags):
+RELEASED = f"# Changelog\n\n## [Unreleased]\n\n## [{version}] - 2026-01-31\n\n### Added\n\n- Release.\n"
+UNRELEASED = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Pending.\n"
+
+
+def execute(tag, tags, changelog=RELEASED):
+    with tempfile.TemporaryDirectory() as directory:
+        component = Path(directory) / "backend-api"
+        component.mkdir()
+        (component / "VERSION").write_text(version + "\n")
+        (component / "CHANGELOG.md").write_text(changelog)
+        previous = os.getcwd()
+        os.chdir(directory)
+        try:
+            return run(tag, tags)
+        finally:
+            os.chdir(previous)
+
+
+def run(tag, tags):
     def output(command, **_kwargs):
         if command[:3] == ["git", "tag", "--list"]:
             return tags
@@ -37,6 +57,14 @@ class ReleaseTest(unittest.TestCase):
     def test_late_older_tag_cannot_downgrade_latest(self):
         with self.assertRaises(SystemExit):
             execute(f"{version}-api", newer + "\n")
+
+    def test_unreleased_changelog_blocks_release(self):
+        with self.assertRaises(SystemExit):
+            execute(f"{version}-api", "", UNRELEASED)
+
+    def test_heading_needs_brackets_and_date(self):
+        with self.assertRaises(SystemExit):
+            execute(f"{version}-api", "", f"# Changelog\n\n## {version}\n")
 
     def test_semver_leading_zero_is_rejected(self):
         with self.assertRaises(SystemExit):
