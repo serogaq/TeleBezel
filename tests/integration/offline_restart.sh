@@ -7,13 +7,14 @@
 # Required environment:
 #   TELEBEZEL_OFFLINE_COMPOSE_PROJECT  Compose project holding the running stack
 #   TELEBEZEL_OFFLINE_API              Public API base URL, e.g. http://127.0.0.1:18080
-#   TELEBEZEL_OFFLINE_TOKEN            Maintenance or device bearer for that API
+#   TELEBEZEL_OFFLINE_TOKEN            Device bearer for that API (reads history)
+#   TELEBEZEL_OFFLINE_MAINTENANCE_TOKEN  Maintenance bearer for that API (logout)
 #   TELEBEZEL_OFFLINE_ACCOUNT          UUID of an authorized Telegram account
 #   TELEBEZEL_OFFLINE_CHAT             Chat ID of an ordinary chat
 #   TELEBEZEL_OFFLINE_CHANNEL          Chat ID of a channel
 set -euo pipefail
 
-for variable in TELEBEZEL_OFFLINE_COMPOSE_PROJECT TELEBEZEL_OFFLINE_API TELEBEZEL_OFFLINE_TOKEN \
+for variable in TELEBEZEL_OFFLINE_COMPOSE_PROJECT TELEBEZEL_OFFLINE_API TELEBEZEL_OFFLINE_TOKEN TELEBEZEL_OFFLINE_MAINTENANCE_TOKEN \
   TELEBEZEL_OFFLINE_ACCOUNT TELEBEZEL_OFFLINE_CHAT TELEBEZEL_OFFLINE_CHANNEL; do
   if [[ -z "${!variable:-}" ]]; then
     printf 'offline_restart.sh requires %s\n' "$variable" >&2
@@ -119,7 +120,7 @@ done
 test "$recovered" = true
 
 # 7. A logout followed by a new authorization must not expose the old cache.
-curl --connect-timeout 2 --max-time 20 -sS -X POST -H "Authorization: Bearer $TELEBEZEL_OFFLINE_TOKEN" \
+curl --connect-timeout 2 --max-time 20 -sS -X POST -H "Authorization: Bearer $TELEBEZEL_OFFLINE_MAINTENANCE_TOKEN" \
   -H 'Content-Type: application/json' -d '{}' \
   "$base/v1/telegram/accounts/$account/logout" > "$work/logout.json"
 "${compose[@]}" exec -T backend-api php artisan telebezel:accounts-reconcile

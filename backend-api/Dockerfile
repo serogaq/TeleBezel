@@ -11,7 +11,7 @@ RUN GOBIN=/usr/local/bin ../../go.sh install -ldflags="-w -s -X 'github.com/cadd
 
 FROM dunglas/frankenphp:1.12.7-php8.5-bookworm@sha256:7380f2c24ef9d86ad496dbc285ba66e212365c864db2797f3e7269afad100dbb AS build
 COPY --from=composer-bin /usr/bin/composer /usr/local/bin/composer
-RUN install-php-extensions pdo_pgsql pcntl zip
+RUN install-php-extensions pdo_pgsql pcntl zip intl
 WORKDIR /app
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --no-progress --prefer-dist --no-scripts --no-autoloader
@@ -26,7 +26,7 @@ LABEL org.opencontainers.image.source="https://github.com/serogaq/TeleBezel" \
 COPY --from=frankenphp-builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
-    && install-php-extensions pdo_pgsql pcntl \
+    && install-php-extensions pdo_pgsql pcntl intl \
     && groupadd --gid 10001 telebezel \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app --shell /usr/sbin/nologin telebezel \
     && mkdir -p /app/storage /app/bootstrap/cache /config /data \

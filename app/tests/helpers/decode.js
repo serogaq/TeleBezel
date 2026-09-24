@@ -32,10 +32,21 @@ function decode(protocol, bytes) {
     } else if (type === types.chat) {
       records.push({type: 'chat', id: body.str8(), title: body.str8(), chatType: body.u8(), flags: body.u8(), unread: body.u16(),
         lastDate: body.u32(), previewKind: body.u8(), previewAction: body.u8(), previewDuration: body.u16(),
-        previewSender: body.str8(), previewExtra: body.str8(), previewText: body.str16()});
+        previewSender: body.str8(), previewExtra: body.str8(), previewText: body.str16(), send: body.u8()});
     } else if (type === types.message) {
       records.push({type: 'message', id: body.str8(), date: body.u32(), flags: body.u8(), kind: body.u8(), action: body.u8(),
-        duration: body.u16(), sender: body.str8(), extra: body.str8(), text: body.str16()});
+        duration: body.u16(), sender: body.str8(), extra: body.str8(), text: body.str16(), replyId: body.str8(),
+        replySender: body.str8(), replyText: body.str8(), forwardFrom: body.str8()});
+    } else if (type === types.templates) {
+      records.push({type: 'templates', revision: body.u32(), count: body.u8(), flags: body.u8()});
+    } else if (type === types.template) {
+      records.push({type: 'template', index: body.u8(), length: body.u16(), preview: body.str8()});
+    } else if (type === types.draft) {
+      records.push({type: 'draft', id: body.u32(), bytes: body.u16(), units: body.u16(), flags: body.u8()});
+    } else if (type === types.send_state || type === types.pending_send) {
+      records.push({type: type === types.send_state ? 'send_state' : 'pending_send', draftId: body.u32(), state: body.u8(),
+        code: body.u8(), retryAfter: body.u16(), flags: body.u8(), account: body.str8(), chat: body.str8(), message: body.str8(),
+        title: body.str8(), preview: body.str8()});
     } else if (type === types.text) {
       records.push({type: 'text', bytes: body.raw(body.u16())});
     } else {

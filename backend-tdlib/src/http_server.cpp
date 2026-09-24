@@ -75,6 +75,20 @@ std::int64_t path_integer(const std::string &value) {
     throw std::runtime_error("request.invalid");
   return *parsed;
 }
+std::vector<std::string> split_ids(const std::string &value) {
+  std::vector<std::string> ids;
+  if (value.empty())
+    return ids;
+  std::size_t position = 0;
+  while (position <= value.size()) {
+    const auto comma = value.find(',', position);
+    ids.push_back(value.substr(position, comma == std::string::npos ? std::string::npos : comma - position));
+    if (comma == std::string::npos)
+      break;
+    position = comma + 1;
+  }
+  return ids;
+}
 std::int64_t integer_parameter(const httplib::Request &request, const char *name) {
   return path_integer(request.get_param_value(name));
 }
@@ -214,18 +228,7 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
     const std::string id = request_id(request);
     if (!authorize(config_, request, response, id))
       return;
-    std::vector<std::string> ids;
-    std::string value = request.get_param_value("ids");
-    if (!value.empty()) {
-      std::size_t position = 0;
-      while (position <= value.size()) {
-        const auto comma = value.find(',', position);
-        ids.push_back(value.substr(position, comma == std::string::npos ? std::string::npos : comma - position));
-        if (comma == std::string::npos)
-          break;
-        position = comma + 1;
-      }
-    }
+    const auto ids = split_ids(request.get_param_value("ids"));
     if (ids.size() > 50 ||
         std::any_of(ids.begin(), ids.end(), [](const std::string &account_id) { return !valid_uuid(account_id); })) {
       runtime_response(response, exception_result(std::runtime_error("request.invalid")), id);
@@ -304,6 +307,22 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                   throw std::runtime_error("request.invalid");
                 return runtime_.updates(request.matches[1], request.get_param_value("cursor"),
                                         limit_parameter(request, 100, 100), std::chrono::seconds(wait));
+              }));
+  server_.Post(
+      R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages)",
+      route(controls_, 200, [this](const auto &request) {
+        return runtime_.send_message(
+            request.matches[1], path_integer(request.matches[2]),
+            body(request,
+                 {"operation_id", "storage_generation", "authorization_generation", "text", "reply_to_message_id"},
+                 {"operation_id", "storage_generation", "authorization_generation", "text"}));
+      }));
+  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/sends)", route(controls_, 200, [this](const auto &request) {
+                const auto ids = split_ids(request.get_param_value("ids"));
+                if (ids.empty() || ids.size() > 10 ||
+                    std::any_of(ids.begin(), ids.end(), [](const std::string &value) { return !valid_uuid(value); }))
+                  throw std::runtime_error("request.invalid");
+                return runtime_.send_status(request.matches[1], ids);
               }));
   const auto interest = [this](bool active) {
     return [this, active](const httplib::Request &request) {

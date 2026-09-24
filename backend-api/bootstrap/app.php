@@ -2,15 +2,15 @@
 
 use App\Exceptions\ApiException;
 use App\Exceptions\ExceptionEnvelope;
-use App\Http\Middleware\AuthenticateApiClient;
-use App\Http\Middleware\AuthenticateOwner;
+use App\Http\Middleware\AuthenticateToken;
 use App\Http\Middleware\LimitJsonBody;
 use App\Http\Middleware\RateLimitAccountOperation;
-use App\Http\Middleware\RateLimitApiClient;
+use App\Http\Middleware\RateLimitToken;
 use App\Http\Middleware\RequestId;
-use App\Http\Middleware\RequireAccountManagement;
+use App\Http\Middleware\RequirePermission;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Resources\ErrorResource;
+use App\Services\AuthenticationService;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Application;
@@ -32,12 +32,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(RequestId::class);
         $middleware->append(SecurityHeaders::class);
         $middleware->append(LimitJsonBody::class);
+        $middleware->encryptCookies(except: [AuthenticationService::COOKIE]);
         $middleware->alias([
-            'api-client' => AuthenticateApiClient::class,
-            'owner' => AuthenticateOwner::class,
-            'api-client-rate-limit' => RateLimitApiClient::class,
+            'token' => AuthenticateToken::class,
+            'token-rate-limit' => RateLimitToken::class,
             'account-rate-limit' => RateLimitAccountOperation::class,
-            'account-management' => RequireAccountManagement::class,
+            'permission' => RequirePermission::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

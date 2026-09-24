@@ -75,6 +75,7 @@ static inline void chat_record(Buf *buf, const char *id, const char *title, cons
   begin(buf, TB_RECORD_CHAT);
   putstr8(buf, id); putstr8(buf, title); put8(buf, TB_CHAT_TYPE_BASIC_GROUP); put8(buf, 0); put16(buf, 3); put32(buf, 1700000000);
   put8(buf, TB_KIND_TEXT); put8(buf, 0); put16(buf, 0); putstr8(buf, "Ada"); putstr8(buf, ""); putstr16(buf, preview);
+  put8(buf, TB_CAN_SEND_ALLOWED);
   end(buf);
 }
 static inline void summary_record(Buf *buf, uint8_t connection, uint8_t proxy, uint32_t chats, uint32_t messages) {
@@ -86,6 +87,7 @@ static inline void message_record(Buf *buf, const char *id, const char *text) {
   begin(buf, TB_RECORD_MESSAGE);
   putstr8(buf, id); put32(buf, 1700000000); put8(buf, 0); put8(buf, TB_KIND_TEXT); put8(buf, 0); put16(buf, 0);
   putstr8(buf, "Ada"); putstr8(buf, ""); putstr16(buf, text);
+  putstr8(buf, ""); putstr8(buf, ""); putstr8(buf, ""); putstr8(buf, "");
   end(buf);
 }
 static inline void deliver(TbRequestLayer *layer, uint32_t sequence, int32_t result, uint32_t flags, const Buf *buf, uint16_t index, uint16_t total) {

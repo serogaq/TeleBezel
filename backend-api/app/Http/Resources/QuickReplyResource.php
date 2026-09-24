@@ -21,6 +21,15 @@ final class QuickReplyResource extends ApiResource
         return array_intersect_key($data, array_flip(self::FIELDS));
     }
 
+    /** @param array{items: array<int, array<string, mixed>>, revision: int} $snapshot */
+    public static function snapshot(array $snapshot): ApiResource
+    {
+        return new ApiResource([
+            'items' => array_values(array_map(self::project(...), $snapshot['items'])),
+            'revision' => $snapshot['revision'],
+        ]);
+    }
+
     /** @param array<int, array<string, mixed>> $items */
     public static function listing(array $items): ApiResource
     {

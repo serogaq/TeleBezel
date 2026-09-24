@@ -109,6 +109,12 @@ struct AccountStore {
     clear_messages(account);
     clear_sender_names(account);
     account.events.clear();
+    account.send_contexts.clear();
+    account.member_statuses.clear();
+    account.deleted_users.clear();
+    account.sends.clear();
+    account.send_messages.clear();
+    account.sending_ids.clear();
     account.interests.clear();
     account.interest_counts.clear();
     account.interest_states.clear();

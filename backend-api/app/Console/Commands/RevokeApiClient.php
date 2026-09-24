@@ -10,21 +10,21 @@ final class RevokeApiClient extends Command
 {
     protected $signature = 'telebezel:api-client-revoke {id}';
 
-    protected $description = 'Revoke a TeleBezel API client token';
+    protected $description = 'Revoke a TeleBezel API token';
 
     public function handle(AdministrationService $service): int
     {
         if (! Str::isUuid($this->argument('id'))) {
-            $this->error('Client ID must be a UUID.');
+            $this->error('Token ID must be a UUID.');
 
             return self::FAILURE;
         }
         if (! $service->revoke($this->argument('id'))) {
-            $this->error('API client not found.');
+            $this->error('Token not found.');
 
             return self::FAILURE;
         }
-        $this->info('API client revoked.');
+        $this->info('Token revoked.');
 
         return self::SUCCESS;
     }

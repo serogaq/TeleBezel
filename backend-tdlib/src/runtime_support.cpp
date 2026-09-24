@@ -374,6 +374,42 @@ nlohmann::json message_projection(const td_api::message &message) {
     sender["name"] = nullptr;
     sender["fallback"] = (type == "chat" ? "Chat " : "User ") + id;
   }
+  nlohmann::json forward_from = nullptr;
+  const auto party = [](const char *type, std::int64_t id, const std::string &signature) {
+    nlohmann::json value{
+        {"type", type},
+        {"id", std::to_string(id)},
+        {"name", nullptr},
+        {"fallback", std::string(std::string(type) == "chat" ? "Chat " : "User ") + std::to_string(id)}};
+    if (!signature.empty())
+      value["signature"] = signature;
+    return value;
+  };
+  if (message.forward_info_ && message.forward_info_->origin_) {
+    const auto &origin = *message.forward_info_->origin_;
+    if (origin.get_id() == td_api::messageOriginUser::ID) {
+      forward_from = party("user", static_cast<const td_api::messageOriginUser &>(origin).sender_user_id_, {});
+    } else if (origin.get_id() == td_api::messageOriginHiddenUser::ID) {
+      const auto &hidden = static_cast<const td_api::messageOriginHiddenUser &>(origin);
+      forward_from = {{"type", "hidden"}, {"name", hidden.sender_name_}, {"fallback", hidden.sender_name_}};
+    } else if (origin.get_id() == td_api::messageOriginChat::ID) {
+      const auto &chat = static_cast<const td_api::messageOriginChat &>(origin);
+      forward_from = party("chat", chat.sender_chat_id_, chat.author_signature_);
+    } else if (origin.get_id() == td_api::messageOriginChannel::ID) {
+      const auto &channel = static_cast<const td_api::messageOriginChannel &>(origin);
+      forward_from = party("chat", channel.chat_id_, channel.author_signature_);
+    }
+  } else if (message.import_info_ && !message.import_info_->sender_name_.empty()) {
+    forward_from = {{"type", "hidden"},
+                    {"name", message.import_info_->sender_name_},
+                    {"fallback", message.import_info_->sender_name_}};
+  }
+  nlohmann::json reply_to = nullptr;
+  if (message.reply_to_ && message.reply_to_->get_id() == td_api::messageReplyToMessage::ID) {
+    const auto &reply = static_cast<const td_api::messageReplyToMessage &>(*message.reply_to_);
+    if (reply.message_id_ != 0 && (reply.chat_id_ == 0 || reply.chat_id_ == message.chat_id_))
+      reply_to = {{"message_id", std::to_string(reply.message_id_)}};
+  }
   return {{"id", std::to_string(message.id_)},
           {"chat_id", std::to_string(message.chat_id_)},
           {"sender", sender},
@@ -381,15 +417,65 @@ nlohmann::json message_projection(const td_api::message &message) {
           {"edit_date", message.edit_date_},
           {"is_outgoing", message.is_outgoing_},
           {"author_signature", message.author_signature_},
+          {"forward_from", forward_from},
+          {"reply_to", reply_to},
+          {"sending_state", sending_state_name(message.sending_state_.get())},
           {"content", message_content(message.content_.get())}};
 }
-void decorate_sender(const Account &account, nlohmann::json &message) {
-  if (!message.is_object() || !message.value("sender", nlohmann::json(nullptr)).is_object())
-    return;
-  auto &sender = message["sender"];
+nlohmann::json sending_state_name(const td_api::MessageSendingState *state) {
+  if (state == nullptr)
+    return nullptr;
+  if (state->get_id() == td_api::messageSendingStatePending::ID)
+    return "pending";
+  if (state->get_id() == td_api::messageSendingStateFailed::ID)
+    return "failed";
+  return nullptr;
+}
+std::string utf8_prefix(const std::string &text, std::size_t bytes) {
+  if (text.size() <= bytes)
+    return text;
+  auto end = bytes;
+  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0U) == 0x80U)
+    --end;
+  return text.substr(0, end);
+}
+namespace {
+void decorate_name(const Account &account, nlohmann::json &sender) {
   const auto key = sender.value("type", "") + ":" + sender.value("id", "");
   if (const auto found = account.sender_names.find(key); found != account.sender_names.end())
     sender["name"] = found->second;
+}
+} // namespace
+void decorate_sender(const Account &account, nlohmann::json &message) {
+  if (!message.is_object())
+    return;
+  if (message.value("sender", nlohmann::json(nullptr)).is_object())
+    decorate_name(account, message["sender"]);
+  if (auto forward = message.find("forward_from");
+      forward != message.end() && forward->is_object() && forward->contains("id"))
+    decorate_name(account, *forward);
+  auto reply = message.find("reply_to");
+  if (reply == message.end() || !reply->is_object())
+    return;
+  const auto chat = parse_int64(message.value("chat_id", std::string{"0"}));
+  const auto target = parse_int64(reply->value("message_id", std::string{"0"}));
+  if (!chat || !target)
+    return;
+  const auto original = account.messages.find({*chat, *target});
+  if (original == account.messages.end())
+    return;
+  auto author = original->second.value("forward_from", nlohmann::json(nullptr));
+  if (!author.is_object())
+    author = original->second.value("sender", nlohmann::json(nullptr));
+  if (author.is_object()) {
+    if (author.contains("id"))
+      decorate_name(account, author);
+    const auto name = author.value("name", nlohmann::json(nullptr));
+    (*reply)["sender_name"] = name.is_string() ? name : author.value("fallback", nlohmann::json(nullptr));
+  }
+  const auto content = original->second.value("content", nlohmann::json::object());
+  if (content.value("text", nlohmann::json(nullptr)).is_string())
+    (*reply)["text"] = utf8_prefix(content.value("text", std::string{}), 100);
 }
 std::string chat_type(const td_api::ChatType *type) {
   if (type == nullptr)
@@ -436,9 +522,98 @@ nlohmann::json chat_projection(const td_api::chat &chat) {
   return projection;
 }
 
+SendContext send_context(const td_api::chat &chat) {
+  SendContext context;
+  context.basic_allowed = !chat.permissions_ || chat.permissions_->can_send_basic_messages_;
+  context.kind = "unknown";
+  const auto *type = chat.type_.get();
+  if (type == nullptr)
+    return context;
+  if (type->get_id() == td_api::chatTypePrivate::ID) {
+    context.kind = "private";
+    context.peer = static_cast<const td_api::chatTypePrivate &>(*type).user_id_;
+  } else if (type->get_id() == td_api::chatTypeSecret::ID) {
+    context.kind = "secret";
+    context.peer = static_cast<const td_api::chatTypeSecret &>(*type).user_id_;
+  } else if (type->get_id() == td_api::chatTypeBasicGroup::ID) {
+    context.kind = "basic";
+    context.peer = static_cast<const td_api::chatTypeBasicGroup &>(*type).basic_group_id_;
+  } else if (type->get_id() == td_api::chatTypeSupergroup::ID) {
+    const auto &supergroup = static_cast<const td_api::chatTypeSupergroup &>(*type);
+    context.kind = supergroup.is_channel_ ? "channel" : "super";
+    context.peer = supergroup.supergroup_id_;
+  }
+  return context;
+}
+
+MemberStatus member_status(const td_api::ChatMemberStatus *status, bool channel) {
+  if (status == nullptr)
+    return {};
+  switch (status->get_id()) {
+  case td_api::chatMemberStatusCreator::ID:
+    return {true, ""};
+  case td_api::chatMemberStatusAdministrator::ID: {
+    const auto &admin = static_cast<const td_api::chatMemberStatusAdministrator &>(*status);
+    if (!channel || (admin.rights_ && admin.rights_->can_post_messages_))
+      return {true, ""};
+    return {false, "read_only"};
+  }
+  case td_api::chatMemberStatusMember::ID:
+    return channel ? MemberStatus{false, "read_only"} : MemberStatus{};
+  case td_api::chatMemberStatusRestricted::ID: {
+    const auto &restricted = static_cast<const td_api::chatMemberStatusRestricted &>(*status);
+    if (!restricted.is_member_)
+      return {false, "not_member"};
+    if (restricted.permissions_ && !restricted.permissions_->can_send_basic_messages_)
+      return {false, "restricted"};
+    return channel ? MemberStatus{false, "read_only"} : MemberStatus{};
+  }
+  case td_api::chatMemberStatusLeft::ID:
+    return {false, channel ? "read_only" : "not_member"};
+  case td_api::chatMemberStatusBanned::ID:
+    return {false, "banned"};
+  default:
+    return {};
+  }
+}
+
+std::string member_key(const std::string &kind, std::int64_t peer) {
+  return (kind == "basic" ? "basic:" : "super:") + std::to_string(peer);
+}
+
+nlohmann::json can_send_projection(const Account &account, std::int64_t chat_id) {
+  const auto blocked = [](const char *reason) { return nlohmann::json{{"text", false}, {"reason", reason}}; };
+  const nlohmann::json allowed{{"text", true}, {"reason", nullptr}};
+  const auto found = account.send_contexts.find(chat_id);
+  if (found == account.send_contexts.end())
+    return {{"text", nullptr}, {"reason", nullptr}};
+  const auto &context = found->second;
+  if (context.kind == "secret")
+    return blocked("secret_chat");
+  if (context.kind == "private")
+    return account.deleted_users.contains(context.peer) ? blocked("user_deleted") : allowed;
+  if (context.kind == "basic" || context.kind == "super" || context.kind == "channel") {
+    const auto status = account.member_statuses.find(member_key(context.kind, context.peer));
+    if (status != account.member_statuses.end()) {
+      if (const auto &can_send = status->second.can_send; can_send.has_value())
+        return can_send.value() ? allowed : blocked(status->second.reason.c_str());
+    }
+    if (context.kind == "channel")
+      return status == account.member_statuses.end() ? nlohmann::json{{"text", nullptr}, {"reason", nullptr}}
+                                                     : blocked("read_only");
+    if (!context.basic_allowed)
+      return blocked("restricted");
+    return status == account.member_statuses.end() ? nlohmann::json{{"text", nullptr}, {"reason", nullptr}} : allowed;
+  }
+  return {{"text", nullptr}, {"reason", nullptr}};
+}
+
 void decorate_chat(const Account &account, nlohmann::json &chat) {
   chat["is_saved_messages"] = chat.value("type", "") == "private" && account.telegram_identity.is_object() &&
                               chat.value("id", "") == account.telegram_identity.value("id", "");
+  if (const auto id = parse_int64(chat.value("id", std::string{"0"})))
+    chat["can_send"] = chat.value("is_saved_messages", false) ? nlohmann::json{{"text", true}, {"reason", nullptr}}
+                                                              : can_send_projection(account, *id);
   if (chat.value("last_message", nlohmann::json(nullptr)).is_object())
     decorate_sender(account, chat["last_message"]);
 }

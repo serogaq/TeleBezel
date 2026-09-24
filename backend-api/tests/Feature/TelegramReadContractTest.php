@@ -1,19 +1,14 @@
 <?php
 
 use App\Enums\AccountLifecycle;
-use App\Models\ApiClient;
+use App\Enums\TokenType;
 use App\Models\TelegramAccount;
 use Illuminate\Support\Facades\Http;
 
 // The read contract is what lets a client decide what to do next without
 // guessing. Each case below pins one outcome to one combination of fields.
 beforeEach(function (): void {
-    $this->token = 'tb_ccccccccccccccccccccccccccccccccccccccccccc';
-    ApiClient::query()->create([
-        'name' => 'read-contract-test',
-        'token_prefix' => substr($this->token, 0, 12),
-        'token_hash' => hash('sha256', $this->token),
-    ]);
+    $this->token = issueTestToken(TokenType::Device)['token'];
     $this->account = TelegramAccount::query()->create([
         'label' => 'Read contract',
         'storage_generation' => fake()->uuid(),
@@ -250,6 +245,45 @@ test('message content keeps captions and descriptive fields and strips internal 
         'emoji' => 'x',
         'title' => 'Title',
         'action' => 'pinned',
+    ]);
+});
+
+test('forwarded messages name their original author and keep only declared fields', function (): void {
+    Http::fake([
+        '*' => Http::response([
+            'data' => readContractRuntime([
+                'items' => [[
+                    'id' => '99',
+                    'chat_id' => '42',
+                    'date' => 2,
+                    'is_outgoing' => true,
+                    'forward_from' => [
+                        'type' => 'chat',
+                        'id' => '-1009',
+                        'name' => 'News',
+                        'fallback' => 'Chat -1009',
+                        'signature' => 'Editor',
+                        'internal' => 1,
+                    ],
+                    'content' => [
+                        'kind' => 'text',
+                        'text' => 'Hello',
+                    ],
+                ]],
+                'local_exhausted' => true,
+                'has_more' => false,
+            ]),
+        ]),
+    ]);
+    $forward = $this->withToken($this->token)->getJson($this->history)
+        ->assertOk()
+        ->json('data.items.0.forward_from');
+    expect($forward)->toBe([
+        'type' => 'chat',
+        'id' => '-1009',
+        'name' => 'News',
+        'fallback' => 'Chat -1009',
+        'signature' => 'Editor',
     ]);
 });
 

@@ -23,14 +23,14 @@ final class RateLimitAccountOperation
             $budget = 'auth-start';
         }
         [$maximum, $seconds] = match ($budget) {
-            'create' => [5, 3600], 'auth-start' => [3, 600], 'auth-check', 'lifecycle' => [10, 600],
+            'create' => [5, 3600], 'auth-start' => [3, 600], 'auth-check', 'lifecycle' => [10, 600], 'send' => [20, 60],
             default => throw new LogicException('Unknown rate-limit budget.'),
         };
         $subject = $budget === 'create' ? RequestContext::principal($request)->id : strtolower(Values::string($request->route('uuid')));
         $key = RateLimitCacheKeys::accountOperation($budget, $subject);
         if (RateLimiter::increment($key, $seconds) > $maximum) {
             RateLimiter::decrement($key);
-            throw new ApiException('rate_limit.exceeded', 429, RateLimiter::availableIn($key));
+            throw new ApiException($budget === 'send' ? 'message.send_rate_limited' : 'rate_limit.exceeded', 429, RateLimiter::availableIn($key));
         }
 
         return $next($request);

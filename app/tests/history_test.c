@@ -49,7 +49,7 @@ int main(void) {
   assert(tb_history_init(&history, &layer, fake_view_ports(&fake), config(6)));
   Buf buf;
 
-  tb_history_open(&history, ACCOUNT, CHAT, 1);
+  tb_history_open(&history, ACCOUNT, CHAT, 1, false);
   assert(fake_last(&fake)->kind == TB_REQUEST_HISTORY && fake_last(&fake)->page_op == TB_PAGE_OP_FIRST);
   assert(strcmp(fake_last(&fake)->chat, CHAT) == 0 && history.top == TB_TOP_LOADING && !history.loaded);
   page(&buf, 30, 3);
@@ -147,7 +147,7 @@ int main(void) {
   assert(history.top == TB_TOP_MORE);
 
   const uint32_t stale = fake.sends ? fake_last_sequence(&fake) : 0;
-  tb_history_open(&history, ACCOUNT, "42", 0);
+  tb_history_open(&history, ACCOUNT, "42", 0, false);
   assert(!tb_requests_pending(&layer, stale) && history.count == 0 && !history.loaded);
   reply(&fake, &layer, TB_RESULT_ACCOUNT_NEEDS_LOGIN, 0, NULL);
   assert(history.error == TB_RESULT_ACCOUNT_NEEDS_LOGIN);
@@ -171,7 +171,7 @@ int main(void) {
   const uint32_t pending = fake_last_sequence(&fake);
   tb_history_close(&history);
   assert(!tb_requests_pending(&layer, pending));
-  tb_history_open(&history, ACCOUNT, "42", 0);
+  tb_history_open(&history, ACCOUNT, "42", 0, false);
   assert(history.count == 2 && history.op == TB_HISTORY_FIRST);
 
   Buf chunked;

@@ -73,6 +73,8 @@ static bool parse(TbSession *session, const TbResponse *response) {
       account->state = record.state;
       account->flags = record.flags;
       ++session->count;
+    } else if (type == TB_RECORD_PENDING_SEND) {
+      if (session->ports.extra) { session->ports.extra(session->ports.context, type, body.data, body.length); }
     } else {
       return false;
     }

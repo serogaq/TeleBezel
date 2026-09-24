@@ -39,6 +39,8 @@ public:
   nlohmann::json set_interest(const std::string &uuid, std::int64_t chat_id, const std::string &lease_key, bool active,
                               bool await_transition = true);
   nlohmann::json release_interests(const std::string &principal_type, const std::string &principal_id);
+  nlohmann::json send_message(const std::string &uuid, std::int64_t chat_id, const nlohmann::json &command);
+  nlohmann::json send_status(const std::string &uuid, const std::vector<std::string> &ids) const;
 
 private:
   struct Impl;

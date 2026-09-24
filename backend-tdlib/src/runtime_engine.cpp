@@ -308,6 +308,14 @@ void RuntimeEngine::receive_once(std::chrono::steady_clock::time_point &next_rem
   }
 }
 
+void RuntimeEngine::journal_send_capability(Account &account, const std::string &kind, std::int64_t peer) {
+  for (const auto &[chat_id, context] : account.send_contexts) {
+    if (context.peer == peer && (context.kind == kind || (kind == "private" && context.kind == "secret")) &&
+        existing_chat(account, chat_id) != nullptr)
+      UpdateJournal::append(context_, account, "chat_changed", chat_id, 0, "permissions");
+  }
+}
+
 void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object) {
   const auto mapped = context_.client_accounts_.find(client_id);
   if (mapped == context_.client_accounts_.end())
@@ -388,7 +396,11 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
     }
   } else if (object.get_id() == td_api::updateConnectionState::ID) {
     auto &update = static_cast<td_api::updateConnectionState &>(object);
-    account.connection_state = update.state_ ? connection_name(update.state_->get_id()) : "unknown";
+    const auto connection = update.state_ ? connection_name(update.state_->get_id()) : "unknown";
+    if (connection != account.connection_state) {
+      account.connection_state = connection;
+      UpdateJournal::append_event(context_, account, {{"type", "connection_changed"}, {"connection", connection}});
+    }
   } else if (object.get_id() == td_api::updateUnreadChatCount::ID) {
     const auto &update = static_cast<td_api::updateUnreadChatCount &>(object);
     if (auto *const counters = unread_counters(account, update.chat_list_.get()))
@@ -409,7 +421,44 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
       }
       if (!name.empty())
         context_.put_sender_name(account, key, name);
+      const bool deleted = update.user_->type_ && update.user_->type_->get_id() == td_api::userTypeDeleted::ID;
+      if (deleted != account.deleted_users.contains(update.user_->id_)) {
+        if (deleted)
+          account.deleted_users.insert(update.user_->id_);
+        else
+          account.deleted_users.erase(update.user_->id_);
+        journal_send_capability(account, "private", update.user_->id_);
+      }
     }
+  } else if (object.get_id() == td_api::updateBasicGroup::ID) {
+    const auto &update = static_cast<td_api::updateBasicGroup &>(object);
+    if (update.basic_group_) {
+      account.member_statuses[member_key("basic", update.basic_group_->id_)] =
+          member_status(update.basic_group_->status_.get(), false);
+      journal_send_capability(account, "basic", update.basic_group_->id_);
+    }
+  } else if (object.get_id() == td_api::updateSupergroup::ID) {
+    const auto &update = static_cast<td_api::updateSupergroup &>(object);
+    if (update.supergroup_) {
+      account.member_statuses[member_key("super", update.supergroup_->id_)] =
+          member_status(update.supergroup_->status_.get(), update.supergroup_->is_channel_);
+      journal_send_capability(account, update.supergroup_->is_channel_ ? "channel" : "super", update.supergroup_->id_);
+    }
+  } else if (object.get_id() == td_api::updateMessageSendSucceeded::ID) {
+    MessageSendService::succeeded(context_, account, static_cast<td_api::updateMessageSendSucceeded &>(object));
+    return;
+  } else if (object.get_id() == td_api::updateMessageSendFailed::ID) {
+    MessageSendService::failed(context_, account, static_cast<td_api::updateMessageSendFailed &>(object));
+    return;
+  } else if (object.get_id() == td_api::updateChatPermissions::ID) {
+    const auto &update = static_cast<td_api::updateChatPermissions &>(object);
+    const auto found = account.send_contexts.find(update.chat_id_);
+    if (found != account.send_contexts.end()) {
+      found->second.basic_allowed = !update.permissions_ || update.permissions_->can_send_basic_messages_;
+      if (existing_chat(account, update.chat_id_) != nullptr)
+        UpdateJournal::append(context_, account, "chat_changed", update.chat_id_, 0, "permissions");
+    }
+    return;
   } else if (object.get_id() == td_api::updateNewChat::ID) {
     auto &update = static_cast<td_api::updateNewChat &>(object);
     if (update.chat_) {
@@ -419,6 +468,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
           account, known == nullptr ? nlohmann::json::object() : known->value("positions", nlohmann::json::object()),
           projection.value("positions", nlohmann::json::object()));
       account.chats[update.chat_->id_] = std::move(projection);
+      account.send_contexts[update.chat_->id_] = send_context(*update.chat_);
       context_.put_sender_name(account, "chat:" + std::to_string(update.chat_->id_), update.chat_->title_);
       if (update.chat_->last_message_) {
         auto message = message_projection(*update.chat_->last_message_);
@@ -479,6 +529,7 @@ void RuntimeEngine::handle_update(std::int32_t client_id, td_api::Object &object
   } else if (object.get_id() == td_api::updateNewMessage::ID) {
     auto &update = static_cast<td_api::updateNewMessage &>(object);
     if (update.message_) {
+      MessageSendService::bind_pending(context_, account, *update.message_);
       auto projection = message_projection(*update.message_);
       decorate_sender(account, projection);
       context_.put_message(account, {update.message_->chat_id_, update.message_->id_}, std::move(projection));

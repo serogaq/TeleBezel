@@ -20,7 +20,7 @@ final class TdlibProcess
     /** @var array<int, resource> */
     private array $pipes;
 
-    public readonly string $url;
+    public string $url;
 
     private string $directory;
 
@@ -28,12 +28,24 @@ final class TdlibProcess
 
     public function __construct()
     {
+        $this->directory = sys_get_temp_dir().'/telebezel-functional-'.bin2hex(random_bytes(12));
+        mkdir($this->directory, 0700);
+        $this->launch();
+    }
+
+    public function restart(): void
+    {
+        $this->halt();
+        $this->stopped = false;
+        $this->launch();
+    }
+
+    private function launch(): void
+    {
         $binary = getenv('TDLIB_FIXTURE_BIN');
         if ($binary === false || ! is_executable($binary)) {
             throw new RuntimeException('Run make functional-test to build and run the TDLib integration fixture.');
         }
-        $this->directory = sys_get_temp_dir().'/telebezel-functional-'.bin2hex(random_bytes(12));
-        mkdir($this->directory, 0700);
         $pipes = [];
         $process = proc_open([$binary, '0', $this->directory], [
             0 => ['pipe', 'r'],
@@ -86,6 +98,19 @@ final class TdlibProcess
         if ($this->stopped) {
             return;
         }
+        $this->halt();
+        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($this->directory, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+        foreach ($files as $file) {
+            if (! $file instanceof SplFileInfo) {
+                throw new RuntimeException('Unexpected fixture file');
+            }
+            $file->isDir() ? rmdir($file->getPathname()) : unlink($file->getPathname());
+        }
+        rmdir($this->directory);
+    }
+
+    private function halt(): void
+    {
         $this->stopped = true;
         foreach ($this->pipes as $pipe) {
             if (is_resource($pipe)) {
@@ -102,13 +127,5 @@ final class TdlibProcess
             proc_terminate($this->process);
         }
         proc_close($this->process);
-        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($this->directory, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
-        foreach ($files as $file) {
-            if (! $file instanceof SplFileInfo) {
-                throw new RuntimeException('Unexpected fixture file');
-            }
-            $file->isDir() ? rmdir($file->getPathname()) : unlink($file->getPathname());
-        }
-        rmdir($this->directory);
     }
 }

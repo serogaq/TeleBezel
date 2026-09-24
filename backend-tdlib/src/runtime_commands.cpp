@@ -1,3 +1,4 @@
+#include "telebezel/parse.hpp"
 #include "telebezel/registry.hpp"
 #include "telebezel/runtime/commands.hpp"
 #include "telebezel/runtime/support.hpp"
@@ -41,6 +42,34 @@ AccountCommand AccountCommand::parse(const std::string &uuid, const nlohmann::js
     if (!command.proxy.is_object())
       throw std::runtime_error("request.invalid");
     command.fingerprint = command_fingerprint(input);
+    return command;
+  } catch (const nlohmann::json::exception &) {
+    throw std::runtime_error("request.invalid");
+  }
+}
+SendCommand SendCommand::parse(std::int64_t chat_id, const nlohmann::json &input) {
+  try {
+    if (!input.is_object() || !valid_uuid(input.value("operation_id", "")) ||
+        !valid_uuid(input.value("storage_generation", "")) || !input.contains("authorization_generation") ||
+        !input.at("authorization_generation").is_number_integer() ||
+        input.at("authorization_generation").get<std::int64_t>() < 1 || !input.contains("text") ||
+        !input.at("text").is_string() || chat_id == 0)
+      throw std::runtime_error("request.invalid");
+    SendCommand command;
+    command.operation_id = input.at("operation_id").get<std::string>();
+    command.generation = input.at("storage_generation").get<std::string>();
+    command.authorization_generation = input.at("authorization_generation").get<std::uint64_t>();
+    command.chat_id = chat_id;
+    command.text = input.at("text").get<std::string>();
+    if (command.text.empty() || command.text.size() > std::size_t{4096} * 4)
+      throw std::runtime_error("request.invalid");
+    if (input.contains("reply_to_message_id") && !input.at("reply_to_message_id").is_null()) {
+      const auto &reply = input.at("reply_to_message_id");
+      const auto parsed = reply.is_string() ? parse_int64(reply.get<std::string>()) : std::nullopt;
+      if (!parsed || *parsed <= 0)
+        throw std::runtime_error("request.invalid");
+      command.reply_to = *parsed;
+    }
     return command;
   } catch (const nlohmann::json::exception &) {
     throw std::runtime_error("request.invalid");

@@ -9,47 +9,27 @@ static void pen(GContext *ctx, GColor color, GRect box) {
   graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_fill_color(ctx, color);
   graphics_context_set_stroke_width(ctx, box.size.w >= 14 ? 2 : 1);
-#if defined(PBL_COLOR)
   graphics_context_set_antialiased(ctx, true);
-#else
-  graphics_context_set_antialiased(ctx, false);
-#endif
 }
 
 void tb_icon_refresh(GContext *ctx, GRect box, GColor color) {
   pen(ctx, color, box);
-  if (box.size.w >= 11) {
-    graphics_context_set_stroke_width(ctx, 2);
-    const GRect ring = grect_inset(box, GEdgeInsets(1));
-    graphics_draw_arc(ctx, ring, GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(80), DEG_TO_TRIGANGLE(350));
-    const GPoint tip = gpoint_from_polar(ring, GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(350));
-    GPoint arrow[] = {{tip.x, tip.y - 3}, {tip.x, tip.y + 3}, {tip.x + 4, tip.y}};
-    fill(ctx, arrow, 3);
-    return;
-  }
-  static const char *const pixels[] = {"...###...", ".##...#..", ".#....###", "#......#.", "#........",
-                                        "#.......#", ".#.....#.", ".##...##.", "...###..."};
-  const int16_t top = (int16_t)(box.origin.y + (box.size.h - 9) / 2);
-  for (int16_t row = 0; row < 9; ++row) {
-    for (int16_t column = 0; column < 9; ++column) {
-      if (pixels[row][column] == '#') { graphics_draw_pixel(ctx, GPoint(box.origin.x + column, top + row)); }
-    }
-  }
+  graphics_context_set_stroke_width(ctx, 2);
+  const GRect ring = grect_inset(box, GEdgeInsets(1));
+  graphics_draw_arc(ctx, ring, GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(80), DEG_TO_TRIGANGLE(350));
+  const GPoint tip = gpoint_from_polar(ring, GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(350));
+  GPoint arrow[] = {{tip.x, tip.y - 3}, {tip.x, tip.y + 3}, {tip.x + 4, tip.y}};
+  fill(ctx, arrow, 3);
 }
 
 #define SUB 16
 
 static GColor blend(GColor color, GColor background) {
-#if defined(PBL_COLOR)
   GColor mixed = color;
   mixed.r = (uint8_t)((color.r + background.r + 1) / 2);
   mixed.g = (uint8_t)((color.g + background.g + 1) / 2);
   mixed.b = (uint8_t)((color.b + background.b + 1) / 2);
   return mixed;
-#else
-  (void)background;
-  return color;
-#endif
 }
 
 static void draw_disc(GContext *ctx, int32_t x, int32_t y, int32_t radius, GColor color, GColor soft) {
@@ -64,7 +44,6 @@ static void draw_disc(GContext *ctx, int32_t x, int32_t y, int32_t radius, GColo
           if (dx * dx + dy * dy <= limit) { ++covered; }
         }
       }
-#if defined(PBL_COLOR)
       if (covered >= 10) {
         graphics_context_set_stroke_color(ctx, color);
       } else if (covered >= 4) {
@@ -72,11 +51,6 @@ static void draw_disc(GContext *ctx, int32_t x, int32_t y, int32_t radius, GColo
       } else {
         continue;
       }
-#else
-      (void)soft;
-      if (covered < 8) { continue; }
-      graphics_context_set_stroke_color(ctx, color);
-#endif
       graphics_draw_pixel(ctx, GPoint((int16_t)px, (int16_t)py));
     }
   }
@@ -85,9 +59,9 @@ static void draw_disc(GContext *ctx, int32_t x, int32_t y, int32_t radius, GColo
 void tb_icon_loader(GContext *ctx, GRect box, GColor color) {
   graphics_context_set_antialiased(ctx, false);
   const GColor soft = blend(color, PBL_IF_ROUND_ELSE(GColorWhite, GColorDarkGray));
-  const int32_t smallest = PBL_IF_COLOR_ELSE(SUB * 5 / 10, SUB * 6 / 10);
-  const int32_t largest = PBL_IF_COLOR_ELSE(SUB * 135 / 100, SUB * 115 / 100);
-  const int32_t ring = PBL_IF_COLOR_ELSE(SUB * 42 / 10, SUB * 435 / 100);
+  const int32_t smallest = SUB * 5 / 10;
+  const int32_t largest = SUB * 135 / 100;
+  const int32_t ring = SUB * 42 / 10;
   const int32_t cx = box.origin.x * SUB + box.size.w * SUB / 2;
   const int32_t cy = box.origin.y * SUB + box.size.h * SUB / 2;
   for (int step = 0; step < 8; ++step) {
@@ -131,12 +105,16 @@ void tb_icon_bookmark(GContext *ctx, GRect box, GColor color) {
 
 void tb_icon_chats(GContext *ctx, GRect box, GColor color) {
   pen(ctx, color, box);
-  const int16_t tail = box.size.h / 4;
+  graphics_context_set_antialiased(ctx, false);
+  graphics_context_set_stroke_width(ctx, 1);
+  const int16_t tail = (int16_t)(box.size.h >= 9 ? box.size.h / 3 : 2);
   const GRect bubble = GRect(box.origin.x, box.origin.y, box.size.w, box.size.h - tail);
-  graphics_fill_rect(ctx, bubble, box.size.w >= 11 ? 3 : 2, GCornersAll);
-  const int16_t base = (int16_t)(bubble.origin.y + bubble.size.h - 1);
-  GPoint point[] = {{box.origin.x + 2, base}, {box.origin.x + 2 + tail + 1, base}, {box.origin.x + 2, box.origin.y + box.size.h - 1}};
-  fill(ctx, point, 3);
+  graphics_fill_rect(ctx, bubble, box.size.h >= 12 ? 3 : 2, GCornersAll);
+  const int16_t edge = (int16_t)(box.origin.x + box.size.w - 1 - box.size.w / 5);
+  const int16_t top = (int16_t)(bubble.origin.y + bubble.size.h);
+  for (int16_t row = 0; row < tail; ++row) {
+    graphics_draw_line(ctx, GPoint(edge - (tail - 1 - row), top + row), GPoint(edge, top + row));
+  }
 }
 
 void tb_icon_messages(GContext *ctx, GRect box, GColor color) {
@@ -166,4 +144,77 @@ void tb_icon_fill(GContext *ctx, GRect box, GColor color, uint16_t level) {
       }
     }
   }
+}
+
+void tb_icon_pencil(GContext *ctx, GRect box, GColor color) {
+  pen(ctx, color, box);
+  const int16_t x = box.origin.x;
+  const int16_t y = box.origin.y;
+  const int16_t w = box.size.w - 1;
+  const int16_t h = box.size.h - 1;
+  GPoint body[] = {{x + w - 3, y}, {x + w, y + 3}, {x + 3, y + h}, {x, y + h}, {x, y + h - 3}};
+  fill(ctx, body, 5);
+}
+
+void tb_icon_mic(GContext *ctx, GRect box, GColor color) {
+  pen(ctx, color, box);
+  const int16_t cx = (int16_t)(box.origin.x + box.size.w / 2);
+  const int16_t width = (int16_t)(box.size.w / 3 > 2 ? box.size.w / 3 : 2);
+  const int16_t body = (int16_t)(box.size.h * 3 / 5);
+  graphics_fill_rect(ctx, GRect(cx - width / 2, box.origin.y, width + 1, body), (uint16_t)(width / 2), GCornersAll);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, GPoint(cx - width, box.origin.y + body / 2), GPoint(cx - width, box.origin.y + body));
+  graphics_draw_line(ctx, GPoint(cx + width, box.origin.y + body / 2), GPoint(cx + width, box.origin.y + body));
+  graphics_draw_line(ctx, GPoint(cx - width, box.origin.y + body), GPoint(cx + width, box.origin.y + body));
+  graphics_draw_line(ctx, GPoint(cx, box.origin.y + body), GPoint(cx, box.origin.y + box.size.h - 1));
+}
+
+void tb_icon_reply(GContext *ctx, GRect box, GColor color) {
+  pen(ctx, color, box);
+  graphics_context_set_stroke_width(ctx, 1);
+  const int16_t x = box.origin.x;
+  const int16_t y = box.origin.y;
+  const int16_t w = box.size.w - 1;
+  const int16_t h = box.size.h - 1;
+  GPoint head[] = {{x, y + h / 2}, {x + w / 2, y}, {x + w / 2, y + h}};
+  fill(ctx, head, 3);
+  graphics_fill_rect(ctx, GRect(x + w / 2, y + h / 2 - 1, w / 2 + 1, 3), 0, GCornerNone);
+}
+
+void tb_icon_forward(GContext *ctx, GRect box, GColor color) {
+  pen(ctx, color, box);
+  const int16_t x = box.origin.x;
+  const int16_t y = box.origin.y;
+  const int16_t w = box.size.w - 1;
+  const int16_t h = box.size.h - 1;
+  const int16_t radius = (int16_t)(h / 2);
+  const int16_t base = (int16_t)(x + radius + 1);
+  const int16_t middle = (int16_t)(y + h - radius);
+  graphics_context_set_stroke_width(ctx, 3);
+  graphics_draw_arc(ctx, GRect(base - radius, middle, 2 * radius, 2 * radius), GOvalScaleModeFitCircle, DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(360));
+  graphics_context_set_antialiased(ctx, false);
+  graphics_context_set_stroke_width(ctx, 1);
+  const int16_t length = (int16_t)(x + w - base);
+  for (int16_t step = 0; step <= length; ++step) {
+    const int16_t spread = (int16_t)((length - step) * 4 / 5);
+    graphics_draw_line(ctx, GPoint(base + step, middle - spread), GPoint(base + step, middle + spread));
+  }
+}
+
+void tb_icon_clock(GContext *ctx, GRect box, GColor color) {
+  pen(ctx, color, box);
+  graphics_context_set_stroke_width(ctx, 1);
+  const int16_t radius = (int16_t)((box.size.w < box.size.h ? box.size.w : box.size.h) / 2);
+  const GPoint center = GPoint(box.origin.x + radius, box.origin.y + radius);
+  graphics_draw_circle(ctx, center, (uint16_t)(radius > 1 ? radius - 1 : 1));
+  graphics_draw_line(ctx, center, GPoint(center.x, center.y - radius + 2));
+  graphics_draw_line(ctx, center, GPoint(center.x + radius - 3, center.y));
+}
+
+void tb_icon_alert(GContext *ctx, GRect box, GColor color) {
+  pen(ctx, color, box);
+  const int16_t cx = (int16_t)(box.origin.x + box.size.w / 2);
+  const int16_t bar = 3;
+  graphics_fill_rect(ctx, GRect(cx - bar / 2, box.origin.y, bar, box.size.h * 2 / 3), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(cx - bar / 2, box.origin.y + box.size.h - bar, bar, bar), 0, GCornerNone);
 }

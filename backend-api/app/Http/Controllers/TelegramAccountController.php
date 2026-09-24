@@ -19,16 +19,14 @@ final class TelegramAccountController extends Controller
 {
     public function index(ListAccountsRequest $request, TelegramAccountService $accounts): JsonResponse
     {
-        $page = $accounts->paginate($request->integer('per_page', 20), $this->requestId($request), $request->integer('page', 1));
+        $page = $accounts->paginate($request->integer('per_page', 20), $this->requestId($request), $request->integer('page', 1), RequestContext::principal($request)->accountFilter());
 
         return (new AccountPageResource($page))->respond($request, $this->requestId($request));
     }
 
     public function store(CreateTelegramAccountRequest $request, TelegramAccountService $accounts): JsonResponse
     {
-        $owner = $request->attributes->get('principal_type') === 'owner';
-        $arguments = [$owner ? RequestContext::instanceId($request) : RequestContext::principal($request)->id, (string) $request->header('Idempotency-Key'), $request->validated(), $this->requestId($request)];
-        [$account, $created] = $owner ? $accounts->createForOwner(...$arguments) : $accounts->create(...$arguments);
+        [$account, $created] = $accounts->create(RequestContext::principal($request)->id, (string) $request->header('Idempotency-Key'), $request->validated(), $this->requestId($request));
 
         return (new TelegramAccountResource($account))->respond($request, $this->requestId($request), $created ? 202 : 200);
     }

@@ -178,4 +178,14 @@ final class FakeTdlibGateway implements TdlibGateway
     {
         $this->dispatch('releasePrincipalInterests', get_defined_vars());
     }
+
+    public function sendMessage(string $accountId, string $chatId, array $command, string $requestId): array
+    {
+        return $this->dispatch('sendMessage', get_defined_vars());
+    }
+
+    public function sendStatus(string $accountId, array $operationIds, string $requestId): array
+    {
+        return $this->dispatch('sendStatus', get_defined_vars());
+    }
 }

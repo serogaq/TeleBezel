@@ -66,6 +66,9 @@ static void completed(void *owner, uint32_t sequence, const TbResponse *response
     TbCursor body;
     TbStatusRecord status;
     if (tb_codec_next(&cursor, &type, &body) && type == TB_RECORD_STATUS && tb_codec_status(&body, &status)) {
+      if (cursor.offset < cursor.length && connection->ports.records) {
+        connection->ports.records(connection->ports.context, response->payload + cursor.offset, (uint16_t)(cursor.length - cursor.offset));
+      }
       apply(connection, status.connection, status.proxy != 0, true);
       return;
     }

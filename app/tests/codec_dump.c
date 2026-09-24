@@ -62,7 +62,7 @@ int main(void) {
         print_span("title", record.title);
         printf(",\"unread\":%d,\"previewKind\":%d,", record.unread, record.preview_kind);
         print_span("previewText", record.preview_text);
-        printf("}\n");
+        printf(",\"send\":%d}\n", record.send);
       } else if (type == TB_RECORD_MESSAGE) {
         TbMessageRecord record;
         if (!tb_codec_message(&body, &record)) { printf("{\"error\":\"message\"}\n"); return 1; }
@@ -72,6 +72,36 @@ int main(void) {
         print_span("id", record.id);
         printf(",\"kind\":%d,\"flags\":%d,", record.kind, record.flags);
         print_span("text", record.text);
+        printf(",");
+        print_span("replyId", record.reply_id);
+        printf("}\n");
+      } else if (type == TB_RECORD_TEMPLATES) {
+        TbTemplatesRecord record;
+        if (!tb_codec_templates(&body, &record)) { printf("{\"error\":\"templates\"}\n"); return 1; }
+        printf("{\"type\":\"templates\",\"revision\":%lu,\"count\":%d,\"flags\":%d}\n", (unsigned long)record.revision, record.count,
+               record.flags);
+      } else if (type == TB_RECORD_TEMPLATE) {
+        TbTemplateRecord record;
+        if (!tb_codec_template(&body, &record)) { printf("{\"error\":\"template\"}\n"); return 1; }
+        printf("{\"type\":\"template\",\"index\":%d,\"length\":%d,", record.index, record.length);
+        print_span("preview", record.preview);
+        printf("}\n");
+      } else if (type == TB_RECORD_DRAFT) {
+        TbDraftRecord record;
+        if (!tb_codec_draft(&body, &record)) { printf("{\"error\":\"draft\"}\n"); return 1; }
+        printf("{\"type\":\"draft\",\"id\":%lu,\"bytes\":%d,\"units\":%d,\"flags\":%d}\n", (unsigned long)record.id, record.bytes,
+               record.units, record.flags);
+      } else if (type == TB_RECORD_SEND_STATE || type == TB_RECORD_PENDING_SEND) {
+        TbSendStateRecord record;
+        if (!tb_codec_send_state(&body, &record)) { printf("{\"error\":\"send_state\"}\n"); return 1; }
+        printf("{\"type\":\"%s\",\"draftId\":%lu,\"state\":%d,\"code\":%d,\"retryAfter\":%d,\"flags\":%d,",
+               type == TB_RECORD_SEND_STATE ? "send_state" : "pending_send", (unsigned long)record.draft_id, record.state, record.code,
+               record.retry_after, record.flags);
+        print_span("chat", record.chat);
+        printf(",");
+        print_span("message", record.message);
+        printf(",");
+        print_span("title", record.title);
         printf("}\n");
       } else if (type == TB_RECORD_TEXT) {
         TbSpan text;

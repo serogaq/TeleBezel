@@ -1,7 +1,7 @@
 <?php
 
-use App\Cache\RateLimitCacheKeys;
-use App\Models\ApiClient;
+use App\Enums\TokenType;
+use App\Models\AccessToken;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Config;
@@ -10,13 +10,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\RateLimiter;
 
 beforeEach(function (): void {
-    $this->token = 'tb_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    ApiClient::query()->create([
-        'name' => 'test',
-        'token_prefix' => substr($this->token, 0, 12),
-        'token_hash' => hash('sha256', $this->token),
-    ]);
-    RateLimiter::clear(RateLimitCacheKeys::publicApi('1'));
+    $this->token = issueTestToken(TokenType::Device)['token'];
 });
 test('status requires a valid token', function (): void {
     $this->getJson('/v1/status')->assertStatus(401)->assertJsonPath('error.code', 'auth.unauthorized');
@@ -32,7 +26,7 @@ test('status returns the stable ready dto', function (): void {
     expect((string) $response->headers->get('Cache-Control'))->toContain('no-store');
 });
 test('revoked token is rejected', function (): void {
-    ApiClient::query()->update([
+    AccessToken::query()->update([
         'revoked_at' => now(),
     ]);
     $this->withToken($this->token)->getJson('/v1/status')->assertStatus(401);

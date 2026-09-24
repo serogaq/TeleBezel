@@ -38,9 +38,9 @@ else
 fi
 "${compose[@]}" up "${up_args[@]}" -d postgres backend-tdlib
 "${compose[@]}" run --rm -e DB_STATEMENT_TIMEOUT=30000 -e DB_LOCK_TIMEOUT=5000 backend-api php artisan telebezel:migrate-locked
-issue_output=$("${compose[@]}" run --rm backend-api php artisan telebezel:api-client-issue integration)
+issue_output=$("${compose[@]}" run --rm backend-api php artisan telebezel:api-client-issue integration --type=device)
 token=$(printf '%s\n' "$issue_output" | awk '/^tb_[A-Za-z0-9_-]+$/ {print; exit}')
-client_id=$(printf '%s\n' "$issue_output" | awk -F': ' '/^Client ID:/ {print $2; exit}')
+client_id=$(printf '%s\n' "$issue_output" | awk -F': ' '/^Token ID:/ {print $2; exit}')
 test -n "$token"
 test -n "$client_id"
 issue_output_b=$("${compose[@]}" run --rm backend-api php artisan telebezel:api-client-issue integration-second)

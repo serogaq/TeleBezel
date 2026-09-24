@@ -21,6 +21,15 @@ struct AccountCommand {
   std::string fingerprint;
   static AccountCommand parse(const std::string &uuid, const nlohmann::json &input);
 };
+struct SendCommand {
+  std::string operation_id;
+  std::string generation;
+  std::uint64_t authorization_generation{0};
+  std::int64_t chat_id{0};
+  std::int64_t reply_to{0};
+  std::string text;
+  static SendCommand parse(std::int64_t chat_id, const nlohmann::json &input);
+};
 enum class AuthorizationAction : std::uint8_t { phone, code, password, email, email_code, qr, resend };
 std::string action_name(AuthorizationAction action);
 struct AuthorizationCommand {

@@ -19,6 +19,7 @@ typedef struct {
 typedef struct {
   void (*changed)(void *context);
   void *context;
+  void (*extra)(void *context, uint8_t type, const uint8_t *record, uint16_t length);
 } TbSessionPorts;
 
 typedef struct {

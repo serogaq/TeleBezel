@@ -4,9 +4,12 @@
 #include "codec.h"
 #include "errors.h"
 #include "generated/protocol.h"
+#include "scratch.h"
 
 #define TB_SENDER_LIMIT 32
 #define TB_EXTRA_LIMIT 48
+#define TB_FORWARD_LIMIT 48
+#define TB_REPLY_LIMIT 96
 #define TB_BUSY_POSTPONE 1000
 
 static void changed(TbHistory *history) {
@@ -16,8 +19,12 @@ static void changed(TbHistory *history) {
 
 static void free_message(TbHistory *history, TbMessage *item) {
   tb_budget_free(&history->budget, item->sender);
+  tb_budget_free(&history->budget, item->forward);
   tb_budget_free(&history->budget, item->extra);
   tb_budget_free(&history->budget, item->text);
+  tb_budget_free(&history->budget, item->reply);
+  tb_budget_free(&history->budget, item->reply_id);
+  tb_budget_free(&history->budget, item->reply_sender);
   memset(item, 0, sizeof(*item));
 }
 
@@ -105,10 +112,28 @@ static bool stage(TbHistory *history, const TbMessageRecord *record) {
   item->action = record->action;
   item->duration = record->duration;
   item->sender = tb_budget_copy(&history->budget, record->sender, TB_SENDER_LIMIT, true);
+  item->forward = tb_budget_copy(&history->budget, record->forward, TB_FORWARD_LIMIT, true);
   item->extra = tb_budget_copy(&history->budget, record->extra, TB_EXTRA_LIMIT, true);
   item->text = tb_budget_copy(&history->budget, record->text, history->config.text_limit, true);
+  if (record->reply_id.length) {
+    uint8_t *quote = (uint8_t *)tb_scratch(TB_SCRATCH_SHORT);
+    size_t used = 0;
+    const size_t sender = tb_utf8_fit(record->reply_sender.data, record->reply_sender.length, 33);
+    memcpy(quote, record->reply_sender.data, sender);
+    used = sender;
+    if (sender && record->reply_text.length && used + 2 < TB_REPLY_LIMIT) {
+      quote[used++] = ':';
+      quote[used++] = ' ';
+    }
+    const size_t text = tb_utf8_fit(record->reply_text.data, record->reply_text.length, TB_REPLY_LIMIT - used);
+    memcpy(quote + used, record->reply_text.data, text);
+    used += text;
+    item->reply = tb_budget_copy(&history->budget, (TbSpan){quote, (uint16_t)used}, TB_REPLY_LIMIT, true);
+    item->reply_id = tb_budget_copy(&history->budget, record->reply_id, TB_TELEGRAM_ID_SIZE - 1, true);
+    item->reply_sender = tb_budget_copy(&history->budget, record->reply_sender, TB_SENDER_LIMIT, true);
+  }
   item->height = -1;
-  if ((record->text.length && !item->text) || (record->sender.length && !item->sender)) {
+  if ((record->text.length && !item->text) || (record->sender.length && !item->sender) || (record->forward.length && !item->forward)) {
     free_message(history, item);
     history->staging_invalid = true;
     return true;
@@ -130,13 +155,17 @@ static bool parse(TbHistory *history, const TbResponse *response) {
   return true;
 }
 
-static int compare_keys(const void *left, const void *right) {
-  const int64_t a = ((const TbMessage *)left)->key;
-  const int64_t b = ((const TbMessage *)right)->key;
-  return a < b ? -1 : a > b ? 1 : 0;
+static void sort_staging(TbHistory *history) {
+  for (uint16_t index = 1; index < history->staging_count; ++index) {
+    const TbMessage item = history->staging[index];
+    uint16_t slot = index;
+    while (slot > 0 && history->staging[slot - 1].key > item.key) {
+      history->staging[slot] = history->staging[slot - 1];
+      --slot;
+    }
+    history->staging[slot] = item;
+  }
 }
-
-static void sort_staging(TbHistory *history) { qsort(history->staging, history->staging_count, sizeof(TbMessage), compare_keys); }
 
 static bool over_limits(const TbHistory *history, uint16_t count) {
   return count > history->config.capacity || history->budget.used > history->budget.limit;
@@ -379,11 +408,12 @@ bool tb_history_is(const TbHistory *history, const char *account, const char *ch
   return history->loaded && strcmp(history->account, account) == 0 && strcmp(history->chat, chat) == 0;
 }
 
-void tb_history_open(TbHistory *history, const char *account, const char *chat, uint8_t chat_type) {
+void tb_history_open(TbHistory *history, const char *account, const char *chat, uint8_t chat_type, bool saved) {
   const bool same = tb_history_is(history, account, chat) && !history->truncated;
   tb_history_close(history);
   history->active = true;
   history->chat_type = chat_type;
+  history->saved = saved;
   history->followups = 0;
   history->followup_chain = true;
   history->rechecks = 0;

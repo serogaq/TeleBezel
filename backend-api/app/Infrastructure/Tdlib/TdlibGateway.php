@@ -145,6 +145,45 @@ final class TdlibGateway implements TdlibGatewayContract
         ], $requestId);
     }
 
+    /** @param array<string, mixed> $command
+     * @return array<string, mixed>
+     */
+    public function sendMessage(string $accountId, string $chatId, array $command, string $requestId): array
+    {
+        try {
+            $response = $this->client($requestId)->timeout(12)->send('POST', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages", [
+                'json' => $command,
+            ]);
+        } catch (ConnectionException $exception) {
+            if (self::neverReached($exception)) {
+                throw new ApiException('service.tdlib_unavailable', 503);
+            }
+            throw new ApiException('operation.outcome_unknown', 504);
+        }
+        if ($response->serverError() && ! in_array($response->status(), [503, 504], true)) {
+            throw new ApiException('operation.outcome_unknown', 504);
+        }
+
+        return $this->decode($response);
+    }
+
+    /** @param list<string> $operationIds
+     * @return array<string, mixed>
+     */
+    public function sendStatus(string $accountId, array $operationIds, string $requestId): array
+    {
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/sends", [
+            'ids' => implode(',', $operationIds),
+        ], $requestId);
+    }
+
+    private static function neverReached(ConnectionException $exception): bool
+    {
+        $message = $exception->getMessage();
+
+        return str_contains($message, 'cURL error 6:') || str_contains($message, 'cURL error 7:') || str_contains($message, 'Connection refused') || str_contains($message, 'Could not resolve host');
+    }
+
     private function client(string $requestId): PendingRequest
     {
         return Http::baseUrl(config()->string('telebezel.tdlib.base_url'))->withToken(config()->string('telebezel.tdlib.token'))->withHeaders([

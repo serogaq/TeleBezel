@@ -65,6 +65,54 @@ TEST(CacheBudgetTest, EnforcesPerChatAccountAndProcessLimits) {
   ASSERT_FALSE(first.messages.contains({8, 4}));
 }
 
+TEST(MessageContentTest, NamesTheOriginalAuthorOfForwardedMessages) {
+  using telebezel::runtime::decorate_sender;
+  using telebezel::runtime::message_projection;
+  const auto forwarded = [](td_api::object_ptr<td_api::MessageOrigin> origin) {
+    td_api::message message;
+    message.id_ = 1;
+    message.chat_id_ = 5;
+    message.is_outgoing_ = true;
+    message.sender_id_ = td_api::make_object<td_api::messageSenderUser>(5);
+    message.forward_info_ = td_api::make_object<td_api::messageForwardInfo>();
+    message.forward_info_->origin_ = std::move(origin);
+    return message_projection(message);
+  };
+  telebezel::runtime::Account account;
+  account.sender_names["user:7"] = "Ada";
+  account.sender_names["chat:-1009"] = "News";
+  auto user = forwarded(td_api::make_object<td_api::messageOriginUser>(7));
+  decorate_sender(account, user);
+  ASSERT_EQ(user["forward_from"].value("name", ""), "Ada");
+  auto unknown = forwarded(td_api::make_object<td_api::messageOriginUser>(8));
+  decorate_sender(account, unknown);
+  ASSERT_TRUE(unknown["forward_from"]["name"].is_null());
+  ASSERT_EQ(unknown["forward_from"].value("fallback", ""), "User 8");
+  auto hidden = forwarded(td_api::make_object<td_api::messageOriginHiddenUser>("Boris"));
+  decorate_sender(account, hidden);
+  ASSERT_EQ(hidden["forward_from"].value("name", ""), "Boris");
+  auto channel = forwarded(td_api::make_object<td_api::messageOriginChannel>(-1009, 3, "Editor"));
+  decorate_sender(account, channel);
+  ASSERT_EQ(channel["forward_from"].value("name", ""), "News");
+  ASSERT_EQ(channel["forward_from"].value("signature", ""), "Editor");
+  td_api::message plain;
+  plain.id_ = 2;
+  plain.chat_id_ = 5;
+  ASSERT_TRUE(message_projection(plain)["forward_from"].is_null());
+  account.sender_names["user:5"] = "Me";
+  account.messages[{5, 1}] = forwarded(td_api::make_object<td_api::messageOriginUser>(7));
+  td_api::message answer;
+  answer.id_ = 3;
+  answer.chat_id_ = 5;
+  answer.sender_id_ = td_api::make_object<td_api::messageSenderUser>(5);
+  answer.reply_to_ = td_api::make_object<td_api::messageReplyToMessage>();
+  static_cast<td_api::messageReplyToMessage &>(*answer.reply_to_).chat_id_ = 5;
+  static_cast<td_api::messageReplyToMessage &>(*answer.reply_to_).message_id_ = 1;
+  auto quoted = message_projection(answer);
+  decorate_sender(account, quoted);
+  ASSERT_EQ(quoted["reply_to"].value("sender_name", ""), "Ada");
+}
+
 TEST(MessageContentTest, KeepsCaptionsAndNamesContentKinds) {
   using telebezel::runtime::message_content;
   const auto caption = [](const std::string &text) {

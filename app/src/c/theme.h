@@ -15,6 +15,18 @@ typedef struct {
   bool round;
 } TbTheme;
 
+typedef struct {
+  TextLayer *layer;
+  const char *text;
+  GFont font;
+  int16_t limit;
+  int16_t pad;
+} TbPageLine;
+
+#define TB_PAGE_LINES 3
+#define TB_PAGE_MAX_LINES 5
+#define TB_PAGE_CENTER INT16_MIN
+
 void tb_theme_init(void);
 const TbTheme *tb_theme(void);
 GColor tb_theme_background(void);
@@ -23,3 +35,4 @@ GColor tb_theme_muted(bool highlighted);
 GColor tb_theme_accent(bool highlighted);
 void tb_theme_menu(MenuLayer *menu);
 int16_t tb_theme_text_height(const char *text, GFont font, int16_t width, int16_t limit);
+int16_t tb_theme_page(GRect bounds, TbPageLine *lines, int count, int16_t top);

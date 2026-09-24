@@ -3,10 +3,11 @@
 namespace App\Providers;
 
 use App\Contracts\MonotonicClock;
+use App\Contracts\Repositories\AccessTokenRepository as AccessTokenRepositoryContract;
 use App\Contracts\Repositories\AdministrationRepository as AdministrationRepositoryContract;
-use App\Contracts\Repositories\AuthenticationRepository as AuthenticationRepositoryContract;
 use App\Contracts\Repositories\DeviceRepository as DeviceRepositoryContract;
 use App\Contracts\Repositories\HealthRepository as HealthRepositoryContract;
+use App\Contracts\Repositories\MessageSendRepository as MessageSendRepositoryContract;
 use App\Contracts\Repositories\OwnerAccessRepository as OwnerAccessRepositoryContract;
 use App\Contracts\Repositories\ProxyProfileRepository as ProxyProfileRepositoryContract;
 use App\Contracts\Repositories\QuickReplyRepository as QuickReplyRepositoryContract;
@@ -22,10 +23,11 @@ use App\Infrastructure\Persistence\PostgresConnector;
 use App\Infrastructure\Tdlib\TdlibGateway as TdlibGatewayImplementation;
 use App\Infrastructure\Tdlib\TdlibStatusClient as TdlibStatusClientImplementation;
 use App\Infrastructure\Time\SystemMonotonicClock;
+use App\Repositories\AccessTokenRepository;
 use App\Repositories\AdministrationRepository;
-use App\Repositories\AuthenticationRepository;
 use App\Repositories\DeviceRepository;
 use App\Repositories\HealthRepository;
+use App\Repositories\MessageSendRepository;
 use App\Repositories\OwnerAccessRepository;
 use App\Repositories\ProxyProfileRepository;
 use App\Repositories\QuickReplyRepository;
@@ -33,6 +35,8 @@ use App\Repositories\RetentionRepository;
 use App\Repositories\SchedulerRepository;
 use App\Repositories\SettingsRepository;
 use App\Repositories\TelegramAccountRepository;
+use App\Services\AuthenticationService;
+use App\Services\MessageSendService;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -48,9 +52,11 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind('db.connector.pgsql', PostgresConnector::class);
         $this->app->bind(TransactionManager::class, DatabaseTransactionManager::class);
         $this->app->bind(AdministrationRepositoryContract::class, AdministrationRepository::class);
-        $this->app->bind(AuthenticationRepositoryContract::class, AuthenticationRepository::class);
+        $this->app->bind(AccessTokenRepositoryContract::class, AccessTokenRepository::class);
+        $this->app->when([AuthenticationService::class, MessageSendService::class])->needs('$appKey')->giveConfig('app.key');
         $this->app->bind(DeviceRepositoryContract::class, DeviceRepository::class);
         $this->app->bind(HealthRepositoryContract::class, HealthRepository::class);
+        $this->app->bind(MessageSendRepositoryContract::class, MessageSendRepository::class);
         $this->app->bind(OwnerAccessRepositoryContract::class, OwnerAccessRepository::class);
         $this->app->bind(ProxyProfileRepositoryContract::class, ProxyProfileRepository::class);
         $this->app->bind(QuickReplyRepositoryContract::class, QuickReplyRepository::class);
@@ -71,17 +77,17 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('bootstrap', fn (Request $request) => Limit::perMinute(5)->by($request->ip()));
         RateLimiter::for('login', fn (Request $request) => Limit::perMinute(10)->by($request->ip()));
         RateLimiter::for('recovery', fn (Request $request) => Limit::perHour(5)->by($request->ip()));
-        RateLimiter::for('owner-mutations', function (Request $request) {
+        RateLimiter::for('settings-mutations', function (Request $request) {
             if ($request->isMethodSafe()) {
                 return Limit::none();
             }
             $principal = $request->attributes->get('principal_id');
             $subject = is_string($principal) ? $principal : (string) $request->ip();
-            if ($request->is('v1/owner/proxies/ping', 'v1/owner/proxies/*/ping', 'v1/owner/proxies')) {
-                return Limit::perMinute(6)->by('owner-proxy-ping:'.$subject);
+            if ($request->is('v1/proxies/ping', 'v1/proxies/*/ping', 'v1/proxies')) {
+                return Limit::perMinute(6)->by('settings-proxy-ping:'.$subject);
             }
 
-            return Limit::perMinute(60)->by('owner-mutation:'.$subject);
+            return Limit::perMinute(60)->by('settings-mutation:'.$subject);
         });
     }
 }

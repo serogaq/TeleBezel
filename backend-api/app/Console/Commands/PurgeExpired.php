@@ -11,7 +11,7 @@ final class PurgeExpired extends Command
 {
     protected $signature = 'telebezel:purge-expired';
 
-    protected $description = 'Delete expired owner sessions, bootstrap codes and idempotency keys';
+    protected $description = 'Delete expired web sessions, bootstrap codes, idempotency keys and send records';
 
     public function handle(RetentionRepository $retention): int
     {

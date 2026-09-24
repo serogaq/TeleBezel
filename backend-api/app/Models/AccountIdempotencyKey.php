@@ -10,5 +10,5 @@ final class AccountIdempotencyKey extends Model
 
     protected $primaryKey = null;
 
-    protected $fillable = ['api_client_id', 'key_hash', 'request_hash', 'telegram_account_id'];
+    protected $fillable = ['token_id', 'key_hash', 'request_hash', 'telegram_account_id'];
 }

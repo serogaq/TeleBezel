@@ -11,13 +11,14 @@ struct TdRuntime::Impl {
   runtime::AuthorizationService authorization;
   runtime::ReadModelService reads;
   runtime::InterestLeaseManager interests;
+  runtime::MessageSendService sends;
   runtime::RuntimeEngine engine;
   Impl(const Config &config, AccountRegistry &registry, std::unique_ptr<TdTransport> transport)
       : transport(transport ? std::move(transport) : std::make_unique<NativeTdTransport>()), context(config),
         broker(*this->transport), cursors(config.internal_token), proxy(context, config, broker),
         lifecycle(context, config, registry, *this->transport, broker, proxy),
         authorization(context, broker, lifecycle), reads(context, config, broker, cursors), interests(context, broker),
-        engine(context, registry, *this->transport, broker) {}
+        sends(context, broker), engine(context, registry, *this->transport, broker) {}
 };
 TdRuntime::TdRuntime(const Config &config, AccountRegistry &registry, std::unique_ptr<TdTransport> transport)
     : impl_(std::make_unique<Impl>(config, registry, std::move(transport))) {}
@@ -86,5 +87,11 @@ nlohmann::json TdRuntime::set_interest(const std::string &uuid, std::int64_t cha
 }
 nlohmann::json TdRuntime::release_interests(const std::string &principal_type, const std::string &principal_id) {
   return impl_->interests.release_interests(principal_type, principal_id);
+}
+nlohmann::json TdRuntime::send_message(const std::string &uuid, std::int64_t chat_id, const nlohmann::json &command) {
+  return impl_->sends.send(uuid, runtime::SendCommand::parse(chat_id, command));
+}
+nlohmann::json TdRuntime::send_status(const std::string &uuid, const std::vector<std::string> &ids) const {
+  return impl_->sends.lookup(uuid, ids);
 }
 } // namespace telebezel

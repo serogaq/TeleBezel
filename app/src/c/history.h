@@ -15,8 +15,12 @@ typedef struct {
   uint8_t action;
   uint16_t duration;
   char *sender;
+  char *forward;
   char *extra;
   char *text;
+  char *reply;
+  char *reply_id;
+  char *reply_sender;
   int16_t height;
 } TbMessage;
 
@@ -40,6 +44,7 @@ typedef struct {
   char account[TB_ACCOUNT_ID_SIZE];
   char chat[TB_TELEGRAM_ID_SIZE];
   uint8_t chat_type;
+  bool saved;
   TbMessage *items;
   uint16_t count;
   TbMessage *staging;
@@ -73,7 +78,7 @@ typedef struct {
 
 bool tb_history_init(TbHistory *history, TbRequestLayer *requests, TbViewPorts ports, TbHistoryConfig config);
 void tb_history_deinit(TbHistory *history);
-void tb_history_open(TbHistory *history, const char *account, const char *chat, uint8_t chat_type);
+void tb_history_open(TbHistory *history, const char *account, const char *chat, uint8_t chat_type, bool saved);
 bool tb_history_is(const TbHistory *history, const char *account, const char *chat);
 void tb_history_load_older(TbHistory *history);
 void tb_history_refresh(TbHistory *history);

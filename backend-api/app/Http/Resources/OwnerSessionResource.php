@@ -6,7 +6,7 @@ namespace App\Http\Resources;
 
 final class OwnerSessionResource extends ApiResource
 {
-    private const array FIELDS = ['instance_id', 'recovery_code', 'authenticated', 'active'];
+    private const array FIELDS = ['instance_id', 'recovery_code', 'authenticated', 'active', 'csrf_token'];
 
     /** @param array<string, mixed> $data */
     public function __construct(array $data)

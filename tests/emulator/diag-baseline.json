@@ -1,0 +1,8 @@
+{
+  "heap_floor": 16384,
+  "stack_growth": 1.25,
+  "platforms": {
+    "emery": {"stack_depth": 1024, "heap_min_measured": 42404},
+    "gabbro": {"stack_depth": 1024, "heap_min_measured": 40456}
+  }
+}

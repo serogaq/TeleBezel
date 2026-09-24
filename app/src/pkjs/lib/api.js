@@ -23,7 +23,8 @@ function query(params) {
 }
 function create(XMLHttpRequestCtor, settingsStore, protocol, now, log) {
   now = now || Date.now;
-  function request(settings, method, path, callback, body) {
+  function request(settings, method, path, callback, body, extra) {
+    extra = extra || {};
     var done = false;
     var xhr = new XMLHttpRequestCtor();
     var handle = {abort: function() {
@@ -39,10 +40,11 @@ function create(XMLHttpRequestCtor, settingsStore, protocol, now, log) {
       var base = settingsStore.baseUrl(settings);
       if (!base) { failure(0, 'config.invalid', null); return handle; }
       xhr.open(method, base + path, true);
-      xhr.timeout = 12000;
+      xhr.timeout = extra.timeout || 12000;
       xhr.setRequestHeader('Authorization', 'Bearer ' + settings.token);
       xhr.setRequestHeader('Accept', 'application/json');
       if (body !== undefined) { xhr.setRequestHeader('Content-Type', 'application/json'); }
+      Object.keys(extra.headers || {}).forEach(function(name) { xhr.setRequestHeader(name, extra.headers[name]); });
       xhr.onreadystatechange = function() {
         if (xhr.readyState !== 4 || done) { return; }
         var status = xhr.status;
@@ -85,6 +87,14 @@ function create(XMLHttpRequestCtor, settingsStore, protocol, now, log) {
     updates: function(settings, id, params, callback) { return request(settings, 'GET', account(id) + '/updates' + query(params), callback); },
     releaseInterest: function(settings, id, chat, view, callback) {
       return request(settings, 'DELETE', account(id) + '/chats/' + encodeURIComponent(chat) + '/interests/' + encodeURIComponent(view), callback);
+    },
+    quickReplies: function(settings, callback) { return request(settings, 'GET', '/v1/quick-replies', callback); },
+    sendMessage: function(settings, id, chat, body, key, callback) {
+      return request(settings, 'POST', account(id) + '/chats/' + encodeURIComponent(chat) + '/messages', callback, body,
+        {headers: {'Idempotency-Key': key}, timeout: 15000});
+    },
+    sendStatus: function(settings, id, operation, callback) {
+      return request(settings, 'GET', account(id) + '/sends/' + encodeURIComponent(operation), callback);
     }
   };
 }

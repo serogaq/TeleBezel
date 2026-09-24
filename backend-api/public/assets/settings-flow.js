@@ -7,14 +7,15 @@
   'use strict';
 
   const ownerActivityExclusions = new Set([
-    '/v1/owner/activity',
-    '/v1/owner/login',
-    '/v1/owner/bootstrap',
-    '/v1/owner/recover'
+    '/v1/session/activity',
+    '/v1/session/login',
+    '/v1/session/bootstrap',
+    '/v1/session/recover',
+    '/v1/session/logout'
   ]);
 
   const shouldRecordOwnerActivity = (url, method = 'GET') => method !== 'GET'
-    && url.startsWith('/v1/owner/')
+    && url.startsWith('/v1/')
     && !ownerActivityExclusions.has(url);
 
   const authorizationPayload = (authorization, action, value) => {

@@ -16,6 +16,7 @@ typedef struct {
   uint8_t flags;
   uint8_t preview_kind;
   uint8_t preview_action;
+  uint8_t send;
   uint16_t preview_duration;
   uint16_t unread;
   uint32_t last_date;

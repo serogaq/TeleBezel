@@ -6,7 +6,7 @@ namespace App\Http\Resources;
 
 final class DeviceResource extends ApiResource
 {
-    private const array FIELDS = ['id', 'name', 'locale', 'default_account_id', 'chat_list', 'last_seen_at', 'revoked_at', 'token'];
+    private const array FIELDS = ['id', 'name', 'locale', 'default_account_id', 'chat_list', 'last_seen_at', 'revoked_at', 'token', 'permissions'];
 
     /** @param array<string, mixed> $data */
     public function __construct(array $data)

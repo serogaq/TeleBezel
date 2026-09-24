@@ -26,7 +26,9 @@ const std::map<std::string, std::int32_t> functions{{"phone", api::setAuthentica
                                                     {"logout", api::logOut::ID},
                                                     {"destroy", api::destroy::ID},
                                                     {"add_proxy", api::addProxy::ID},
-                                                    {"ping", api::pingProxy::ID}};
+                                                    {"ping", api::pingProxy::ID},
+                                                    {"send", api::sendMessage::ID},
+                                                    {"reply_lookup", api::getMessage::ID}};
 api::object_ptr<api::formattedText> formatted(const std::string &text) {
   auto result = api::make_object<api::formattedText>();
   result->text_ = text;
@@ -220,6 +222,26 @@ int main(int argc, char **argv) {
                                            std::stoll(command.value("chat", "42")),
                                            std::vector<std::int64_t>{std::stoll(command.at("id").get<std::string>())},
                                            true, false));
+      } else if (op == "auto_send") {
+        transport->set_auto_complete(command.value("enabled", true));
+      } else if (op == "answer_lookups") {
+        transport->set_answer_lookups(command.value("enabled", true));
+      } else if (op == "deny_replies") {
+        transport->set_deny_replies(command.value("enabled", true));
+      } else if (op == "complete_send" || op == "reject_send") {
+        const auto sends = transport->sends();
+        if (sends.empty())
+          throw std::runtime_error("No send to resolve");
+        const auto temporary = sends.back().temporary_id;
+        const auto id = std::stoll(command.value("message_id", "7000"));
+        const bool resolved =
+            op == "complete_send"
+                ? transport->complete_send(temporary, id, command.value("drop_reply", false))
+                : transport->reject_send(temporary, id, command.value("code", 400),
+                                         command.value("message", "SECRET_TELEGRAM_ERROR"),
+                                         command.value("retry_after", 0.0), command.value("can_retry", false));
+        if (!resolved)
+          throw std::runtime_error("Send not found");
       } else if (op != "stats")
         throw std::runtime_error("Unknown fixture operation");
       Json counts = Json::object();
@@ -229,7 +251,14 @@ int main(int argc, char **argv) {
           if (sent_client == client && sent_id == id)
             counts[name] = counts[name].get<int>() + 1;
       }
+      Json sends = Json::array();
+      for (const auto &item : transport->sends())
+        sends.push_back({{"chat_id", std::to_string(item.chat_id)},
+                         {"reply_to", std::to_string(item.reply_to)},
+                         {"temporary_id", std::to_string(item.temporary_id)},
+                         {"text_bytes", item.text.size()}});
       std::cout << Json{{"counts", counts},
+                        {"sends", sends},
                         {"pending", transport->pending_responses()},
                         {"code_matches", transport->code_matches(command.value("expected_code", ""))}}
                        .dump()

@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 import json
+import struct
 import sys
+import uuid
 import zipfile
 from pathlib import Path
 
 EXPECTED_UUID = "b91f715e-af74-4a90-9df4-fda0fbcd9762"
-EXPECTED_PLATFORMS = {"diorite", "emery", "flint", "gabbro"}
+EXPECTED_PLATFORMS = {"emery", "gabbro"}
 EXPECTED_KEYS = [
     "REQUEST_KIND", "REQUEST_SEQ", "RESPONSE_KIND", "RESULT_CODE", "INBOX_SIZE", "PAYLOAD", "ENTITY_ID",
     "CHUNK_INDEX", "CHUNK_TOTAL", "CONFIG_ADDRESS", "CONFIG_SSL", "CONFIG_TOKEN", "ACCOUNT_ID", "MESSAGE_ID",
     "PAGE_OP", "LIST", "PAGE_LIMIT", "TEXT_LIMIT", "PAGE_FLAGS", "RETRY_AFTER", "CONFIG_DEFAULT_ACCOUNT",
+    "DRAFT_ID", "TEMPLATE_INDEX", "TEMPLATES_REV", "ATTEMPT",
 ]
+# PebbleProcessInfo.virtual_size is a uint16 at offset 128: .text + .data + .bss must stay below 64 KiB.
+# The budget keeps headroom for later stages; long-lived state belongs on the heap.
+STATIC_BUDGET = 58 * 1024
+VIRTUAL_SIZE_OFFSET = 128
+NAME_OFFSET = 24
+UUID_OFFSET = 104
 
 # Pebble SDK's STM32 CRC implementation is Apache-2.0 (Google LLC, 2024).
 # The bundle manifest uses this CRC, not ZIP's CRC-32.
@@ -65,10 +74,20 @@ with zipfile.ZipFile(pbw) as archive:
             payload = archive.read(path)
             require(len(payload) > 0 and manifest[field]["size"] == len(payload), f"size mismatch: {path}")
             require(manifest[field]["crc"] == stm32_crc(payload), f"STM32 CRC mismatch: {path}")
+        binary = archive.read(f"{platform}/pebble-app.bin")
+        require(len(binary) >= VIRTUAL_SIZE_OFFSET + 2, f"truncated {platform} application header")
+        require(binary[:8] == b"PBLAPP\x00\x00", f"{platform} application header is missing (was .pbl_header dropped by LTO?)")
+        require(binary[NAME_OFFSET:NAME_OFFSET + 32].rstrip(b"\x00") == info["shortName"].encode("utf-8"),
+                f"wrong {platform} application name in header")
+        require(binary[UUID_OFFSET:UUID_OFFSET + 16] == uuid.UUID(EXPECTED_UUID).bytes, f"wrong {platform} UUID in header")
+        (static_size,) = struct.unpack_from("<H", binary, VIRTUAL_SIZE_OFFSET)
+        require(static_size <= STATIC_BUDGET,
+                f"{platform} static footprint {static_size} B exceeds budget {STATIC_BUDGET} B")
+        print(f"{platform} static footprint {static_size} / {STATIC_BUDGET} B")
         watch_strings = []
         for locale in ("en", "ru"):
             watch_strings.extend(json.loads(Path(f"app/localization/{locale}/watch.json").read_text()).values())
-        binary = archive.read(f"{platform}/pebble-app.bin")
-        require(all(str(value).encode("utf-8") in binary for value in watch_strings),
+        resources = archive.read(f"{platform}/app_resources.pbpack")
+        require(all(str(value).encode("utf-8") in resources for value in watch_strings),
                 f"missing watch localization in {platform}")
 print(f"validated {pbw}")

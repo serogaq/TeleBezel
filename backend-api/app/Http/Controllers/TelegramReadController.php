@@ -51,7 +51,7 @@ final class TelegramReadController extends Controller
 
     public function updates(string $uuid, ListUpdatesRequest $request, TelegramReadService $service): JsonResponse
     {
-        return (new TelegramReadResource($service->updates($uuid, $request->inputData(), RequestContext::requestId($request)), 'updates'))->respond(RequestContext::requestId($request));
+        return (new TelegramReadResource($service->updates($uuid, $request->inputData(), RequestContext::principal($request), RequestContext::requestId($request)), 'updates'))->respond(RequestContext::requestId($request));
     }
 
     public function putInterest(string $uuid, string $chatId, string $viewId, InterestRequest $request, TelegramReadService $service): JsonResponse

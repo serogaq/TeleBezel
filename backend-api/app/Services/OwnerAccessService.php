@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Contracts\Repositories\AccessTokenRepository;
 use App\Contracts\Repositories\OwnerAccessRepository;
 use App\Contracts\TransactionManager;
 use App\Exceptions\ApiException;
-use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Hashing\Hasher;
 use Illuminate\Support\Str;
 
 final readonly class OwnerAccessService
 {
-    public function __construct(private OwnerAccessRepository $access, private TransactionManager $transactions, private Hasher $hasher) {}
+    public function __construct(private OwnerAccessRepository $access, private AccessTokenRepository $tokens, private AccessTokenService $issuer, private TransactionManager $transactions, private Hasher $hasher) {}
 
     /** @return array{string, string, string} */
     public function bootstrap(string $code, string $password): array
@@ -62,7 +62,7 @@ final readonly class OwnerAccessService
             }
             $recovery = $this->newRecoveryCode();
             $this->access->saveCredentials($owner->id, $this->hasher->make($password), $this->hasher->make($recovery));
-            $this->access->revokeAccess($owner->id);
+            $this->tokens->revokeInstance($owner->id);
 
             return [$this->newSession($owner->id), $recovery];
         });
@@ -82,22 +82,19 @@ final readonly class OwnerAccessService
         });
     }
 
-    public function activity(string $sessionId): void
+    public function activity(string $tokenId): void
     {
-        $this->access->activity($sessionId);
+        $this->tokens->activity($tokenId);
     }
 
-    public function logout(string $sessionId): void
+    public function logout(string $tokenId, string $requestId): void
     {
-        $this->access->logout($sessionId);
+        $this->issuer->revoke($tokenId, $requestId);
     }
 
     private function newSession(string $instanceId): string
     {
-        $token = 'tbo_'.Str::random(48);
-        $this->access->createSession($instanceId, hash('sha256', $token), CarbonImmutable::now()->addHours(12));
-
-        return $token;
+        return $this->issuer->issueWebSession($instanceId)['token'];
     }
 
     private function newRecoveryCode(): string

@@ -12,10 +12,18 @@ use App\Data\PrincipalContext;
 use App\Data\TelegramId;
 use App\Enums\AccountLifecycle;
 use App\Exceptions\ApiException;
+use App\Support\Values;
 
 final readonly class TelegramReadService
 {
-    public function __construct(private TelegramAccountService $accounts, private TelegramAccountRepository $repository, private TdlibGateway $tdlib) {}
+    private const array EVENT_TYPES = [
+        'chat' => ['chat_changed'],
+        'message' => ['message_changed', 'message_deleted'],
+        'send' => ['send_changed'],
+        'connection' => ['connection_changed'],
+    ];
+
+    public function __construct(private TelegramAccountService $accounts, private TelegramAccountRepository $repository, private TdlibGateway $tdlib, private MessageSendService $sends) {}
 
     /** @return array<string, mixed> */
     public function chats(string $uuid, Input $input, string $requestId): array
@@ -90,18 +98,53 @@ final readonly class TelegramReadService
     }
 
     /** @return array<string, mixed> */
-    public function updates(string $uuid, Input $input, string $requestId): array
+    public function updates(string $uuid, Input $input, PrincipalContext $principal, string $requestId): array
     {
         $account = $this->assertReadable($uuid, $requestId);
-        $updates = $this->tdlib->updates($uuid, $input->all() + [
-            'limit' => 100,
-        ], $requestId);
-        $updates['status'] = [
-            'connection' => is_string($updates['connection'] ?? null) ? $updates['connection'] : 'unknown',
-            'proxy' => $this->repository->usesProxy($account),
-        ];
+        $wanted = [];
+        foreach ($input->has('types') ? explode(',', $input->string('types')) : array_keys(self::EVENT_TYPES) as $group) {
+            $wanted = [...$wanted, ...self::EVENT_TYPES[$group]];
+        }
+        $upstream = $this->tdlib->updates($uuid, array_filter([
+            'cursor' => $input->has('cursor') ? $input->string('cursor') : null,
+            'limit' => $input->has('limit') ? $input->integer('limit') : 100,
+        ], fn (mixed $value): bool => $value !== null), $requestId);
+        $raw = array_values(array_filter(is_array($upstream['items'] ?? null) ? $upstream['items'] : [], is_array(...)));
+        $operations = [];
+        foreach ($raw as $event) {
+            if (($event['type'] ?? null) === 'send_changed' && is_string($event['operation_id'] ?? null)) {
+                $operations[] = $event['operation_id'];
+            }
+        }
+        $owned = $this->sends->known($account->id, $operations);
+        $events = [];
+        foreach ($raw as $event) {
+            $event = Values::object($event);
+            $type = $event['type'] ?? null;
+            if ($type === 'send_changed') {
+                $send = $owned[is_string($event['operation_id'] ?? null) ? $event['operation_id'] : ''] ?? null;
+                if ($send === null) {
+                    continue;
+                }
+                $this->sends->observe($event);
+                if ($send->tokenId !== $principal->id) {
+                    continue;
+                }
+            }
+            if (in_array($type, $wanted, true)) {
+                $events[] = $event;
+            }
+        }
 
-        return $updates;
+        return [
+            'events' => $events,
+            'cursor' => $upstream['cursor'] ?? null,
+            'has_more' => ($upstream['has_more'] ?? false) === true,
+            'status' => [
+                'connection' => is_string($upstream['connection'] ?? null) ? $upstream['connection'] : 'unknown',
+                'proxy' => $this->repository->usesProxy($account),
+            ],
+        ];
     }
 
     /** @return array<string, mixed> */

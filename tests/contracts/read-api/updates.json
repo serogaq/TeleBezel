@@ -1,9 +1,8 @@
 {
     "data": {
-        "connection": "updating",
-        "cursor": "1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:1.586b8fa6d8230d180704154dac1c55a7a597ca4ecd72973b45b10e7c6815a7ac",
+        "events": [],
+        "cursor": "1:1fd4d832-6181-4ab5-8efb-c03237758d55:2.1a68f0ef2ec7845d218758038c8cc89a790205d1a91db2ca1b1c61eb746166ea",
         "has_more": false,
-        "items": [],
         "status": {
             "connection": "updating",
             "proxy": false

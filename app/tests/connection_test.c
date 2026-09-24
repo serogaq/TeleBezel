@@ -35,7 +35,7 @@ int main(void) {
   tb_requests_init(&layer, fake_request_ports(&fake));
   TbConnection connection;
   tb_connection_init(&connection, &layer,
-                     (TbConnectionPorts){fake_changed, fake_reload, fake_view_schedule, fake_view_cancel, fake_now, &fake}, 10000);
+                     (TbConnectionPorts){fake_changed, fake_reload, fake_view_schedule, fake_view_cancel, fake_now, &fake, NULL}, 10000);
   tb_connection_open(&connection, ACCOUNT);
   tb_connection_set_active(&connection, true);
   assert(!connection.known && !fake.view_timer);

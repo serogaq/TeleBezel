@@ -6,23 +6,23 @@ var TOKEN = 'tb_' + new Array(44).join('e');
 var FIRST = '00112233-4455-4677-8899-aabbccddeeff';
 var SECOND = '10112233-4455-4677-8899-aabbccddeeff';
 var BASE_DATE = 1790150000;
-var LONG_TEXT = new Array(40).join('Длинное сообщение с переносами строк, кириллицей и эмодзи 😀. ') + '\nКонец.';
+var LONG_TEXT = new Array(40).join('Длинное сообщение с переносами строк и кириллицей. ') + '\nКонец.';
 
 function chat(id, title, type, unread, text, extra) {
   var value = {id: id, type: type, title: title, is_forum: false, is_marked_unread: false, unread_count: unread, unread_mention_count: 0,
     unread_reaction_count: 0, notifications: {use_default_mute_for: true, mute_for: 0}, last_read_inbox_message_id: '0',
     last_read_outbox_message_id: '0', positions: {main: {order: String(1000 - Number(id.replace('-', '')) % 1000), is_pinned: false}},
     last_message: {id: '100', chat_id: id, sender: {type: 'user', id: '7', name: 'Ада', fallback: 'User 7'}, date: BASE_DATE,
-      edit_date: 0, is_outgoing: false, author_signature: '', content: {kind: 'text', text: text}}};
+      edit_date: 0, is_outgoing: false, author_signature: '', content: {kind: 'text', text: text}}, can_send: {text: true, reason: null}};
   Object.keys(extra || {}).forEach(function(key) { value[key] = extra[key]; });
   return value;
 }
 
 var main = [
-  chat('-1009007199254740993', 'Семья 👋', 'supergroup', 3, 'Кто заберёт детей?'),
+  chat('-1009007199254740993', 'Семья', 'supergroup', 3, 'Кто заберёт детей?'),
   chat('1', 'Ada Lovelace', 'private', 0, 'Список покупок', {is_saved_messages: true, last_message: {id: '100', chat_id: '1', sender: {type: 'user', id: '1', name: 'Ada Lovelace', fallback: 'User 1'}, date: BASE_DATE - 600, edit_date: 0, is_outgoing: true, author_signature: '', content: {kind: 'text', text: 'Список покупок'}}}),
   chat('42', 'Ada Lovelace', 'private', 0, 'See you tomorrow', {last_message: {id: '100', chat_id: '42', sender: {type: 'user', id: '1', name: 'Me', fallback: 'User 1'}, date: BASE_DATE - 3600, edit_date: 0, is_outgoing: true, author_signature: '', content: {kind: 'voice_note', duration: 14, fallback_key: 'message.voice_note'}}}),
-  chat('-1001234567890', 'Новости', 'channel', 120, 'Главное за день', {notifications: {use_default_mute_for: false, mute_for: 100000}}),
+  chat('-1001234567890', 'Новости', 'channel', 120, 'Главное за день', {notifications: {use_default_mute_for: false, mute_for: 100000}, can_send: {text: false, reason: 'read_only'}}),
   chat('43', 'Борис', 'private', 1, '', {last_message: {id: '100', chat_id: '43', sender: {type: 'user', id: '43', name: 'Борис', fallback: 'User 43'}, date: BASE_DATE - 86400, edit_date: 0, is_outgoing: false, author_signature: '', content: {kind: 'photo', text: 'Смотри какой закат', fallback_key: 'message.photo'}}})
 ];
 for (var index = 0; index < 21; ++index) { main.push(chat(String(1000 + index), 'Chat ' + (index + 1), 'basic_group', index % 3, 'Message number ' + index)); }
@@ -34,12 +34,27 @@ function messages(chatId) {
     var content = {kind: 'text', text: 'Сообщение ' + id + (id % 7 === 0 ? '\nвторая строка' : '')};
     if (id === 70) { content = {kind: 'text', text: LONG_TEXT}; }
     if (id === 69) { content = {kind: 'photo', text: 'Подпись к фото', fallback_key: 'message.photo'}; }
-    if (id === 68) { content = {kind: 'sticker', emoji: '😀', fallback_key: 'message.sticker'}; }
+    if (id === 68) { content = {kind: 'sticker', fallback_key: 'message.sticker'}; }
     if (id === 67) { content = {kind: 'voice_note', duration: 74, fallback_key: 'message.voice_note'}; }
     if (id === 66) { content = {kind: 'service', action: 'pinned', fallback_key: 'message.service'}; }
     if (id === 65) { content = {kind: 'unsupported', fallback_key: 'message.unsupported'}; }
     list.push({id: String(id), chat_id: chatId, sender: {type: 'user', id: id % 2 ? '7' : '8', name: id % 2 ? 'Ада' : null, fallback: id % 2 ? 'User 7' : 'User 8'},
-      date: BASE_DATE - (70 - id) * 3000, edit_date: id === 64 ? BASE_DATE : 0, is_outgoing: id % 5 === 0, author_signature: '', content: content});
+      date: BASE_DATE - (70 - id) * 3000, edit_date: id === 64 ? BASE_DATE : 0, is_outgoing: id % 5 === 0, author_signature: '',
+      reply_to: id === 63 ? {message_id: '62', sender_name: 'Ада', text: 'Сообщение 62'}
+        : id === 61 ? {message_id: '70', sender_name: 'Ада', text: LONG_TEXT.slice(0, 100)} : null,
+      forward_from: id === 62 ? {type: 'chat', id: '-1001234567890', name: 'Новости', fallback: 'Chat -1001234567890', signature: 'Редактор'} : null,
+      sending_state: id === 60 ? 'failed' : id === 55 ? 'pending' : null, content: content});
+  }
+  if (chatId === '1') {
+    list.forEach(function(item) {
+      var id = Number(item.id);
+      item.sender = {type: 'user', id: '1', name: 'Ada Lovelace', fallback: 'User 1'};
+      item.is_outgoing = true;
+      item.sending_state = null;
+      item.forward_from = id === 69 ? {type: 'chat', id: '-1001234567890', name: 'Новости', fallback: 'Chat -1001234567890', signature: 'Редактор'}
+        : id % 3 === 0 ? {type: 'user', id: '7', name: 'Ада', fallback: 'User 7'}
+        : id % 3 === 1 ? {type: 'hidden', name: 'Борис', fallback: 'Борис'} : null;
+    });
   }
   return list;
 }
@@ -59,6 +74,16 @@ function create(options) {
   var states = options.connection && options.connection.length ? options.connection.slice() : ['ready'];
   var step = 0;
   var journal = 0;
+  var sends = {};
+  var sendOrder = [];
+  var pendingEvents = [];
+  var sendModes = [];
+  var newest = {};
+  var templates = {items: [{id: 't1', text: 'Уже еду', position: 0}, {id: 't2', text: 'Перезвоню позже', position: 1}], revision: 3};
+  function operation(entry) {
+    return {id: entry.id, state: entry.state, chat_id: entry.chat, reply_to_message_id: entry.reply || null, message_id: entry.messageId,
+      error: entry.error, retryable: entry.retryable, reply_dropped: false};
+  }
   function connection() { return states[Math.min(step, states.length - 1)]; }
   function unread(list) {
     var source = list === 'archive' ? archive : main;
@@ -69,6 +94,7 @@ function create(options) {
     var parsed = url.parse(request.url, true);
     var query = parsed.query;
     log.push({method: request.method, path: parsed.pathname, query: query});
+    if (process.env.MOCK_LOG_REQUESTS === '1') { process.stdout.write('request ' + request.method + ' ' + parsed.pathname + '\n'); }
     function send(status, body, headers) {
       response.writeHead(status, Object.assign({'Content-Type': 'application/json'}, headers || {}));
       response.end(JSON.stringify(body));
@@ -93,7 +119,37 @@ function create(options) {
       ].slice(0, options.accounts === undefined ? 2 : options.accounts), pagination: {current_page: 1, per_page: 50, total: 2, last_page: 1}, request_id: 'mock'});
       return;
     }
+    if (parsed.pathname === '/v1/quick-replies') { send(200, envelope(templates)); return; }
     if (path[3] !== FIRST) { send(409, {error: {code: 'authorization.invalid_state'}}); return; }
+    if (path.length === 7 && path[6] === 'messages' && request.method === 'POST') {
+      var chunks = [];
+      request.on('data', function(chunk) { chunks.push(chunk); });
+      request.on('end', function() {
+        var body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        var key = request.headers['idempotency-key'];
+        var entry = sends[key];
+        var mode = entry ? 'repeat' : sendModes.length ? sendModes.shift() : 'sent';
+        if (!entry) {
+          if (typeof mode === 'object') { send(mode.status, {error: {code: mode.code}}, mode.headers); return; }
+          entry = sends[key] = {id: 'op-' + (sendOrder.length + 1), key: key, chat: path[5], reply: body.reply_to_message_id || null, text: body.text,
+            state: mode === 'pending' || mode === 'drop' ? 'pending' : mode === 'reply_unavailable' || mode === 'forbidden' ? 'failed' : 'sent', messageId: null, error: null,
+            retryable: false, processed: 1, created: Date.now()};
+          if (entry.state === 'sent') { entry.messageId = String(900 + sendOrder.length); }
+          if (mode === 'drop') { entry.state = 'sent'; entry.messageId = String(900 + sendOrder.length); }
+          if (entry.state === 'failed') { entry.error = {code: mode === 'forbidden' ? 'message.send_forbidden' : 'message.reply_unavailable', retry_after: null}; }
+          sendOrder.push(entry);
+        }
+        if (mode === 'drop') { request.socket.destroy(); return; }
+        send(202, envelope({operation: operation(entry)}));
+      });
+      return;
+    }
+    if (path.length === 6 && path[4] === 'sends') {
+      var known = sendOrder.filter(function(item) { return item.id === path[5]; })[0];
+      if (!known) { send(404, {error: {code: 'operation.not_found'}}); return; }
+      send(200, envelope({operation: operation(known)}));
+      return;
+    }
     if (path.length === 5 && path[4] === 'chats') {
       var source = query.list === 'archive' ? archive : main;
       var offset = query.cursor ? Number(query.cursor.split(':')[1]) : 0;
@@ -107,19 +163,26 @@ function create(options) {
     if (path.length === 5 && path[4] === 'updates') {
       step += 1;
       journal += 1;
-      send(200, envelope({items: [], cursor: 'u' + journal, has_more: false, connection: connection(), status: {connection: connection(), proxy: Boolean(options.proxy)}}));
+      var delivered = query.cursor ? pendingEvents.splice(0) : [];
+      send(200, envelope({events: delivered, cursor: 'u' + journal, has_more: false, connection: connection(), status: {connection: connection(), proxy: Boolean(options.proxy)}}));
       return;
     }
     if (path.length === 7 && path[6] === 'messages') {
       if (!query.view_id) { send(422, {error: {code: 'request.invalid'}}); return; }
       var all = messages(path[5]);
       var cursor = query.cursor || query.retry_cursor;
+      var refresh = 'unchanged';
+      if (options.refresh === 'pending' && !cursor) {
+        newest[path[5]] = (newest[path[5]] || 0) + 1;
+        if (newest[path[5]] === 1) { all = all.filter(function(item) { return Number(item.id) <= 67; }); }
+        if (newest[path[5]] <= 2) { refresh = 'pending'; }
+      }
       var anchor = cursor ? Number(cursor.split(':')[1]) : 71;
       var older = all.filter(function(item) { return Number(item.id) < anchor; });
       var chunk = older.slice(0, Number(query.limit || 30));
       var last = chunk.length ? Number(chunk[chunk.length - 1].id) : anchor;
       send(200, envelope(page(chunk, {has_more: chunk.length ? true : false, local_exhausted: chunk.length === 0, next_cursor: chunk.length ? 'h:' + last : null,
-        refresh: 'unchanged'})));
+        refresh: refresh})));
       return;
     }
     if (path.length === 8 && path[6] === 'messages') {
@@ -135,6 +198,17 @@ function create(options) {
     server: server,
     log: log,
     fail: function(pathname, status, code, once, headers) { faults[pathname] = {status: status, code: code, once: once, headers: headers}; },
+    sends: function() { return sendOrder; },
+    nextSend: function(mode) { sendModes.push(mode); },
+    settle: function(id, state, error) {
+      var entry = sendOrder.filter(function(item) { return item.id === id; })[0];
+      entry.state = state;
+      entry.messageId = state === 'sent' ? '950' : null;
+      entry.error = error || null;
+      entry.retryable = state === 'failed';
+      pendingEvents.push({type: 'send_changed', sequence: journal + 1, operation_id: id, chat_id: entry.chat, message_id: entry.messageId, state: state,
+        error: entry.error, retryable: entry.retryable, reply_dropped: false});
+    },
     listen: function(port, callback) { server.listen(port, '127.0.0.1', function() { callback(server.address().port); }); },
     close: function(callback) { server.close(callback); }
   };
@@ -144,6 +218,22 @@ module.exports = {create: create, TOKEN: TOKEN, FIRST: FIRST, SECOND: SECOND, LO
 
 if (require.main === module) {
   var instance = create({defaultAccount: process.env.MOCK_DEFAULT_ACCOUNT || null, accounts: process.env.MOCK_ACCOUNTS === undefined ? undefined : Number(process.env.MOCK_ACCOUNTS),
-    connection: process.env.MOCK_CONNECTION ? process.env.MOCK_CONNECTION.split(',') : null, proxy: process.env.MOCK_PROXY === '1'});
+    connection: process.env.MOCK_CONNECTION ? process.env.MOCK_CONNECTION.split(',') : null, proxy: process.env.MOCK_PROXY === '1',
+    refresh: process.env.MOCK_REFRESH || null});
+  (process.env.MOCK_SEND_MODES ? process.env.MOCK_SEND_MODES.split(',') : []).forEach(function(mode) {
+    instance.nextSend(mode === 'rate_limited'
+      ? {status: 429, code: 'message.send_rate_limited', headers: {'Retry-After': '30'}} : mode);
+  });
+  var settleAfter = Number(process.env.MOCK_SETTLE_MS || 0);
+  if (settleAfter > 0) {
+    setInterval(function() {
+      instance.sends().forEach(function(entry) {
+        if (entry.state === 'pending' && Date.now() - entry.created >= settleAfter) {
+          instance.settle(entry.id, 'sent');
+          process.stdout.write('settled ' + entry.id + '\n');
+        }
+      });
+    }, 500).unref();
+  }
   instance.listen(Number(process.env.PORT || 8787), function(port) { process.stdout.write('mock api on 127.0.0.1:' + port + '\n'); });
 }
