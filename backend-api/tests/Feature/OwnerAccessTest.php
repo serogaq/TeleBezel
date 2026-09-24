@@ -3,11 +3,11 @@
 use App\Contracts\TdlibGateway;
 use App\Enums\AccountLifecycle;
 use App\Exceptions\ApiException;
-use App\Models\Device;
+use App\Models\AccessToken;
 use App\Models\Instance;
-use App\Models\OwnerSession;
 use App\Models\ProxyProfile;
 use App\Models\TelegramAccount;
+use App\Services\AuthenticationService;
 use App\Services\OwnerAccessService;
 use App\Services\ProxyProfileService;
 use Illuminate\Http\Client\Request as ClientRequest;
@@ -43,16 +43,21 @@ test('owner can bootstrap and receive a persistent session', function (): void {
         'created_at' => now(),
         'updated_at' => now(),
     ]);
-    $bootstrap = $this->postJson('/v1/owner/bootstrap', [
+    $bootstrap = $this->postJson('/v1/session/bootstrap', [
         'bootstrap_code' => $code,
         'password' => 'correct horse battery staple',
     ])->assertCreated();
-    $ownerCookie = collect($bootstrap->headers->getCookies())->first(fn ($cookie): bool => $cookie->getName() === 'telebezel_owner');
+    $ownerCookie = collect($bootstrap->headers->getCookies())->first(fn ($cookie): bool => $cookie->getName() === 'telebezel_session');
     expect($ownerCookie)->not->toBeNull();
     expect($ownerCookie->getExpiresTime())->toBeGreaterThan(now()->addHours(11)->getTimestamp());
     [, $ownerToken] = $this->app->make(OwnerAccessService::class)->login('correct horse battery staple');
-    $this->withCredentials()->withCookie('telebezel_owner', $ownerToken)->getJson('/v1/owner/settings')->assertOk();
-    $this->assertDatabaseCount('devices', 0);
+    $bootstrap->assertJsonPath('data.csrf_token', app(AuthenticationService::class)->csrf($ownerCookie->getValue()));
+    asWebSession($this, $ownerToken)->getJson('/v1/settings')->assertOk();
+    expect(AccessToken::query()->where('type', 'device')->count())->toBe(0);
+    $session = AccessToken::query()->where('token_hash', hash('sha256', $ownerCookie->getValue()))->sole();
+    expect($session->type->value)->toBe('maintenance')
+        ->and($session->idle_timeout_seconds)->toBe(1800)
+        ->and($session->claims['permissions'])->not->toContain('messages.read');
 });
 test('owner configuration is committed before runtime application', function (): void {
     $gateway = new FakeTdlibGateway;
@@ -73,18 +78,8 @@ test('owner configuration is committed before runtime application', function ():
         'desired_revision' => 3,
         'effective_config_id' => (string) Str::uuid(),
     ]);
-    $token = 'tbo_'.Str::random(48);
-    DB::table('owner_sessions')->insert([
-        'id' => (string) Str::uuid(),
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $token),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-    $this->withCredentials()->withCookie('telebezel_owner', $token)->putJson('/v1/owner/settings', [
+    $token = issueWebSession()['token'];
+    asWebSession($this, $token)->putJson('/v1/settings', [
         'configuration_revision' => 1,
         'telegram_api_id' => 12345,
         'telegram_api_hash' => 'secret-hash',
@@ -92,7 +87,7 @@ test('owner configuration is committed before runtime application', function ():
     expect($account->fresh()->desired_revision)->toBe(4);
     expect($instance->fresh()->telegram_api_id)->toBe(12345);
     expect(DB::table('instances')->where('id', $instance->id)->value('telegram_api_hash'))->not->toBe('secret-hash');
-    $this->withCredentials()->withCookie('telebezel_owner', $token)->putJson('/v1/owner/settings', [
+    asWebSession($this, $token)->putJson('/v1/settings', [
         'configuration_revision' => 2,
         'global_proxy' => [
             'mode' => 'direct',
@@ -104,33 +99,24 @@ test('owner can issue a device token for manual clay setup', function (): void {
     $instance = Instance::query()->create([
         'id' => (string) Str::uuid(),
     ]);
-    $ownerToken = 'tbo_'.Str::random(48);
-    DB::table('owner_sessions')->insert([
-        'id' => (string) Str::uuid(),
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $ownerToken),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-    $response = $this->withCredentials()->withCookie('telebezel_owner', $ownerToken)->postJson('/v1/owner/devices', [
+    $ownerToken = issueWebSession()['token'];
+    $response = asWebSession($this, $ownerToken)->postJson('/v1/devices', [
         'name' => 'Pebble Manual',
     ])->assertCreated();
     $token = $response->json('data.token');
     expect($token)->toBeString();
     expect($token)->toMatch('/^tb_[A-Za-z0-9_-]{43}$/');
-    $this->assertDatabaseHas('devices', [
+    $this->assertDatabaseHas('access_tokens', [
         'instance_id' => $instance->id,
+        'type' => 'device',
         'name' => 'Pebble Manual',
         'token_hash' => hash('sha256', $token),
     ]);
-    $this->assertDatabaseMissing('devices', [
+    $this->assertDatabaseMissing('access_tokens', [
         'token_hash' => $token,
     ]);
     $this->withToken($token)->getJson('/v1/device/preferences')->assertOk()->assertJsonPath('data.name', 'Pebble Manual');
-    $recovery = $this->withCredentials()->withCookie('telebezel_owner', $ownerToken)->postJson('/v1/owner/recovery-code')->assertCreated()->json('data.recovery_code');
+    $recovery = asWebSession($this, $ownerToken)->postJson('/v1/session/recovery-code')->assertCreated()->json('data.recovery_code');
     expect($recovery)->toBeString();
     expect(Hash::check($recovery, $instance->fresh()->recovery_code_hash))->toBeTrue();
 });
@@ -163,19 +149,9 @@ test('owner manages pings and activates proxy profiles', function (): void {
         'authorization_state' => 'ready',
         'connection_state' => 'ready',
     ]);
-    $ownerToken = 'tbo_'.Str::random(48);
-    DB::table('owner_sessions')->insert([
-        'id' => (string) Str::uuid(),
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $ownerToken),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-    $owner = $this->withCredentials()->withCookie('telebezel_owner', $ownerToken);
-    $profile = $owner->postJson('/v1/owner/proxies', [
+    $ownerToken = issueWebSession()['token'];
+    $owner = asWebSession($this, $ownerToken);
+    $profile = $owner->postJson('/v1/proxies', [
         'label' => 'MTProto one',
         'mode' => 'mtproto',
         'host' => 'proxy.example',
@@ -185,18 +161,18 @@ test('owner manages pings and activates proxy profiles', function (): void {
     $raw = DB::table('proxy_profiles')->where('id', $profile['id'])->value('credentials');
     expect($raw)->toBeString();
     expect($raw)->not->toContain('dd-secret-value');
-    $owner->postJson("/v1/owner/proxies/{$profile['id']}/activate")->assertOk()->assertJsonPath('data.0.active', true);
+    $owner->postJson("/v1/proxies/{$profile['id']}/activate")->assertOk()->assertJsonPath('data.0.active', true);
     Http::assertNotSent(fn (ClientRequest $request): bool => str_ends_with($request->url(), '/proxy') && $request->method() === 'PUT');
     expect($instance->fresh()->active_proxy_profile_id)->toBe($profile['id']);
     expect(TelegramAccount::query()->firstOrFail()->desired_revision)->toBe(2);
-    $owner->putJson('/v1/owner/proxies/settings', [
+    $owner->putJson('/v1/proxies/settings', [
         'failure_action' => 'next',
         'connect_timeout_seconds' => 15,
     ])->assertOk();
-    $owner->postJson('/v1/owner/proxies/ping')->assertOk()->assertJsonPath('data.0.ping.latency_ms', 125);
-    $owner->deleteJson("/v1/owner/proxies/{$profile['id']}")->assertStatus(409)->assertJsonPath('error.code', 'proxy.active');
-    $owner->postJson('/v1/owner/proxies/direct')->assertOk();
-    $owner->deleteJson("/v1/owner/proxies/{$profile['id']}")->assertNoContent();
+    $owner->postJson('/v1/proxies/ping')->assertOk()->assertJsonPath('data.0.ping.latency_ms', 125);
+    $owner->deleteJson("/v1/proxies/{$profile['id']}")->assertStatus(409)->assertJsonPath('error.code', 'proxy.active');
+    $owner->postJson('/v1/proxies/direct')->assertOk();
+    $owner->deleteJson("/v1/proxies/{$profile['id']}")->assertNoContent();
 });
 test('proxy monitor switches to next then direct after timeout', function (): void {
     Http::fake(function (ClientRequest $request) {
@@ -326,28 +302,17 @@ test('owner can idempotently create a telegram account', function (): void {
     $instance = Instance::query()->create([
         'id' => (string) Str::uuid(),
     ]);
-    $ownerSessionId = (string) Str::uuid();
-    $ownerToken = 'tbo_'.Str::random(48);
-    DB::table('owner_sessions')->insert([
-        'id' => $ownerSessionId,
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $ownerToken),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
+    $ownerToken = issueWebSession()['token'];
     $proxyId = (string) Str::uuid();
-    $request = $this->withCredentials()->withCookie('telebezel_owner', $ownerToken)->withHeader('Idempotency-Key', 'owner-create-primary');
-    $first = $request->postJson('/v1/owner/telegram/accounts', [
+    $request = asWebSession($this, $ownerToken)->withHeader('Idempotency-Key', 'owner-create-primary');
+    $first = $request->postJson('/v1/telegram/accounts', [
         'label' => 'Primary',
         'proxy' => [
             'id' => $proxyId,
             'mode' => 'direct',
         ],
     ])->assertAccepted()->assertJsonPath('data.lifecycle', 'provisioning');
-    $request->postJson('/v1/owner/telegram/accounts', [
+    $request->postJson('/v1/telegram/accounts', [
         'label' => 'Primary',
         'proxy' => [
             'id' => $proxyId,
@@ -355,54 +320,66 @@ test('owner can idempotently create a telegram account', function (): void {
         ],
     ])->assertOk()->assertJsonPath('data.id', $first->json('data.id'));
     $this->assertDatabaseCount('telegram_accounts', 1);
-    $this->assertDatabaseHas('instance_account_idempotency_keys', [
-        'instance_id' => $instance->id,
+    $this->assertDatabaseHas('account_idempotency_keys', [
         'telegram_account_id' => $first->json('data.id'),
     ]);
-    $secondToken = 'tbo_'.Str::random(48);
-    DB::table('owner_sessions')->insert([
-        'id' => (string) Str::uuid(),
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $secondToken),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-    $this->withCredentials()->withCookie('telebezel_owner', $secondToken)->withHeader('Idempotency-Key', 'owner-create-primary')->postJson('/v1/owner/telegram/accounts', [
+    $secondToken = issueWebSession()['token'];
+    asWebSession($this, $secondToken)->withHeader('Idempotency-Key', 'owner-create-primary')->postJson('/v1/telegram/accounts', [
         'label' => 'Primary',
         'proxy' => [
             'id' => $proxyId,
             'mode' => 'direct',
         ],
-    ])->assertOk()->assertJsonPath('data.id', $first->json('data.id'));
-    $this->assertDatabaseCount('telegram_accounts', 1);
+    ])->assertAccepted()->assertJsonMissingPath('data.never');
+    $this->assertDatabaseCount('telegram_accounts', 2);
     expect($gateway->calls)->toHaveCount(0);
 });
 test('only explicit owner activity extends the idle window', function (): void {
     $instance = Instance::query()->create([
         'id' => (string) Str::uuid(),
     ]);
-    $ownerSessionId = (string) Str::uuid();
-    $ownerToken = 'tbo_'.Str::random(48);
-    $lastInteractiveAt = now()->subMinutes(10);
-    DB::table('owner_sessions')->insert([
-        'id' => $ownerSessionId,
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $ownerToken),
-        'authenticated_at' => now(),
-        'last_interactive_at' => $lastInteractiveAt,
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
+    $session = issueWebSession();
+    AccessToken::query()->whereKey($session['id'])->update([
+        'last_active_at' => now()->subMinutes(10),
     ]);
-    $persistedLastInteractiveAt = OwnerSession::query()->findOrFail($ownerSessionId)->last_interactive_at;
-    $request = $this->withCredentials()->withCookie('telebezel_owner', $ownerToken);
-    $request->getJson('/v1/owner/settings')->assertOk();
-    expect(OwnerSession::query()->findOrFail($ownerSessionId)->last_interactive_at->equalTo($persistedLastInteractiveAt))->toBeTrue();
-    $request->postJson('/v1/owner/activity')->assertOk()->assertJsonPath('data.active', true);
-    expect(OwnerSession::query()->findOrFail($ownerSessionId)->last_interactive_at->isAfter($persistedLastInteractiveAt))->toBeTrue();
+    $persistedLastActiveAt = AccessToken::query()->findOrFail($session['id'])->last_active_at;
+    $request = asWebSession($this, $session['token']);
+    $request->getJson('/v1/settings')->assertOk();
+    expect(AccessToken::query()->findOrFail($session['id'])->last_active_at->equalTo($persistedLastActiveAt))->toBeTrue();
+    $request->postJson('/v1/session/activity')->assertOk()->assertJsonPath('data.active', true);
+    expect(AccessToken::query()->findOrFail($session['id'])->last_active_at->isAfter($persistedLastActiveAt))->toBeTrue();
+});
+test('an idle or expired web session is revoked and a cookie session needs its csrf value', function (): void {
+    $idle = issueWebSession();
+    AccessToken::query()->whereKey($idle['id'])->update([
+        'last_active_at' => now()->subMinutes(31),
+    ]);
+    asWebSession($this, $idle['token'])->getJson('/v1/settings')->assertUnauthorized()->assertJsonPath('error.code', 'auth.unauthorized');
+    expect(AccessToken::query()->findOrFail($idle['id'])->revoked_at)->not->toBeNull();
+    $expired = issueWebSession();
+    AccessToken::query()->whereKey($expired['id'])->update([
+        'expires_at' => now()->subSecond(),
+    ]);
+    asWebSession($this, $expired['token'])->getJson('/v1/settings')->assertUnauthorized();
+    $session = issueWebSession()['token'];
+    $this->withCredentials()->withUnencryptedCookie('telebezel_session', $session)->getJson('/v1/settings')->assertOk();
+    $this->withCredentials()->withUnencryptedCookie('telebezel_session', $session)->putJson('/v1/proxies/settings', [
+        'failure_action' => 'next',
+        'connect_timeout_seconds' => 10,
+    ])->assertStatus(419)->assertJsonPath('error.code', 'auth.csrf_mismatch');
+    $this->withCredentials()->withUnencryptedCookie('telebezel_session', $session)->withHeader('X-TeleBezel-CSRF', str_repeat('0', 64))->putJson('/v1/proxies/settings', [
+        'failure_action' => 'next',
+        'connect_timeout_seconds' => 10,
+    ])->assertStatus(419);
+    Http::fake([
+        '*' => Http::response([
+            'data' => [
+                'released' => 0,
+            ],
+        ]),
+    ]);
+    asWebSession($this, $session)->postJson('/v1/session/logout')->assertOk();
+    asWebSession($this, $session)->getJson('/v1/settings')->assertUnauthorized();
 });
 test('removed pairing routes are unavailable', function (): void {
     $this->getJson('/v1/instance')->assertNotFound();
@@ -410,6 +387,6 @@ test('removed pairing routes are unavailable', function (): void {
     $this->postJson('/v1/pairings/redeem', [])->assertNotFound();
     $this->postJson('/v1/pairings/'.Str::uuid().'/exchange', [])->assertNotFound();
     $this->postJson('/v1/pairings/'.Str::uuid().'/confirm', [])->assertNotFound();
-    $this->postJson('/v1/owner/pairings/'.Str::uuid().'/approve', [])->assertNotFound();
-    expect(Device::query()->count())->toBe(0);
+    $this->postJson('/v1/pairings/'.Str::uuid().'/approve', [])->assertNotFound();
+    expect(AccessToken::query()->count())->toBe(0);
 });

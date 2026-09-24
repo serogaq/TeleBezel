@@ -80,9 +80,10 @@
       "previewDuration": 0,
       "previewSender": "Ада",
       "previewExtra": "",
-      "previewText": "Подпись\nк фото"
+      "previewText": "Подпись\nк фото",
+      "send": 2
     },
-    "hex": "035700142d3130303930303731393932353437343039393311d093d180d183d0bfd0bfd0b020f09f918b0109d20400f153650100000006d090d0b4d0b0001a00d09fd0bed0b4d0bfd0b8d181d18c20d0ba20d184d0bed182d0be",
+    "hex": "035800142d3130303930303731393932353437343039393311d093d180d183d0bfd0bfd0b020f09f918b0109d20400f153650100000006d090d0b4d0b0001a00d09fd0bed0b4d0bfd0b8d181d18c20d0ba20d184d0bed182d0be02",
     "decoded": {
       "id": "-1009007199254740993",
       "title": "Группа 👋",
@@ -95,7 +96,8 @@
       "previewDuration": 0,
       "previewSender": "Ада",
       "previewExtra": "",
-      "previewText": "Подпись к фото"
+      "previewText": "Подпись к фото",
+      "send": 2
     },
     "textLimit": 80
   },
@@ -105,25 +107,33 @@
     "input": {
       "id": "9007199254740993",
       "date": 1700000123,
-      "flags": 3,
+      "flags": 35,
       "kind": 3,
       "action": 0,
       "duration": 74,
       "sender": "Ada Lovelace",
       "extra": "",
-      "text": "Hello, мир 😀"
+      "text": "Hello, мир 😀",
+      "replyId": "55",
+      "replySender": "Ада",
+      "replyText": "Когда встреча?",
+      "forwardFrom": "News · Editor"
     },
-    "hex": "043c0010393030373139393235343734303939337bf153650303004a000c416461204c6f76656c61636500120048656c6c6f2c20d0bcd0b8d18020f09f9880",
+    "hex": "04700010393030373139393235343734303939337bf153652303004a000c416461204c6f76656c61636500120048656c6c6f2c20d0bcd0b8d18020f09f988002353506d090d0b4d0b01ad09ad0bed0b3d0b4d0b020d0b2d181d182d180d0b5d187d0b03f0e4e65777320c2b720456469746f72",
     "decoded": {
       "id": "9007199254740993",
       "date": 1700000123,
-      "flags": 3,
+      "flags": 35,
       "kind": 3,
       "action": 0,
       "duration": 74,
       "sender": "Ada Lovelace",
       "extra": "",
-      "text": "Hello, мир 😀"
+      "text": "Hello, мир 😀",
+      "replyId": "55",
+      "replySender": "Ада",
+      "replyText": "Когда встреча?",
+      "forwardFrom": "News · Editor"
     },
     "textLimit": 300
   },
@@ -141,7 +151,7 @@
       "extra": "",
       "text": "Длинный текст сообщения"
     },
-    "hex": "041b0002343201000000040000000000000b00d094d0bbd0b8d0bde280a6",
+    "hex": "041f0002343201000000040000000000000b00d094d0bbd0b8d0bde280a600000000",
     "decoded": {
       "id": "42",
       "date": 1,
@@ -151,7 +161,8 @@
       "duration": 0,
       "sender": "",
       "extra": "",
-      "text": "Длин…"
+      "text": "Длин…",
+      "forwardFrom": ""
     },
     "textLimit": 12
   },
@@ -178,6 +189,113 @@
         208,
         184
       ]
+    }
+  },
+  {
+    "name": "templates",
+    "record": "templates",
+    "input": {
+      "revision": 70000,
+      "count": 3,
+      "flags": 1
+    },
+    "hex": "080600701101000301",
+    "decoded": {
+      "revision": 70000,
+      "count": 3,
+      "flags": 1
+    }
+  },
+  {
+    "name": "template",
+    "record": "template",
+    "input": {
+      "index": 2,
+      "length": 600,
+      "preview": "Буду через 10 минут"
+    },
+    "textLimit": 48,
+    "hex": "09250002580221d091d183d0b4d18320d187d0b5d180d0b5d0b720313020d0bcd0b8d0bdd183d182",
+    "decoded": {
+      "index": 2,
+      "length": 600,
+      "preview": "Буду через 10 минут"
+    }
+  },
+  {
+    "name": "draft",
+    "record": "draft",
+    "input": {
+      "id": 4000000000,
+      "bytes": 1030,
+      "units": 520,
+      "flags": 1
+    },
+    "hex": "0a090000286bee0604080201",
+    "decoded": {
+      "id": 4000000000,
+      "bytes": 1030,
+      "units": 520,
+      "flags": 1
+    }
+  },
+  {
+    "name": "send_state",
+    "record": "sendState",
+    "input": {
+      "draftId": 7,
+      "state": 2,
+      "code": 21,
+      "retryAfter": 30,
+      "flags": 1,
+      "account": "00112233-4455-4677-8899-aabbccddeeff",
+      "chat": "-1009007199254740993",
+      "message": "",
+      "title": "Группа 👋",
+      "preview": "Скоро буду"
+    },
+    "hex": "0b6a000700000002151e00012430303131323233332d343435352d343637372d383839392d616162626363646465656666142d313030393030373139393235343734303939330011d093d180d183d0bfd0bfd0b020f09f918b13d0a1d0bad0bed180d0be20d0b1d183d0b4d183",
+    "decoded": {
+      "draftId": 7,
+      "state": 2,
+      "code": 21,
+      "retryAfter": 30,
+      "flags": 1,
+      "account": "00112233-4455-4677-8899-aabbccddeeff",
+      "chat": "-1009007199254740993",
+      "message": "",
+      "title": "Группа 👋",
+      "preview": "Скоро буду"
+    }
+  },
+  {
+    "name": "pending_send",
+    "record": "sendState",
+    "input": {
+      "draftId": 8,
+      "state": 0,
+      "code": 0,
+      "retryAfter": 0,
+      "flags": 4,
+      "account": "00112233-4455-4677-8899-aabbccddeeff",
+      "chat": "42",
+      "message": "",
+      "title": "Ada",
+      "preview": "Hi"
+    },
+    "restored": true,
+    "hex": "0c39000800000000000000042430303131323233332d343435352d343637372d383839392d6161626263636464656566660234320003416461024869",
+    "decoded": {
+      "draftId": 8,
+      "state": 0,
+      "code": 0,
+      "retryAfter": 0,
+      "flags": 4,
+      "account": "00112233-4455-4677-8899-aabbccddeeff",
+      "chat": "42",
+      "message": "",
+      "title": "Ada",
+      "preview": "Hi"
     }
   }
 ]

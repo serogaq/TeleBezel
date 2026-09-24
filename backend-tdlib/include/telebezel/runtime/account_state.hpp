@@ -4,6 +4,7 @@
 #include <deque>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -53,6 +54,31 @@ struct ChatOrderLog {
 struct CachedMessageMeta {
   std::size_t bytes{0};
   std::int64_t date{0};
+};
+struct SendContext {
+  std::string kind;
+  std::int64_t peer{0};
+  bool basic_allowed{true};
+};
+struct MemberStatus {
+  std::optional<bool> can_send;
+  std::string reason;
+};
+struct SendOperation {
+  std::int64_t chat_id{0};
+  std::int64_t reply_to{0};
+  std::int32_t sending_id{0};
+  std::int64_t temporary_id{0};
+  std::int64_t message_id{0};
+  std::string state{"preparing"};
+  std::string error;
+  std::int64_t retry_after{0};
+  bool retryable{false};
+  bool reply_dropped{false};
+  std::string epoch;
+  std::uint64_t authorization_generation{0};
+  std::chrono::steady_clock::time_point created{std::chrono::steady_clock::now()};
+  std::chrono::steady_clock::time_point finished{};
 };
 struct UnreadCounters {
   std::int32_t chats{0};
@@ -104,6 +130,12 @@ struct AccountState {
   std::map<std::int64_t, InterestChatState> interest_states;
   std::deque<std::string> sender_order;
   std::deque<nlohmann::json> events;
+  std::map<std::int64_t, SendContext> send_contexts;
+  std::map<std::string, MemberStatus> member_statuses;
+  std::set<std::int64_t> deleted_users;
+  std::map<std::string, SendOperation> sends;
+  std::map<MessageKey, std::string> send_messages;
+  std::map<std::int32_t, std::string> sending_ids;
   ChatOrderLog main_orders;
   ChatOrderLog archive_orders;
   UnreadCounters main_unread;

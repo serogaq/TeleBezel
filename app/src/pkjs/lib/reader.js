@@ -1,12 +1,15 @@
 'use strict';
 var accountInfo = require('./accounts');
+var composeFactory = require('./compose');
 var message = require('./message');
+var updatesFactory = require('./updates');
 var ACCOUNT_PATTERN = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 var CHAT_PATTERN = /^-?[1-9][0-9]{0,18}$/;
 var MESSAGE_PATTERN = /^[1-9][0-9]{0,18}$/;
 var RETRY_WINDOW_MS = 8000;
 var RETRY_WAIT_LIMIT_S = 5;
 var TEXT_CACHE_LIMIT = 300;
+var TITLE_CACHE_LIMIT = 500;
 var FULL_TEXT_LIMIT = 16384;
 var NEEDS_LOGIN = ['awaiting_phone_number', 'awaiting_code', 'awaiting_password', 'awaiting_email_address',
   'awaiting_email_code', 'awaiting_qr_confirmation', 'registration_required', 'premium_purchase_required', 'closed',
@@ -23,10 +26,12 @@ function create(options) {
   var slots = {};
   var chatCursors = {};
   var historyCursors = {};
-  var eventCursors = {};
   var proxies = {};
   var texts = {};
   var textOrder = [];
+  var titles = {};
+  var titleOrder = [];
+  var updates = options.updates || updatesFactory.create({api: options.api});
 
   function budget() {
     var size = inboxSize > 0 ? inboxSize : 2048;
@@ -66,6 +71,7 @@ function create(options) {
     if (code === 'account.not_found' || code === 'account.gone') { return codes.account_gone; }
     if (code === 'chat.not_found') { return codes.chat_not_found; }
     if (code === 'rate_limit.exceeded') { return codes.rate_limited; }
+    if (code === 'message.send_rate_limited') { return codes.send_rate_limited; }
     if (code === 'interest.limit_reached') { return codes.too_many_views; }
     if (code === 'message.cache_miss' || code === 'message.not_found') { return codes.message_unavailable; }
     if (result.action === 'resync') { return codes.cursor_lost; }
@@ -185,9 +191,16 @@ function create(options) {
             flags: account.id === defaultAccount ? protocol.account_flag.default : 0
           }));
         });
-        respond(sequence, protocol.result.ok, records, 0);
+        respond(sequence, protocol.result.ok, records.concat(compose.restoredRecords()), 0);
       });
     });
+  }
+
+  function rememberTitle(account, chat, title) {
+    var key = account + '|' + chat;
+    if (!Object.prototype.hasOwnProperty.call(titles, key)) { titleOrder.push(key); }
+    titles[key] = title;
+    while (titleOrder.length > TITLE_CACHE_LIMIT) { delete titles[titleOrder.shift()]; }
   }
 
   function describe(message, chatId) {
@@ -221,6 +234,12 @@ function create(options) {
     var preview = last ? describe(last, chat.id) : {kind: protocol.kind.none, action: 0, duration: 0, text: '', extra: '', sender: ''};
     if (last && last.is_outgoing) { value |= flags.preview_outgoing; }
     if (chat.is_saved_messages === true) { value |= flags.saved; }
+    var sendable = chat.can_send && typeof chat.can_send === 'object' ? chat.can_send : {};
+    var send = protocol.can_send.unknown;
+    if (sendable.text === true) { send = protocol.can_send.allowed; }
+    else if (sendable.text === false) {
+      send = Object.prototype.hasOwnProperty.call(protocol.can_send, sendable.reason) ? protocol.can_send[sendable.reason] : protocol.can_send.read_only;
+    }
     return codec.chat({
       id: chat.id,
       title: typeof chat.title === 'string' ? chat.title : '',
@@ -233,7 +252,8 @@ function create(options) {
       previewDuration: preview.duration,
       previewSender: last && last.is_outgoing ? '' : preview.sender,
       previewExtra: preview.extra,
-      previewText: preview.text
+      previewText: preview.text,
+      send: send
     }, textLimit);
   }
 
@@ -309,7 +329,10 @@ function create(options) {
       chatCursors[key] = {next: data.next_cursor || null, retry: data.partial ? data.retry_cursor || cursor : null};
       var records = [summaryRecord(account, data)].concat((Array.isArray(data.items) ? data.items : []).filter(function(chat) {
         return chat && CHAT_PATTERN.test(chat.id);
-      }).map(function(chat) { return chatRecord(chat, list, bounds.text); }));
+      }).map(function(chat) {
+        rememberTitle(account, chat.id, typeof chat.title === 'string' ? chat.title : '');
+        return chatRecord(chat, list, bounds.text);
+      }));
       respond(sequence, protocol.result.ok, records, pageFlags(data));
     });
   }
@@ -321,13 +344,28 @@ function create(options) {
     while (textOrder.length > TEXT_CACHE_LIMIT) { delete texts[textOrder.shift()]; }
   }
 
+  function forwardName(origin) {
+    if (!origin || typeof origin !== 'object') { return ''; }
+    var name = typeof origin.name === 'string' && origin.name ? origin.name : typeof origin.fallback === 'string' ? origin.fallback : '';
+    var signature = typeof origin.signature === 'string' ? origin.signature : '';
+    return name && signature ? name + ' · ' + signature : name || signature;
+  }
+
   function messageRecord(message, chat, textLimit) {
     var described = describe(message, chat);
     var flags = protocol.message_flag;
+    var reply = message.reply_to && typeof message.reply_to === 'object' && MESSAGE_PATTERN.test(message.reply_to.message_id || '')
+      ? message.reply_to : null;
     return codec.message({
       id: message.id,
       date: message.date,
-      flags: (message.is_outgoing ? flags.outgoing : 0) | (message.edit_date > 0 ? flags.edited : 0),
+      flags: (message.is_outgoing ? flags.outgoing : 0) | (message.edit_date > 0 ? flags.edited : 0) |
+        (message.sending_state === 'pending' ? flags.pending : 0) | (message.sending_state === 'failed' ? flags.failed : 0) |
+        (reply ? flags.reply : 0),
+      replyId: reply ? reply.message_id : '',
+      replySender: reply && typeof reply.sender_name === 'string' ? reply.sender_name : '',
+      replyText: reply && typeof reply.text === 'string' ? reply.text : '',
+      forwardFrom: forwardName(message.forward_from),
       kind: described.kind,
       action: described.action,
       duration: described.duration,
@@ -432,33 +470,22 @@ function create(options) {
     var value = settingsOrFail(sequence);
     if (!value) { return; }
     var slot = begin('events', sequence);
-    var resynced = false;
-    function poll() {
-      var cursor = eventCursors[account] || null;
-      call('events', slot, function(callback) { return options.api.updates(value, account, {cursor: cursor}, callback); }, function(result) {
-        if (!result.ok) {
-          if (failureCode(result) === protocol.result.cursor_lost && cursor && !resynced) {
-            resynced = true;
-            delete eventCursors[account];
-            poll();
-            return;
-          }
-          finish('events', slot);
-          fail(sequence, result);
-          return;
-        }
-        finish('events', slot);
-        var data = result.data;
-        if (typeof data.cursor === 'string' && data.cursor) { eventCursors[account] = data.cursor; }
-        var status = data.status && typeof data.status === 'object' ? data.status : {};
-        proxies[account] = status.proxy === true;
-        respond(sequence, protocol.result.ok, [codec.status({
-          connection: connectionState(typeof status.connection === 'string' ? status.connection : data.connection),
-          proxy: proxies[account]
-        })], 0);
-      });
-    }
-    poll();
+    updates.poll(value, account, function(outcome) {
+      if (!live('events', slot)) { return; }
+      finish('events', slot);
+      if (!outcome.ok) {
+        fail(sequence, outcome.result);
+        return;
+      }
+      var data = outcome.result.data;
+      var status = data.status && typeof data.status === 'object' ? data.status : {};
+      proxies[account] = status.proxy === true;
+      var records = [codec.status({
+        connection: connectionState(typeof status.connection === 'string' ? status.connection : data.connection),
+        proxy: proxies[account]
+      })].concat(compose.consume(value, account, outcome, false));
+      respond(sequence, protocol.result.ok, records, 0);
+    });
   }
 
   function release(value) {
@@ -519,6 +546,11 @@ function create(options) {
       case kinds.view_close: viewClose(sequence, payload); break;
       case kinds.set_default: setDefault(sequence, payload); break;
       case kinds.events: events(sequence, payload); break;
+      case kinds.templates: compose.templates(sequence, payload); break;
+      case kinds.draft: compose.draft(sequence, payload); break;
+      case kinds.send: compose.send(sequence, payload); break;
+      case kinds.send_check: compose.sendCheck(sequence, payload); break;
+      case kinds.draft_discard: compose.discard(sequence, payload); break;
       default: reject(sequence, payload, ['REQUEST_KIND']);
     }
   }
@@ -535,12 +567,34 @@ function create(options) {
     slots = {};
     chatCursors = {};
     historyCursors = {};
-    eventCursors = {};
     proxies = {};
     texts = {};
     textOrder = [];
+    titles = {};
+    titleOrder = [];
     options.leases.reset();
+    compose.reset(options.settings.load(options.storage));
   }
+
+  var compose = composeFactory.create({
+    api: options.api,
+    settings: options.settings,
+    storage: options.storage,
+    protocol: protocol,
+    codec: codec,
+    text: options.text,
+    transport: options.transport,
+    updates: updates,
+    now: now,
+    setTimeout: setTimer,
+    clearTimeout: clearTimer,
+    random: options.random,
+    log: options.log,
+    budget: budget,
+    failureCode: failureCode,
+    reject: reject,
+    title: function(account, chat) { return titles[account + '|' + chat] || ''; }
+  });
 
   return {
     handle: handle,

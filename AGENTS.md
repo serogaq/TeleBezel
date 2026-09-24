@@ -15,3 +15,6 @@
 - Account storage uses immutable UUID + storage-generation identity and monotonic desired revisions.
 - Discovered TDLib sessions must remain offline until Laravel reconciliation; tombstoned UUIDs never reactivate.
 - Logout uses TDLib `logOut`; local removal uses `destroy` or verified offline deletion and never Telegram `deleteAccount`.
+- The watch app supports only `emery` and `gabbro`. Its static footprint (`.text+.data+.bss`) is capped at 64 KiB by a uint16 header field and budgeted at 58 KiB by `validate_pbw.py`; keep long-lived watch state on the heap, borrow draw-time buffers from scratch, and never grow `.bss` with large buffers.
+- API access uses one token model: `device` (read and send) and `maintenance` (manage) tokens with separate permission sets and optional account claims; web sessions are short-lived maintenance tokens in a cookie with a token-bound CSRF header.
+- Message sends are idempotent per `Idempotency-Key`; an `unknown` send is never re-sent automatically.

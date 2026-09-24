@@ -7,9 +7,7 @@ namespace App\Repositories;
 use App\Contracts\Repositories\OwnerAccessRepository as OwnerAccessRepositoryContract;
 use App\Data\BootstrapCodeData;
 use App\Data\OwnerCredentials;
-use App\Models\Device;
 use App\Models\Instance;
-use App\Models\OwnerSession;
 use App\Support\Values;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -56,45 +54,10 @@ final class OwnerAccessRepository implements OwnerAccessRepositoryContract
         ]);
     }
 
-    public function createSession(string $instanceId, string $tokenHash, CarbonImmutable $expiresAt): void
-    {
-        OwnerSession::query()->create([
-            'instance_id' => $instanceId,
-            'token_hash' => $tokenHash,
-            'authenticated_at' => now(),
-            'last_interactive_at' => now(),
-            'expires_at' => $expiresAt,
-        ]);
-    }
-
-    public function revokeAccess(string $instanceId): void
-    {
-        OwnerSession::query()->where('instance_id', $instanceId)->whereNull('revoked_at')->update([
-            'revoked_at' => now(),
-        ]);
-        Device::query()->where('instance_id', $instanceId)->whereNull('revoked_at')->update([
-            'revoked_at' => now(),
-        ]);
-    }
-
     public function saveRecoveryHash(string $instanceId, string $hash): void
     {
         Instance::query()->findOrFail($instanceId)->forceFill([
             'recovery_code_hash' => $hash,
-        ])->save();
-    }
-
-    public function activity(string $id): void
-    {
-        OwnerSession::query()->findOrFail($id)->forceFill([
-            'last_interactive_at' => now(),
-        ])->save();
-    }
-
-    public function logout(string $id): void
-    {
-        OwnerSession::query()->findOrFail($id)->forceFill([
-            'revoked_at' => now(),
         ])->save();
     }
 }

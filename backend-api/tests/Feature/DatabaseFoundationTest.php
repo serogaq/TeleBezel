@@ -5,7 +5,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 test('only the foundational tables are present', function (): void {
-    expect(Schema::hasTable('api_clients'))->toBeTrue();
+    expect(Schema::hasTable('access_tokens'))->toBeTrue();
+    expect(Schema::hasTable('api_clients'))->toBeFalse();
+    expect(Schema::hasTable('owner_sessions'))->toBeFalse();
     expect(Schema::hasTable('cache'))->toBeTrue();
     expect(Schema::hasTable('cache_locks'))->toBeTrue();
     expect(Schema::hasTable('users'))->toBeFalse();

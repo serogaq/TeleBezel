@@ -4,79 +4,47 @@
 #include "errors.h"
 #include "format.h"
 #include "generated/protocol.h"
+#include "diag.h"
 #include "icons.h"
+#include "scratch.h"
 #include "theme.h"
 
-#define ROW_INFO 0
 #define PULL_DISTANCE 60
 #define BAR_GAP 3
-#define BAR_INSET 3
 #define BAR_EDGE 7
 #define BAR_NUDGE 4
 #define BAR_PIECES 40
+#define TOGGLE_HEIGHT 19
 
 static TbChatsWindow *s_ticking;
 
-static const char *info_text(TbChatsWindow *view);
-
-static uint16_t info_rows(const TbChatsWindow *view) { return info_text((TbChatsWindow *)view) ? 1 : 0; }
-static bool is_info(const TbChatsWindow *view, uint16_t row) { return row == ROW_INFO && info_rows(view) == 1; }
-static uint16_t first_chat(const TbChatsWindow *view) { return (uint16_t)(info_rows(view) + (view->show_archive ? 1 : 0)); }
+static uint16_t first_chat(const TbChatsWindow *view) { return (uint16_t)(view->show_archive ? 1 : 0); }
 
 static bool has_tail(const TbChatsWindow *view) {
   const TbChats *chats = view->chats;
-  if (!chats->loaded) { return false; }
-  if (chats->count == 0) { return true; }
+  if (!chats->loaded || chats->count == 0) { return true; }
   return chats->tail != TB_TAIL_END && chats->tail != TB_TAIL_FULL;
 }
 
 static uint16_t row_count(const TbChatsWindow *view) { return (uint16_t)(first_chat(view) + view->chats->count + (has_tail(view) ? 1 : 0)); }
-static bool is_toggle(const TbChatsWindow *view, uint16_t row) { return view->show_archive && row == info_rows(view); }
+static bool is_toggle(const TbChatsWindow *view, uint16_t row) { return view->show_archive && row == 0; }
 static bool is_chat(const TbChatsWindow *view, uint16_t row) { return row >= first_chat(view) && row < first_chat(view) + view->chats->count; }
 static bool is_tail(const TbChatsWindow *view, uint16_t row) { return has_tail(view) && row == first_chat(view) + view->chats->count; }
 
-static const char *info_text(TbChatsWindow *view) {
-  const TbChats *chats = view->chats;
-  const TbConnection *connection = view->connection;
-  const TbStrings *strings = view->strings;
-  if (chats->load == TB_CHATS_FIRST || (chats->load == TB_CHATS_REFRESH && chats->count == 0)) { return strings->loading; }
-  if (chats->load == TB_CHATS_REFRESH) { return strings->refreshing; }
-  if (chats->error != TB_ERROR_NONE && chats->load == TB_CHATS_IDLE && chats->tail != TB_TAIL_FAILED) {
-    if (chats->error == TB_RESULT_RATE_LIMITED && chats->retry_after > 0) {
-      static char wait[48];
-      snprintf(wait, sizeof(wait), strings->wait_seconds, (int)chats->retry_after);
-      snprintf(view->buffer, sizeof(view->buffer), "%s%s%s. %s", chats->count ? strings->not_updated : "", chats->count ? ": " : "",
-               wait, strings->retry_hint);
-    } else {
-      snprintf(view->buffer, sizeof(view->buffer), "%s%s%s. %s", chats->count ? strings->not_updated : "", chats->count ? ": " : "",
-               tb_error_text(strings, chats->error), strings->retry_hint);
-    }
-    return view->buffer;
-  }
-  if (connection->error == TB_CONNECTION_ERROR_CANNOT_CONNECT) {
-    snprintf(view->buffer, sizeof(view->buffer), "%s. %s", strings->cannot_connect,
-             connection->proxy ? strings->try_change_proxy : strings->try_enable_proxy);
-    return view->buffer;
-  }
-  if (connection->error == TB_CONNECTION_ERROR_LONG_UPDATE) { return strings->long_update; }
-  return NULL;
-}
-
 static const char *tail_text(const TbChatsWindow *view) {
   const TbChats *chats = view->chats;
+  if (chats->load == TB_CHATS_FIRST || (chats->load == TB_CHATS_REFRESH && chats->count == 0)) { return view->strings->loading; }
+  if (!chats->loaded) { return chats->error != TB_ERROR_NONE ? view->strings->load_failed : view->strings->loading; }
   if (chats->count == 0) { return view->strings->no_chats; }
   if (chats->load == TB_CHATS_MORE) { return view->strings->loading; }
   if (chats->tail == TB_TAIL_FAILED) { return view->strings->load_failed; }
   return view->strings->more_chats;
 }
 
-static char s_content[240];
-static char s_preview[280];
-static char s_title[96];
 
 static void chat_preview(TbChatsWindow *view, const TbChat *chat, char *out, size_t size) {
-  char *content = s_content;
-  tb_format_content(content, sizeof(s_content), view->strings, chat->preview_kind, chat->preview_action, chat->preview_duration,
+  char *content = tb_scratch(TB_SCRATCH_CONTENT);
+  tb_format_content(content, tb_scratch_size(TB_SCRATCH_CONTENT), view->strings, chat->preview_kind, chat->preview_action, chat->preview_duration,
                     chat->extra, chat->preview);
   const bool group = chat->type == TB_CHAT_TYPE_BASIC_GROUP || chat->type == TB_CHAT_TYPE_SUPERGROUP;
   if (chat->flags & TB_CHAT_FLAG_PREVIEW_OUTGOING) {
@@ -92,13 +60,13 @@ static void chat_preview(TbChatsWindow *view, const TbChat *chat, char *out, siz
 
 typedef void (*TbIcon)(GContext *ctx, GRect box, GColor color);
 
-static int16_t icon_size(void) { return tb_theme()->meta_height >= 20 ? 14 : 11; }
+static int16_t icon_size(void) { return 14; }
 
-static int16_t glyph_height(void) { return tb_theme()->meta_height >= 20 ? 11 : 9; }
+static int16_t glyph_height(void) { return 11; }
 
 static int16_t icon_width(TbIcon icon) { return (int16_t)(glyph_height() + (icon == tb_icon_messages ? glyph_height() / 3 : 0)); }
 
-static int16_t glyph_top(void) { return tb_theme()->meta_height >= 20 ? 7 : 5; }
+static int16_t glyph_top(void) { return 7; }
 
 #if !defined(PBL_ROUND)
 static int16_t segment_height(void) { return (int16_t)(tb_theme()->meta_height + 4); }
@@ -152,7 +120,7 @@ static TbSegment segment(TbIcon icon, const char *text) {
 
 static uint16_t s_pull_level;
 
-#define PULL_MAX PBL_IF_ROUND_ELSE(36, PBL_IF_COLOR_ELSE(26, 20))
+#define PULL_MAX PBL_IF_ROUND_ELSE(36, 26)
 
 static int16_t pull_size(void) {
 #if defined(PBL_ROUND)
@@ -176,7 +144,7 @@ static void draw_pull(GContext *ctx, GPoint center, GColor color, int16_t limit)
   const GRect box = GRect(center.x - size / 2, center.y - size / 2, size, size);
   graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_stroke_width(ctx, size >= 20 ? 2 : 1);
-  graphics_context_set_antialiased(ctx, PBL_IF_COLOR_ELSE(true, false));
+  graphics_context_set_antialiased(ctx, true);
   graphics_draw_circle(ctx, GPoint(box.origin.x + size / 2, box.origin.y + size / 2), (uint16_t)(size / 2));
   tb_icon_fill(ctx, box, color, s_pull_level);
 }
@@ -241,12 +209,6 @@ static int16_t isqrt(int32_t value) {
   return (int16_t)root;
 }
 
-static int16_t rim(int16_t reach, int16_t cy, int16_t radius) {
-  const int16_t inner = (int16_t)(radius - BAR_INSET);
-  if (reach >= inner) { return INT16_MAX; }
-  return (int16_t)(cy - isqrt((int32_t)inner * inner - (int32_t)reach * reach));
-}
-
 static int32_t arc_angle(int16_t length, int16_t radius) { return (int32_t)length * TRIG_MAX_ANGLE / (int32_t)(2 * 314 * radius / 100); }
 
 #define GLYPH_PAD 3
@@ -263,8 +225,8 @@ static void draw_piece(GContext *ctx, const TbPiece *piece, GPoint origin) {
 
 #define MASK_SIZE 32
 
-static uint8_t s_mask[MASK_SIZE * MASK_SIZE];
-static uint8_t s_saved[MASK_SIZE * MASK_SIZE];
+static uint8_t *s_mask;
+static uint8_t *s_saved;
 
 static int32_t sample(int32_t x, int32_t y, GSize size) {
   const int32_t left = x >> 8;
@@ -442,31 +404,40 @@ static void bar_update(Layer *layer, GContext *ctx) {
   if (shift < -3 * tb_theme()->meta_height) { return; }
   const int16_t cx = screen.size.w / 2;
   const int16_t cy = (int16_t)(screen.size.h / 2 + shift);
-  static TbPiece pieces[BAR_PIECES];
+  uint8_t *scratch = malloc(2 * MASK_SIZE * MASK_SIZE + BAR_PIECES * sizeof(TbPiece));
+  if (!scratch) { return; }
+  s_mask = scratch;
+  s_saved = scratch + MASK_SIZE * MASK_SIZE;
+  TbPiece *pieces = (TbPiece *)(scratch + 2 * MASK_SIZE * MASK_SIZE);
   const uint8_t left_end = split(pieces, 0, &left);
   const uint8_t middle_end = split(pieces, left_end, &middle);
   const uint8_t right_end = split(pieces, middle_end, &right);
   const int16_t track = (int16_t)(radius - BAR_EDGE - glyph_height() / 2);
   const GPoint center = GPoint(cx, cy);
-  const GPoint scratch = GPoint((int16_t)(cx - MASK_SIZE / 2), (int16_t)(screen.size.h / 2 - MASK_SIZE / 2));
+  const GPoint spot = GPoint((int16_t)(cx - MASK_SIZE / 2), (int16_t)(screen.size.h / 2 - MASK_SIZE / 2));
   const int32_t middle_span = span_angle(pieces, left_end, middle_end, track);
   const int32_t middle_start = -middle_span / 2;
   const int32_t spacing = arc_angle((int16_t)(3 * BAR_GAP), track);
-  const int16_t lowest = (int16_t)(rim(0, cy, radius) + tb_theme()->meta_height + tb_theme()->meta_height / 2);
-  const int16_t drop = (int16_t)(cy - lowest - glyph_height() / 2);
-  const int32_t outer = drop < track ? atan2_lookup(isqrt((int32_t)track * track - (int32_t)drop * drop), drop) : TRIG_MAX_ANGLE / 4;
-  int32_t left_start = -outer;
+  MenuIndex home = {0, view->chats->count > 0 ? first_chat(view) : 0};
+  const int16_t strip = (int16_t)(cy - row_height(view->menu, &home, view) / 2);
+  const int16_t drop = (int16_t)(cy - strip + glyph_height() / 2);
+  const int32_t outer = drop <= 0 ? 0 : drop < track ? atan2_lookup(isqrt((int32_t)track * track - (int32_t)drop * drop), drop) : TRIG_MAX_ANGLE / 4;
+  const int32_t inner = -middle_start + spacing;
   const int32_t left_span = span_angle(pieces, 0, left_end, track);
-  if (left_start + left_span > middle_start - spacing) { left_start = middle_start - spacing - left_span; }
-  int32_t right_start = outer - span_angle(pieces, middle_end, right_end, track);
-  if (right_start < middle_start + middle_span + spacing) { right_start = middle_start + middle_span + spacing; }
+  const int32_t right_span = span_angle(pieces, middle_end, right_end, track);
+  const int32_t right_inner = middle_start + middle_span + spacing;
+  const int32_t left_start = -(outer + inner) / 2 - left_span / 2;
+  const int32_t right_start = (outer + right_inner) / 2 - right_span / 2;
   const int16_t clock_bottom = draw_level(ctx, pieces, left_end, middle_end, cx, cy, radius);
   if (s_pull_level > 0) {
     const int16_t rows_top = (int16_t)(scroll_layer_get_content_offset(menu_layer_get_scroll_layer(view->menu)).y + lead(view));
     draw_pull(ctx, GPoint(cx, (int16_t)((clock_bottom + rows_top) / 2)), tb_theme_accent(false), (int16_t)(rows_top - clock_bottom - 2));
   }
-  draw_arc_of(ctx, pieces, 0, left_end, left_start, track, center, scratch, 0);
-  draw_arc_of(ctx, pieces, middle_end, right_end, right_start, track, center, scratch, 0);
+  draw_arc_of(ctx, pieces, 0, left_end, left_start, track, center, spot, 0);
+  draw_arc_of(ctx, pieces, middle_end, right_end, right_start, track, center, spot, 0);
+  s_mask = NULL;
+  s_saved = NULL;
+  free(scratch);
 }
 #endif
 
@@ -482,15 +453,17 @@ static void draw_header(GContext *ctx, const Layer *cell, uint16_t section, void
   TbSegment right;
   bar_segments(view, &left, &middle, &right);
   const int16_t height = segment_height();
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
+  graphics_context_set_fill_color(ctx, GColorDarkGray);
   graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, height), 0, GCornerNone);
   const int16_t margin = tb_theme()->margin;
   const int16_t right_x = (int16_t)(bounds.size.w - margin - right.width);
   int16_t middle_x = (int16_t)((bounds.size.w - middle.width) / 2);
   const int16_t earliest = (int16_t)(margin + left.width + 2 * BAR_GAP);
   const int16_t latest = (int16_t)(right_x - 2 * BAR_GAP - middle.width);
-  if (middle_x < earliest) { middle_x = earliest; }
-  if (middle_x > latest) { middle_x = latest; }
+  if (middle_x < earliest || middle_x > latest) {
+    middle_x = (int16_t)((margin + left.width + right_x - middle.width) / 2 - 2);
+    if (middle_x < earliest) { middle_x = earliest; }
+  }
   draw_segment(ctx, &middle, GRect(middle_x, 0, middle.width, height), GTextAlignmentCenter);
   draw_segment(ctx, &right, GRect(right_x, 0, right.width, height), GTextAlignmentRight);
   draw_segment(ctx, &left, GRect(margin, 0, middle_x - margin - 2 * BAR_GAP, height), GTextAlignmentLeft);
@@ -517,14 +490,11 @@ static int16_t row_height(MenuLayer *menu, MenuIndex *index, void *context) {
   (void)menu;
   TbChatsWindow *view = context;
   const TbTheme *theme = tb_theme();
-  const GRect bounds = layer_get_bounds(window_get_root_layer(view->window));
   int16_t height = theme->row_min;
   if (is_chat(view, index->row)) {
     height = (int16_t)(theme->title_height + theme->meta_height + 8);
-  } else if (is_info(view, index->row)) {
-    const char *text = info_text(view);
-    height = text ? (int16_t)(tb_theme_text_height(text, theme->meta, bounds.size.w - 2 * theme->margin - 4, bounds.size.h - 20) + 10)
-                  : (int16_t)(theme->title_height + 8);
+  } else if (is_toggle(view, index->row)) {
+    return TOGGLE_HEIGHT;
   } else {
     height = (int16_t)(theme->title_height + 8);
   }
@@ -538,7 +508,7 @@ static void draw_chat(TbChatsWindow *view, GContext *ctx, const Layer *cell, con
   const GRect bounds = layer_get_bounds(cell);
   const int16_t left = theme->margin + 2;
   const int16_t width = bounds.size.w - 2 * theme->margin - 4;
-  static char badge[16];
+  char badge[16];
   tb_format_badge(badge, sizeof(badge), chat->unread, chat->flags);
   int16_t badge_width = 0;
   if (badge[0]) {
@@ -547,28 +517,23 @@ static void draw_chat(TbChatsWindow *view, GContext *ctx, const Layer *cell, con
     const int16_t radius = (int16_t)(height / 2);
     const int16_t span = (int16_t)(size.w + radius + 2);
     badge_width = span > height ? span : height;
-#if defined(PBL_PLATFORM_DIORITE) || defined(PBL_PLATFORM_FLINT)
-    const int16_t pill_y = (int16_t)((bounds.size.h - height) / 2);
-#else
     const int16_t pill_y = (int16_t)(theme->title_height + (theme->meta_height + 2 - height) / 2 + 1);
-#endif
     const GRect pill = GRect(left + width - badge_width, pill_y, badge_width, height);
     const bool muted = (chat->flags & TB_CHAT_FLAG_MUTED) != 0;
-    graphics_context_set_fill_color(ctx, highlighted ? GColorWhite : muted ? PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack) : tb_theme_accent(false));
-    graphics_context_set_antialiased(ctx, PBL_IF_COLOR_ELSE(true, false));
+    graphics_context_set_fill_color(ctx, highlighted ? GColorWhite : muted ? GColorLightGray : tb_theme_accent(false));
+    graphics_context_set_antialiased(ctx, true);
     graphics_fill_circle(ctx, GPoint(pill.origin.x + radius, pill.origin.y + radius), (uint16_t)radius);
     graphics_fill_circle(ctx, GPoint(pill.origin.x + pill.size.w - 1 - radius, pill.origin.y + radius), (uint16_t)radius);
     graphics_fill_rect(ctx, GRect(pill.origin.x + radius, pill.origin.y, pill.size.w - 2 * radius, height), 0, GCornerNone);
-    graphics_context_set_text_color(ctx, highlighted ? PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack) : GColorWhite);
+    graphics_context_set_text_color(ctx, highlighted ? GColorCobaltBlue : GColorWhite);
     graphics_draw_text(ctx, badge, theme->meta_bold,
                        GRect(pill.origin.x, pill.origin.y + (height - glyph_height()) / 2 - glyph_top(), pill.size.w, theme->meta_height),
                        GTextOverflowModeFill, GTextAlignmentCenter, NULL);
   }
   int16_t reserve = badge_width ? (int16_t)(badge_width + 4) : 0;
-#if !defined(PBL_PLATFORM_DIORITE) && !defined(PBL_PLATFORM_FLINT)
   int16_t time_width = 0;
   if (chat->last_date) {
-    static char time_text[16];
+    char time_text[16];
     tb_format_time(time_text, sizeof(time_text), (time_t)chat->last_date, time(NULL), clock_is_24h_style());
     time_width = 56;
     graphics_context_set_text_color(ctx, tb_theme_muted(highlighted));
@@ -577,25 +542,24 @@ static void draw_chat(TbChatsWindow *view, GContext *ctx, const Layer *cell, con
   }
   const int16_t preview_reserve = reserve;
   reserve = time_width;
-#else
-  const int16_t preview_reserve = reserve;
-#endif
   int16_t title_left = left;
+  char *title = tb_scratch(TB_SCRATCH_SHORT);
   const bool saved = (chat->flags & TB_CHAT_FLAG_SAVED) != 0;
   if (saved) {
     const int16_t size = icon_size();
     tb_icon_bookmark(ctx, GRect(left, (theme->title_height - size) / 2 + 1, size, size), tb_theme_accent(highlighted));
     title_left = (int16_t)(left + size + 4);
-    snprintf(s_title, sizeof(s_title), "%s", view->strings->saved_messages);
+    snprintf(title, tb_scratch_size(TB_SCRATCH_SHORT), "%s", view->strings->saved_messages);
   } else {
-    snprintf(s_title, sizeof(s_title), "%s%s", chat->type == TB_CHAT_TYPE_CHANNEL ? "» " : "", tb_or_empty(chat->title));
+    snprintf(title, tb_scratch_size(TB_SCRATCH_SHORT), "%s%s", chat->type == TB_CHAT_TYPE_CHANNEL ? "» " : "", tb_or_empty(chat->title));
   }
   graphics_context_set_text_color(ctx, tb_theme_text(highlighted));
-  graphics_draw_text(ctx, s_title, theme->title, GRect(title_left, -2, width - reserve - (title_left - left), theme->title_height),
+  graphics_draw_text(ctx, title, theme->title, GRect(title_left, -2, width - reserve - (title_left - left), theme->title_height),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  chat_preview(view, chat, s_preview, sizeof(s_preview));
+  char *preview = tb_scratch(TB_SCRATCH_TEXT);
+  chat_preview(view, chat, preview, tb_scratch_size(TB_SCRATCH_TEXT));
   graphics_context_set_text_color(ctx, tb_theme_muted(highlighted));
-  graphics_draw_text(ctx, s_preview, theme->meta, GRect(left, theme->title_height, width - preview_reserve, theme->meta_height + 2),
+  graphics_draw_text(ctx, preview, theme->meta, GRect(left, theme->title_height, width - preview_reserve, theme->meta_height + 2),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
@@ -610,18 +574,9 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
     draw_chat(view, ctx, cell, &view->chats->items[index->row - first_chat(view)]);
   } else if (is_toggle(view, index->row)) {
     graphics_context_set_text_color(ctx, tb_theme_accent(highlighted));
-    graphics_draw_text(ctx, view->chats->list == TB_LIST_ARCHIVE ? view->strings->open_main : view->strings->open_archive, theme->title,
-                       GRect(box.origin.x, 0, box.size.w, box.size.h), GTextOverflowModeTrailingEllipsis, alignment, NULL);
-  } else if (is_info(view, index->row)) {
-    const char *text = info_text(view);
-    if (text) {
-      graphics_context_set_text_color(ctx, tb_theme_muted(highlighted));
-      graphics_draw_text(ctx, text, theme->meta, box, GTextOverflowModeTrailingEllipsis, alignment, NULL);
-    } else {
-      graphics_context_set_text_color(ctx, tb_theme_accent(highlighted));
-      graphics_draw_text(ctx, view->strings->refresh, theme->title, GRect(box.origin.x, 0, box.size.w, box.size.h),
-                         GTextOverflowModeTrailingEllipsis, alignment, NULL);
-    }
+    graphics_draw_text(ctx, view->chats->list == TB_LIST_ARCHIVE ? view->strings->open_main : view->strings->open_archive,
+                       fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GRect(box.origin.x, (bounds.size.h - 18) / 2, box.size.w, 18),
+                       GTextOverflowModeTrailingEllipsis, alignment, NULL);
   } else {
     graphics_context_set_text_color(ctx, tb_theme_accent(highlighted));
     graphics_draw_text(ctx, tail_text(view), theme->title, GRect(box.origin.x, 0, box.size.w, box.size.h), GTextOverflowModeTrailingEllipsis,
@@ -653,14 +608,9 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
   } else if (is_toggle(view, index->row)) {
     tb_chats_window_reset(view);
     tb_chats_set_list(view->chats, view->chats->list == TB_LIST_ARCHIVE ? TB_LIST_MAIN : TB_LIST_ARCHIVE);
-  } else if (is_info(view, index->row)) {
-    if (view->chats->error != TB_ERROR_NONE && view->chats->tail == TB_TAIL_FAILED && view->chats->loaded) {
-      tb_chats_retry(view->chats);
-    } else {
-      refresh(view);
-    }
   } else if (is_tail(view, index->row)) {
-    if (view->chats->count == 0) { refresh(view); }
+    if (!view->chats->loaded && view->chats->error != TB_ERROR_NONE) { tb_chats_retry(view->chats); }
+    else if (view->chats->count == 0) { refresh(view); }
     else { tb_chats_load_more(view->chats); }
   }
 }
@@ -764,6 +714,11 @@ static void up_pressed(ClickRecognizerRef recognizer, void *context) {
     s_up_repeat = NULL;
   }
   if (menu_layer_get_selected_index(view->menu).row == 0) {
+    if (tb_notify_view_visible(&view->notice) && !view->notice.notify->focused) {
+      tb_notify_focus(view->notice.notify, true);
+      return;
+    }
+    tb_notify_focus(view->notice.notify, false);
     tb_pull_press(&view->pull);
     return;
   }
@@ -782,12 +737,20 @@ static void up_released(ClickRecognizerRef recognizer, void *context) {
 static void down_click(ClickRecognizerRef recognizer, void *context) {
   (void)recognizer;
   TbChatsWindow *view = context;
+  if (view->notice.notify->focused) {
+    tb_notify_focus(view->notice.notify, false);
+    return;
+  }
   menu_layer_set_selected_next(view->menu, false, MenuRowAlignCenter, true);
 }
 
 static void select_single(ClickRecognizerRef recognizer, void *context) {
   (void)recognizer;
   TbChatsWindow *view = context;
+  if (view->notice.notify->focused) {
+    tb_notify_view_activate(&view->notice);
+    return;
+  }
   MenuIndex index = menu_layer_get_selected_index(view->menu);
   select_click(view->menu, &index, view);
 }
@@ -817,6 +780,11 @@ static void touched(const TouchEvent *event, void *context) {
   TbChatsWindow *view = s_touch_view;
   if (!view || !view->menu || event->non_navigational) { return; }
   if (event->type == TouchEvent_Touchdown) {
+    if (tb_notify_view_hit(&view->notice, event->y)) {
+      s_touch_armed = false;
+      tb_notify_view_activate(&view->notice);
+      return;
+    }
     s_touch_start = event->y;
     s_touch_armed = scroll_layer_get_content_offset(menu_layer_get_scroll_layer(view->menu)).y >= 0;
     return;
@@ -877,12 +845,18 @@ static void window_load(Window *window) {
   view->bar = layer_create(layer_get_bounds(root));
   layer_set_update_proc(view->bar, bar_update);
   layer_add_child(root, view->bar);
+  tb_notify_view_attach(&view->notice, root, 46);
+#else
+  tb_notify_view_attach(&view->notice, root, segment_height());
 #endif
   restore(view);
+  tb_diag_event("window_push", "chats");
 }
 
 static void window_unload(Window *window) {
   TbChatsWindow *view = window_get_user_data(window);
+  tb_notify_view_detach(&view->notice);
+  tb_diag_event("window_pop", "chats");
 #if defined(PBL_ROUND)
   layer_destroy(view->bar);
   view->bar = NULL;
@@ -917,6 +891,7 @@ static void window_disappear(Window *window) {
   tb_connection_set_active(view->connection, false);
   tb_pull_reset(&view->pull);
   s_pull_level = 0;
+  tb_notify_focus(view->notice.notify, false);
   up_released(NULL, view);
 #if defined(PBL_TOUCH)
   if (s_touch_view == view) {
@@ -926,7 +901,9 @@ static void window_disappear(Window *window) {
 #endif
 }
 
-void tb_chats_window_init(TbChatsWindow *view, TbChats *chats, TbConnection *connection, const TbStrings *strings, TbChatsActions actions) {
+void tb_chats_window_init(TbChatsWindow *view, TbChats *chats, TbConnection *connection, TbNotify *notify, TbNotifyActivate activate,
+                          const TbStrings *strings, TbChatsActions actions) {
+  tb_notify_view_init(&view->notice, notify, activate, actions.context);
   view->chats = chats;
   view->connection = connection;
   view->strings = strings;
@@ -962,4 +939,5 @@ void tb_chats_window_reload(TbChatsWindow *view) {
   if (!view->menu) { return; }
   menu_layer_reload_data(view->menu);
   restore(view);
+  tb_notify_view_refresh(&view->notice);
 }

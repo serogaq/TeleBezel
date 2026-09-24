@@ -8,13 +8,20 @@ sdk="${PEBBLE_SDK_VERSION:?PEBBLE_SDK_VERSION is required}"
 pbw="$root/app/build/app.pbw"
 out="$root/app/build/emulator/$platform"
 python=$(head -1 "$(command -v pebble)" | sed 's/^#!//')
-test -f "$pbw" || { echo "Build the app first: make app-build" >&2; exit 1; }
+test -f "$pbw" || { echo "Build the app first: make app-emulator-check builds it with TB_DIAG=1" >&2; exit 1; }
 rm -rf "$out"
 mkdir -p "$out"
 
 PORT="$port" MOCK_CONNECTION="connecting,updating,updating,ready" node "$root/app/tests/e2e/mock_api.js" >"$out/mock.log" 2>&1 &
 mock=$!
-trap 'kill "$mock" 2>/dev/null || true' EXIT
+logs=""
+serial=""
+cleanup() {
+  kill "$mock" 2>/dev/null || true
+  if test -n "$logs"; then kill "$logs" 2>/dev/null || true; fi
+  if test -n "$serial"; then kill "$serial" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
 
 configure() {
 "$python" - "$platform" "$sdk" "$port" "$1" <<'PY'
@@ -39,6 +46,10 @@ repeat() { control button "$1" "$2"; }
 install() { for _ in 1 2 3; do pebble install --emulator "$platform" "$pbw" && return 0; sleep 5; done; return 1; }
 
 install
+pebble logs --emulator "$platform" >"$out/diag.log" 2>&1 &
+logs=$!
+"$python" "$root/tests/emulator/serial.py" "$platform" "$out/serial.log" &
+serial=$!
 shot 01-accounts 6
 press select; shot 02-chats-connecting 1
 shot 02-chats 10
@@ -65,6 +76,12 @@ pebble kill >/dev/null 2>&1 || true
 sleep 3
 configure 0
 install
+kill "$logs" 2>/dev/null || true
+pebble logs --emulator "$platform" >"$out/diag-connecting.log" 2>&1 &
+logs=$!
+kill "$serial" 2>/dev/null || true
+"$python" "$root/tests/emulator/serial.py" "$platform" "$out/serial.log" &
+serial=$!
 sleep 8; press select; shot 14-connecting-hidden-archive 3
 shot 15-cannot-connect 16
 repeat up 3; shot 16-topbar 1

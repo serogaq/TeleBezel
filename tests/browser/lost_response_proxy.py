@@ -39,7 +39,7 @@ class Handler(BaseHTTPRequestHandler):
             connection.request(self.command, self.path, body=body, headers=headers)
             response = connection.getresponse()
             payload = response.read()
-            create = self.command == "POST" and self.path == "/v1/owner/telegram/accounts"
+            create = self.command == "POST" and self.path == "/v1/telegram/accounts"
             if create:
                 with capture_lock:
                     with open(capture_path, "a", encoding="utf-8") as output:

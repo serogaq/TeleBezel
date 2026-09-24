@@ -49,13 +49,15 @@ int main(void) {
   assert(equals(chat.id, "-1009007199254740993") && equals(chat.title, "Группа 👋"));
   assert(chat.type == TB_CHAT_TYPE_BASIC_GROUP && chat.flags == 9 && chat.unread == 1234 && chat.last_date == 1700000000);
   assert(chat.preview_kind == TB_KIND_PHOTO && equals(chat.preview_sender, "Ада") && equals(chat.preview_text, "Подпись к фото"));
+  assert(chat.send == TB_CAN_SEND_READ_ONLY);
 
   body = single(tb_vector_message, sizeof(tb_vector_message), TB_RECORD_MESSAGE);
   TbMessageRecord message;
   assert(tb_codec_message(&body, &message));
-  assert(equals(message.id, "9007199254740993") && message.date == 1700000123 && message.flags == 3);
+  assert(equals(message.id, "9007199254740993") && message.date == 1700000123 && message.flags == (3 | TB_MESSAGE_FLAG_REPLY));
+  assert(equals(message.reply_id, "55") && equals(message.reply_sender, "Ада") && equals(message.reply_text, "Когда встреча?"));
   assert(message.kind == TB_KIND_VOICE_NOTE && message.duration == 74 && equals(message.sender, "Ada Lovelace"));
-  assert(equals(message.text, "Hello, мир 😀"));
+  assert(equals(message.text, "Hello, мир 😀") && equals(message.forward, "News · Editor"));
 
   body = single(tb_vector_message_truncated, sizeof(tb_vector_message_truncated), TB_RECORD_MESSAGE);
   assert(tb_codec_message(&body, &message));
@@ -64,6 +66,38 @@ int main(void) {
   body = single(tb_vector_text, sizeof(tb_vector_text), TB_RECORD_TEXT);
   TbSpan text;
   assert(tb_codec_text(&body, &text) && equals(text, "При"));
+
+  body = single(tb_vector_templates, sizeof(tb_vector_templates), TB_RECORD_TEMPLATES);
+  TbTemplatesRecord templates;
+  assert(tb_codec_templates(&body, &templates) && templates.revision == 70000 && templates.count == 3 && templates.flags == 1);
+
+  body = single(tb_vector_template, sizeof(tb_vector_template), TB_RECORD_TEMPLATE);
+  TbTemplateRecord template_record;
+  assert(tb_codec_template(&body, &template_record) && template_record.index == 2 && template_record.length == 600);
+  assert(equals(template_record.preview, "Буду через 10 минут"));
+
+  body = single(tb_vector_draft, sizeof(tb_vector_draft), TB_RECORD_DRAFT);
+  TbDraftRecord draft;
+  assert(tb_codec_draft(&body, &draft) && draft.id == 4000000000u && draft.bytes == 1030 && draft.units == 520);
+  assert(draft.flags == TB_DRAFT_FLAG_TOO_LONG);
+
+  body = single(tb_vector_send_state, sizeof(tb_vector_send_state), TB_RECORD_SEND_STATE);
+  TbSendStateRecord state;
+  assert(tb_codec_send_state(&body, &state) && state.draft_id == 7 && state.state == TB_SEND_STATE_FAILED);
+  assert(state.code == TB_RESULT_SEND_RATE_LIMITED && state.retry_after == 30 && state.flags == TB_SEND_FLAG_RETRYABLE);
+  assert(equals(state.chat, "-1009007199254740993") && state.message.length == 0 && equals(state.title, "Группа 👋"));
+  assert(equals(state.preview, "Скоро буду"));
+
+  body = single(tb_vector_pending_send, sizeof(tb_vector_pending_send), TB_RECORD_PENDING_SEND);
+  assert(tb_codec_send_state(&body, &state) && state.draft_id == 8 && (state.flags & TB_SEND_FLAG_RESTORED));
+
+  for (uint16_t cut = 0; cut < sizeof(tb_vector_send_state); ++cut) {
+    TbCursor cursor;
+    TbCursor partial;
+    uint8_t type = 0;
+    tb_cursor_init(&cursor, tb_vector_send_state, cut);
+    assert(!tb_codec_next(&cursor, &type, &partial) || !tb_codec_send_state(&partial, &state));
+  }
 
   for (uint16_t cut = 0; cut < sizeof(tb_vector_chat); ++cut) {
     TbCursor cursor;
@@ -94,6 +128,10 @@ int main(void) {
   assert(tb_copy_id(identifier, sizeof(identifier), (TbSpan){(const uint8_t *)"9223372036854775807", 19}, true));
   assert(tb_parse_id("-9223372036854775808", &parsed) && parsed == INT64_MIN);
   assert(!tb_parse_id("-9223372036854775809", &parsed));
+  assert(tb_parse_id("9223372036854775807", &parsed) && parsed == INT64_MAX);
+  assert(!tb_parse_id("9223372036854775808", &parsed));
+  assert(!tb_parse_id("92233720368547758070", &parsed));
+  assert(!tb_parse_id("-92233720368547758080", &parsed));
   char uuid[37];
   assert(tb_copy_uuid(uuid, sizeof(uuid), (TbSpan){(const uint8_t *)"00112233-4455-4677-8899-aabbccddeeff", 36}));
   assert(!tb_copy_uuid(uuid, sizeof(uuid), (TbSpan){(const uint8_t *)"00112233-4455-4677-8899_aabbccddeeff", 36}));

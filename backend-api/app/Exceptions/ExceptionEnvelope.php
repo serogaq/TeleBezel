@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Exceptions;
 
-use App\Models\Device;
+use App\Models\AccessToken;
 use App\Models\ProxyProfile;
 use App\Models\TelegramAccount;
 use Illuminate\Contracts\Encryption\DecryptException;
@@ -19,15 +19,16 @@ final class ExceptionEnvelope
 {
     private const MODEL_CODES = [
         ProxyProfile::class => 'proxy.not_found',
-        Device::class => 'device.not_found',
+        AccessToken::class => 'device.not_found',
         TelegramAccount::class => 'account.not_found',
     ];
 
     private const PATH_CODES = [
-        '#^v1/(owner/)?telegram/accounts/#' => 'account.not_found',
-        '#^v1/owner/proxies/#' => 'proxy.not_found',
-        '#^v1/owner/devices/#' => 'device.not_found',
-        '#^v1/owner/quick-replies/#' => 'quick_replies.not_found',
+        '#^v1/telegram/accounts/[^/]+/sends/#' => 'operation.not_found',
+        '#^v1/telegram/accounts/#' => 'account.not_found',
+        '#^v1/proxies/#' => 'proxy.not_found',
+        '#^v1/devices/#' => 'device.not_found',
+        '#^v1/quick-replies/#' => 'quick_replies.not_found',
     ];
 
     public static function applies(Request $request): bool

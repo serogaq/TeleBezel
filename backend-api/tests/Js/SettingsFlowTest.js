@@ -14,10 +14,10 @@ test('authorization action preserves the server authorization version', () => {
 });
 
 test('owner mutations record activity without recursively touching auth endpoints', () => {
-  assert.equal(flow.shouldRecordOwnerActivity('/v1/owner/telegram/accounts/id/authorization/actions', 'POST'), true);
-  assert.equal(flow.shouldRecordOwnerActivity('/v1/owner/activity', 'POST'), false);
-  assert.equal(flow.shouldRecordOwnerActivity('/v1/owner/login', 'POST'), false);
-  assert.equal(flow.shouldRecordOwnerActivity('/v1/owner/settings', 'GET'), false);
+  assert.equal(flow.shouldRecordOwnerActivity('/v1/telegram/accounts/id/authorization/actions', 'POST'), true);
+  assert.equal(flow.shouldRecordOwnerActivity('/v1/session/activity', 'POST'), false);
+  assert.equal(flow.shouldRecordOwnerActivity('/v1/session/login', 'POST'), false);
+  assert.equal(flow.shouldRecordOwnerActivity('/v1/settings', 'GET'), false);
 });
 
 test('account controls follow runtime readiness and expose terminal errors', () => {

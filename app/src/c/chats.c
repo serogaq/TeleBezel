@@ -77,6 +77,7 @@ static bool append(TbChats *chats, const TbChatRecord *record) {
   item->type = record->type;
   item->flags = record->flags;
   item->preview_kind = record->preview_kind;
+  item->send = record->send;
   item->preview_action = record->preview_action;
   item->preview_duration = record->preview_duration;
   item->unread = record->unread;

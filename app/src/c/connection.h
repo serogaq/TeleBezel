@@ -18,6 +18,7 @@ typedef struct {
   void (*cancel)(void *context);
   uint32_t (*now)(void *context);
   void *context;
+  void (*records)(void *context, const uint8_t *payload, uint16_t length);
 } TbConnectionPorts;
 
 typedef struct {

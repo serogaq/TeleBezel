@@ -12,13 +12,15 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
 use Symfony\Component\HttpFoundation\Response;
 
-final class RateLimitApiClient
+final class RateLimitToken
 {
     /** @param Closure(Request): Response $next */
     public function handle(Request $request, Closure $next): Response
     {
-        $key = RateLimitCacheKeys::publicApi(RequestContext::principal($request)->id);
-        if (RateLimiter::tooManyAttempts($key, 60)) {
+        $principal = RequestContext::principal($request);
+        $maximum = $principal->type === 'device' ? 60 : 240;
+        $key = RateLimitCacheKeys::publicApi($principal->id);
+        if (RateLimiter::tooManyAttempts($key, $maximum)) {
             throw new ApiException('rate_limit.exceeded', 429, RateLimiter::availableIn($key));
         }
         RateLimiter::hit($key, 60);

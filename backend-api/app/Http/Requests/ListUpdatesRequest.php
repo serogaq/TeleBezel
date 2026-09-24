@@ -12,6 +12,8 @@ final class ListUpdatesRequest extends ApiFormRequest
         return [
             'cursor' => ['sometimes', 'string', 'max:4096'],
             'limit' => ['sometimes', 'integer', 'between:1,100'],
+            'types' => ['sometimes', 'string', 'max:64', 'regex:/^(chat|message|send|connection)(,(chat|message|send|connection))*$/'],
+            'wait' => ['sometimes', 'integer', 'in:0'],
         ];
     }
 }

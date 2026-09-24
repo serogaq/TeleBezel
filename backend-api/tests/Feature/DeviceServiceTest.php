@@ -1,24 +1,35 @@
 <?php
 
+use App\Contracts\Repositories\AccessTokenRepository;
 use App\Contracts\Repositories\DeviceRepository;
+use App\Contracts\TransactionManager;
 use App\Data\PrincipalContext;
+use App\Enums\TokenType;
 use App\Exceptions\ApiException;
+use App\Services\AccessTokenService;
 use App\Services\DeviceService;
 use Tests\Fakes\FakeTdlibGateway;
 
-test('device preferences reject owner scope before touching persistence', function () {
+function deviceServiceFor(AccessTokenRepository $tokens, FakeTdlibGateway $tdlib, ?DeviceRepository $devices = null): DeviceService
+{
+    return new DeviceService($devices ?? Mockery::mock(DeviceRepository::class), $tokens, new AccessTokenService($tokens, $tdlib), app(TransactionManager::class));
+}
+
+test('device preferences reject maintenance scope before touching persistence', function () {
     $repository = Mockery::mock(DeviceRepository::class);
     $repository->shouldNotReceive('preferences');
-    $service = new DeviceService($repository, new FakeTdlibGateway);
-    expect(fn () => $service->preferences(new PrincipalContext('owner', 'owner-id')))
+    $service = deviceServiceFor(Mockery::mock(AccessTokenRepository::class), new FakeTdlibGateway, $repository);
+    expect(fn () => $service->preferences(new PrincipalContext('maintenance', 'maintenance-id')))
         ->toThrow(ApiException::class, 'auth.insufficient_scope');
 });
 
 test('device revocation remains durable when runtime lease cleanup is unavailable', function () {
-    $repository = Mockery::mock(DeviceRepository::class);
+    $tokens = Mockery::mock(AccessTokenRepository::class);
     $revoked = false;
-    $repository->shouldReceive('revoke')->once()->with('instance', 'device')->andReturnUsing(function () use (&$revoked) {
+    $tokens->shouldReceive('revoke')->once()->with('device', 'instance', TokenType::Device)->andReturnUsing(function () use (&$revoked) {
         $revoked = true;
+
+        return TokenType::Device;
     });
     $tdlib = new FakeTdlibGateway;
     $tdlib->queue('releasePrincipalInterests', function ($arguments) use (&$revoked) {
@@ -30,15 +41,15 @@ test('device revocation remains durable when runtime lease cleanup is unavailabl
         ]);
         throw new ApiException('service.tdlib_unavailable', 503);
     });
-    (new DeviceService($repository, $tdlib))->revoke('instance', 'device', 'request');
+    deviceServiceFor($tokens, $tdlib)->revoke('instance', 'device', 'request');
     $tdlib->assertDrained();
 });
 
-test('failed revocation never releases runtime leases', function () {
-    $repository = Mockery::mock(DeviceRepository::class);
-    $repository->shouldReceive('revoke')->once()->andThrow(new ApiException('device.not_found', 404));
+test('an unknown device is not found and never releases runtime leases', function () {
+    $tokens = Mockery::mock(AccessTokenRepository::class);
+    $tokens->shouldReceive('revoke')->once()->andReturnNull();
     $tdlib = new FakeTdlibGateway;
-    expect(fn () => (new DeviceService($repository, $tdlib))->revoke('instance', 'device', 'request'))
+    expect(fn () => deviceServiceFor($tokens, $tdlib)->revoke('instance', 'device', 'request'))
         ->toThrow(ApiException::class, 'device.not_found');
     expect($tdlib->calls)->toBe([]);
 });

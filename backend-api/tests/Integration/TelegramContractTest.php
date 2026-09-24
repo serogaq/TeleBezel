@@ -1,10 +1,8 @@
 <?php
 
 use App\Contracts\TdlibGateway;
+use App\Enums\TokenType;
 use App\Exceptions\ApiException;
-use App\Models\ApiClient;
-use App\Models\Instance;
-use App\Models\OwnerSession;
 use App\Models\TelegramAccount;
 use App\Services\TelegramAccountService;
 use Illuminate\Support\Facades\Http;
@@ -19,12 +17,8 @@ beforeEach(function (): void {
     ]);
     Http::preventStrayRequests();
     Http::allowStrayRequests([$this->td->url.'/*']);
-    $this->token = 'tb_'.str_repeat('a', 43);
-    $this->principal = ApiClient::query()->create([
-        'name' => 'functional',
-        'token_prefix' => substr($this->token, 0, 12),
-        'token_hash' => hash('sha256', $this->token),
-    ]);
+    $this->token = issueTestToken(TokenType::Maintenance)['token'];
+    $this->device = issueTestToken(TokenType::Device);
     $this->withToken($this->token);
     $this->view = (string) Str::uuid();
     $this->account = $this->withHeader('Idempotency-Key', 'functional-create')->postJson('/v1/telegram/accounts', [
@@ -177,6 +171,7 @@ test('authorization timeout reports unknown outcome and releases the busy flag',
 
 test('chat lists paginate by signed string IDs and bind cursors to account and list', function (): void {
     contractState($this, 'ready');
+    $this->withToken($this->device['token']);
     foreach ([['9007199254740993', 'main', 300], ['42', 'main', 200], ['-100123', 'archive', 100]] as [$id, $list, $order]) {
         $this->td->control([
             'op' => 'chat',
@@ -200,9 +195,10 @@ test('chat lists paginate by signed string IDs and bind cursors to account and l
         'function' => 'chats',
     ]);
     $this->getJson($this->base.'/chats')->assertOk()->assertJsonPath('data.partial', true)->assertJsonPath('data.source', 'tdlib_memory')->assertJsonCount(2, 'data.items');
-    $second = $this->withHeader('Idempotency-Key', 'functional-second')->postJson('/v1/telegram/accounts', [
+    $second = $this->withToken($this->token)->withHeader('Idempotency-Key', 'functional-second')->postJson('/v1/telegram/accounts', [
         'label' => 'Second',
     ])->assertAccepted()->json('data.id');
+    $this->withToken($this->device['token']);
     $this->artisan('telebezel:accounts-reconcile')->assertSuccessful();
     $this->td->control([
         'op' => 'state',
@@ -216,6 +212,7 @@ test('chat lists paginate by signed string IDs and bind cursors to account and l
 
 test('history reads local data first and schedules refresh', function (): void {
     contractState($this, 'ready');
+    $this->withToken($this->device['token']);
     $url = $this->base.'/chats/42/messages?view_id='.$this->view.'&limit=2';
     $this->td->control([
         'op' => 'response',
@@ -268,6 +265,7 @@ test('history reads local data first and schedules refresh', function (): void {
 
 test('chat and message updates can be consumed incrementally without leaking accounts', function (): void {
     contractState($this, 'ready');
+    $this->withToken($this->device['token']);
     $this->td->control([
         'op' => 'chat',
     ]);
@@ -294,8 +292,8 @@ test('chat and message updates can be consumed incrementally without leaking acc
     contractEventually(fn () => count(app(TdlibGateway::class)->updates($this->account, [
         'cursor' => $cursor,
     ], (string) Str::uuid())['items']) === 3);
-    $first = $this->getJson($this->base.'/updates?limit=1&cursor='.urlencode($cursor))->assertOk()->assertJsonCount(1, 'data.items')->assertJsonPath('data.has_more', true)->json('data');
-    $this->getJson($this->base.'/updates?cursor='.urlencode($first['cursor']))->assertOk()->assertJsonCount(2, 'data.items')->assertJsonPath('data.has_more', false);
+    $first = $this->getJson($this->base.'/updates?limit=1&cursor='.urlencode($cursor))->assertOk()->assertJsonCount(1, 'data.events')->assertJsonPath('data.has_more', true)->json('data');
+    $this->getJson($this->base.'/updates?cursor='.urlencode($first['cursor']))->assertOk()->assertJsonCount(2, 'data.events')->assertJsonPath('data.has_more', false);
     $this->getJson($this->base.'/updates?cursor=broken')->assertStatus(409)->assertJsonPath('error.code', 'sync.resync_required');
     $this->getJson($this->base.'/chats/42?view_id='.$this->view)->assertOk()->assertJsonPath('data.item.title', 'Changed');
     $this->getJson($this->base.'/chats/404?view_id='.$this->view)->assertNotFound()->assertJsonPath('error.code', 'chat.not_found');
@@ -303,6 +301,7 @@ test('chat and message updates can be consumed incrementally without leaking acc
 
 test('interest leases coalesce, enforce limits, release principals and roll back failed opens', function (): void {
     contractState($this, 'ready');
+    $this->withToken($this->device['token']);
     $path = $this->base.'/chats/42/interests/';
     $other = (string) Str::uuid();
     $this->putJson($path.$this->view)->assertOk()->assertJsonPath('data.active', true);
@@ -330,7 +329,7 @@ test('interest leases coalesce, enforce limits, release principals and roll back
         $this->putJson($path.Str::uuid())->assertOk();
     }
     $this->putJson($path.Str::uuid())->assertStatus(429)->assertJsonPath('error.code', 'interest.limit_reached');
-    app(TdlibGateway::class)->releasePrincipalInterests('maintenance', $this->principal->id, (string) Str::uuid());
+    app(TdlibGateway::class)->releasePrincipalInterests('device', $this->device['id'], (string) Str::uuid());
     $this->putJson($path.Str::uuid())->assertOk();
 });
 
@@ -381,6 +380,7 @@ test('lifecycle, idempotency, proxy application and tombstones cross both servic
 });
 
 test('public validation rejects malformed read requests before sending Telegram commands', function (string $suffix, int $status, string $error): void {
+    $this->withToken($this->device['token']);
     $before = $this->td->control([
         'op' => 'stats',
     ])['counts'];
@@ -456,32 +456,24 @@ test('failed lifecycle commands preserve intent and recover without duplicate re
 
 test('revoking one device closes only its leases and its token stops working', function (): void {
     contractState($this, 'ready');
-    $instance = Instance::query()->create([]);
-    $ownerToken = 'tbo_'.Str::random(48);
-    OwnerSession::query()->create([
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $ownerToken),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-    ]);
-    $this->withCredentials()->withCookie('telebezel_owner', $ownerToken);
-    $first = $this->postJson('/v1/owner/devices', [
+    $ownerToken = issueWebSession()['token'];
+    asWebSession($this, $ownerToken);
+    $first = $this->postJson('/v1/devices', [
         'name' => 'First',
     ])->assertCreated()->json('data');
-    $second = $this->postJson('/v1/owner/devices', [
+    $second = $this->postJson('/v1/devices', [
         'name' => 'Second',
     ])->assertCreated()->json('data');
     $lease = $this->base.'/chats/42/interests/'.$this->view;
     $this->withToken($first['token'])->putJson($lease)->assertOk();
     $this->withToken($second['token'])->putJson($lease)->assertOk();
-    $this->deleteJson('/v1/owner/devices/'.$first['id'])->assertOk();
+    asWebSession($this, $ownerToken)->deleteJson('/v1/devices/'.$first['id'])->assertOk();
     expect($this->td->control([
         'op' => 'stats',
     ])['counts']['close'])->toBe(0);
     $this->withToken($first['token'])->putJson($lease)->assertUnauthorized();
     $this->withToken($second['token'])->putJson($lease)->assertOk();
-    $this->deleteJson('/v1/owner/devices/'.$second['id'])->assertOk();
+    asWebSession($this, $ownerToken)->deleteJson('/v1/devices/'.$second['id'])->assertOk();
     expect($this->td->control([
         'op' => 'stats',
     ])['counts']['close'])->toBe(1);
@@ -489,6 +481,7 @@ test('revoking one device closes only its leases and its token stops working', f
 
 test('local history timeout reports an incomplete range within the public HTTP deadline', function (): void {
     contractState($this, 'ready');
+    $this->withToken($this->device['token']);
     $this->td->control([
         'op' => 'response',
         'function' => 'history',
@@ -519,6 +512,7 @@ test('a failed proxy ping returns its safe error through the real gateway', func
 });
 
 test('failed close remains retryable instead of silently leaving a chat open', function (): void {
+    $this->withToken($this->device['token']);
     contractState($this, 'ready');
     $path = $this->base.'/chats/42/interests/'.$this->view;
     $this->putJson($path)->assertOk();
@@ -535,10 +529,12 @@ test('failed close remains retryable instead of silently leaving a chat open', f
 });
 
 test('the chat list of an account that is not authorized asks for authorization instead of retrying', function (): void {
+    $this->withToken($this->device['token']);
     $this->getJson($this->base.'/chats')->assertStatus(409)->assertJsonPath('error.code', 'authorization.invalid_state');
 });
 
 test('the account owner chat is marked as saved messages', function (): void {
+    $this->withToken($this->device['token']);
     contractState($this, 'ready');
     $this->td->control([
         'op' => 'chat',
@@ -555,6 +551,7 @@ test('the account owner chat is marked as saved messages', function (): void {
 });
 
 test('watch read contract shapes match the shared fixtures', function (): void {
+    $this->withToken($this->device['token']);
     contractState($this, 'ready');
     $this->td->control([
         'op' => 'user',
@@ -667,3 +664,127 @@ function contractShape(mixed $value): mixed
 
     return get_debug_type($value);
 }
+
+function contractSendReady(object $test): string
+{
+    contractState($test, 'ready');
+    $test->td->control([
+        'op' => 'chat',
+    ]);
+    contractEventually(fn () => isset(app(TdlibGateway::class)->chats($test->account, [
+        'list' => 'main',
+    ], (string) Str::uuid())['items'][0]));
+    $test->withToken($test->device['token']);
+
+    return $test->base.'/chats/42/messages';
+}
+
+test('messages and replies cross both services and are sent exactly once per key', function (): void {
+    $url = contractSendReady($this);
+    $this->td->control([
+        'op' => 'auto_send',
+    ]);
+    $this->td->control([
+        'op' => 'answer_lookups',
+    ]);
+    $first = $this->withHeader('Idempotency-Key', 'functional-send-1')->postJson($url, [
+        'text' => 'Привет с часов',
+    ])->assertStatus(202)->assertJsonPath('data.operation.state', 'sent')->json('data.operation');
+    expect($first['message_id'])->toBe('5000');
+    $this->withHeader('Idempotency-Key', 'functional-send-1')->postJson($url, [
+        'text' => 'Привет с часов',
+    ])->assertStatus(202)->assertJsonPath('data.operation.id', $first['id']);
+    $this->withHeader('Idempotency-Key', 'functional-send-2')->postJson($url, [
+        'text' => 'Ответ',
+        'reply_to_message_id' => '55',
+    ])->assertStatus(202)->assertJsonPath('data.operation.state', 'sent')->assertJsonPath('data.operation.reply_dropped', false);
+    $sends = $this->td->control([
+        'op' => 'stats',
+    ])['sends'];
+    expect($sends)->toHaveCount(2)
+        ->and($sends[0]['text_bytes'])->toBe(strlen('Привет с часов'))
+        ->and($sends[1]['reply_to'])->toBe('55');
+    $this->getJson($this->base.'/chats/42/messages/5000?view_id='.$this->view)->assertOk()
+        ->assertJsonPath('data.item.sending_state', null)
+        ->assertJsonPath('data.item.content.text', 'Привет с часов');
+    $this->getJson($this->base.'/chats/42?view_id='.$this->view)->assertOk()->assertJsonPath('data.item.can_send.text', true);
+});
+
+test('refusals are safe codes and a reply that cannot be kept is not sent', function (): void {
+    $url = contractSendReady($this);
+    $this->td->control([
+        'op' => 'answer_lookups',
+    ]);
+    $this->td->control([
+        'op' => 'deny_replies',
+    ]);
+    $this->withHeader('Idempotency-Key', 'functional-send-3')->postJson($url, [
+        'text' => 'Reply',
+        'reply_to_message_id' => '55',
+    ])->assertStatus(202)->assertJsonPath('data.operation.state', 'failed')->assertJsonPath('data.operation.error.code', 'message.reply_unavailable');
+    $this->td->control([
+        'op' => 'response',
+        'function' => 'send',
+        'code' => 403,
+        'message' => 'CHAT_WRITE_FORBIDDEN SECRET_TELEGRAM_ERROR',
+    ]);
+    $this->withHeader('Idempotency-Key', 'functional-send-4')->postJson($url, [
+        'text' => 'Forbidden',
+    ])->assertStatus(202)->assertJsonPath('data.operation.error.code', 'message.send_forbidden')->assertJsonPath('data.operation.retryable', false);
+    expect($this->td->control([
+        'op' => 'stats',
+    ])['sends'])->toHaveCount(1);
+    $this->withToken($this->token)->withHeader('Idempotency-Key', 'functional-send-5')->postJson($url, [
+        'text' => 'Maintenance',
+    ])->assertForbidden();
+});
+
+test('a pending send settles later through updates and only for its owner', function (): void {
+    $url = contractSendReady($this);
+    $cursor = $this->getJson($this->base.'/updates?types=send')->assertOk()->json('data.cursor');
+    $operation = $this->withHeader('Idempotency-Key', 'functional-send-6')->postJson($url, [
+        'text' => 'Later',
+    ])->assertStatus(202)->assertJsonPath('data.operation.state', 'pending')->json('data.operation.id');
+    $this->td->control([
+        'op' => 'reject_send',
+        'code' => 429,
+        'message' => 'FLOOD_WAIT_7',
+        'retry_after' => 7,
+        'can_retry' => true,
+        'message_id' => '7001',
+    ]);
+    contractEventually(fn () => collect(app(TdlibGateway::class)->updates($this->account, [
+        'cursor' => $cursor,
+    ], (string) Str::uuid())['items'])->contains(fn (array $event): bool => ($event['state'] ?? null) === 'failed'));
+    $other = issueTestToken(TokenType::Device)['token'];
+    expect($this->withToken($other)->getJson($this->base.'/updates?types=send&cursor='.urlencode($cursor))->assertOk()->json('data.events'))->toBe([]);
+    $events = $this->withToken($this->device['token'])->getJson($this->base.'/updates?types=send&cursor='.urlencode($cursor))->assertOk()->json('data.events');
+    expect(collect($events)->pluck('state')->all())->toBe(['pending', 'failed'])
+        ->and($events[1]['operation_id'])->toBe($operation)
+        ->and($events[1]['error'])->toBe([
+            'code' => 'message.send_rate_limited',
+            'retry_after' => 7,
+        ]);
+    $this->getJson($this->base.'/sends/'.$operation)->assertOk()->assertJsonPath('data.operation.state', 'failed')->assertJsonPath('data.operation.retryable', true);
+    $this->getJson($this->base.'/chats/42/messages/7001?view_id='.$this->view)->assertOk()->assertJsonPath('data.item.sending_state', 'failed');
+});
+
+test('after a runtime restart a pending send becomes unknown and is never sent again', function (): void {
+    $url = contractSendReady($this);
+    $operation = $this->withHeader('Idempotency-Key', 'functional-send-7')->postJson($url, [
+        'text' => 'Across restart',
+    ])->assertStatus(202)->assertJsonPath('data.operation.state', 'pending')->json('data.operation.id');
+    $this->td->restart();
+    config([
+        'telebezel.tdlib.base_url' => $this->td->url,
+    ]);
+    Http::allowStrayRequests([$this->td->url.'/*']);
+    $this->travel(20)->seconds();
+    $this->getJson($this->base.'/sends/'.$operation)->assertOk()->assertJsonPath('data.operation.state', 'unknown');
+    $this->withHeader('Idempotency-Key', 'functional-send-7')->postJson($url, [
+        'text' => 'Across restart',
+    ])->assertStatus(202)->assertJsonPath('data.operation.state', 'unknown');
+    expect($this->td->control([
+        'op' => 'stats',
+    ])['sends'])->toBe([]);
+});

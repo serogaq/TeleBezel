@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="api-csrf" content="{{ $apiCsrf }}">
     <title>TeleBezel Settings</title>
     <link rel="stylesheet" href="/assets/settings.css">
 </head>
@@ -25,9 +26,9 @@
         <section><h2>Access</h2><p>Generating a new recovery code invalidates the previous one.</p><button id="rotate-recovery" class="secondary">Generate new recovery code</button> <button id="sign-out" class="secondary">Sign out</button><output id="recovery" hidden></output></section>
     </div>
 </main>
-<script src="/assets/settings-flow.js?v=1" defer></script>
-<script src="/assets/settings-api.js?v=2" defer></script>
+<script src="/assets/settings-flow.js?v=2" defer></script>
+<script src="/assets/settings-api.js?v=3" defer></script>
 <script src="/assets/settings-qr.js?v=1" defer></script>
-<script src="/assets/settings.js?v=15" defer></script>
+<script src="/assets/settings.js?v=16" defer></script>
 </body>
 </html>

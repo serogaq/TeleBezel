@@ -80,13 +80,32 @@ bool tb_codec_chat(TbCursor *body, TbChatRecord *out) {
   return str8(body, &out->id) && str8(body, &out->title) && u8(body, &out->type) && u8(body, &out->flags) &&
          u16(body, &out->unread) && u32(body, &out->last_date) && u8(body, &out->preview_kind) &&
          u8(body, &out->preview_action) && u16(body, &out->preview_duration) && str8(body, &out->preview_sender) &&
-         str8(body, &out->preview_extra) && str16(body, &out->preview_text) && done(body);
+         str8(body, &out->preview_extra) && str16(body, &out->preview_text) && u8(body, &out->send) && done(body);
 }
 
 bool tb_codec_message(TbCursor *body, TbMessageRecord *out) {
   return str8(body, &out->id) && u32(body, &out->date) && u8(body, &out->flags) && u8(body, &out->kind) &&
          u8(body, &out->action) && u16(body, &out->duration) && str8(body, &out->sender) && str8(body, &out->extra) &&
-         str16(body, &out->text) && done(body);
+         str16(body, &out->text) && str8(body, &out->reply_id) && str8(body, &out->reply_sender) &&
+         str8(body, &out->reply_text) && str8(body, &out->forward) && done(body);
 }
 
 bool tb_codec_text(TbCursor *body, TbSpan *out) { return str16(body, out) && done(body); }
+
+bool tb_codec_templates(TbCursor *body, TbTemplatesRecord *out) {
+  return u32(body, &out->revision) && u8(body, &out->count) && u8(body, &out->flags) && done(body);
+}
+
+bool tb_codec_template(TbCursor *body, TbTemplateRecord *out) {
+  return u8(body, &out->index) && u16(body, &out->length) && str8(body, &out->preview) && done(body);
+}
+
+bool tb_codec_draft(TbCursor *body, TbDraftRecord *out) {
+  return u32(body, &out->id) && u16(body, &out->bytes) && u16(body, &out->units) && u8(body, &out->flags) && done(body);
+}
+
+bool tb_codec_send_state(TbCursor *body, TbSendStateRecord *out) {
+  return u32(body, &out->draft_id) && u8(body, &out->state) && u8(body, &out->code) && u16(body, &out->retry_after) &&
+         u8(body, &out->flags) && str8(body, &out->account) && str8(body, &out->chat) && str8(body, &out->message) &&
+         str8(body, &out->title) && str8(body, &out->preview) && done(body);
+}

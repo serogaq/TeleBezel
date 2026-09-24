@@ -80,11 +80,18 @@ final class QuickReplyRepository implements QuickReplyRepositoryContract
         }
     }
 
-    public function delete(string $instanceId, string $id): void
+    public function delete(string $instanceId, string $id): bool
     {
-        DB::transaction(function () use ($instanceId, $id): void {
-            Instance::query()->whereKey($instanceId)->lockForUpdate()->firstOrFail();
-            DB::table('quick_replies')->where('instance_id', $instanceId)->where('id', $id)->delete();
-        }, 3);
+        return DB::table('quick_replies')->where('instance_id', $instanceId)->where('id', $id)->delete() > 0;
+    }
+
+    public function revision(string $instanceId): int
+    {
+        return Values::integer(Instance::query()->whereKey($instanceId)->value('quick_replies_revision') ?? 1);
+    }
+
+    public function bumpRevision(string $instanceId): void
+    {
+        Instance::query()->whereKey($instanceId)->increment('quick_replies_revision');
     }
 }

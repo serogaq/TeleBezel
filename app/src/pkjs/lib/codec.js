@@ -67,6 +67,7 @@ function create(protocol) {
         .u32(value.lastDate).u8(value.previewKind).u8(value.previewAction).u16(value.previewDuration)
         .str8(value.previewSender, 32, {singleLine: true}).str8(value.previewExtra, 48, {singleLine: true});
       body.raw16(text.encode(value.previewText, textLimit, {singleLine: true}).bytes);
+      body.u8(value.send || 0);
       return record(types.chat, body.bytes);
     },
     message: function(value, textLimit) {
@@ -76,7 +77,25 @@ function create(protocol) {
         .ascii8(value.id).u32(value.date).u8(flags).u8(value.kind).u8(value.action).u16(value.duration)
         .str8(value.sender, 32, {singleLine: true}).str8(value.extra, 48, {singleLine: true});
       body.raw16(encoded.bytes);
+      body.ascii8(value.replyId || '').str8(value.replySender, 32, {singleLine: true}).str8(value.replyText, 64, {singleLine: true});
+      body.str8(value.forwardFrom, 48, {singleLine: true});
       return record(types.message, body.bytes);
+    },
+    templates: function(value) {
+      return record(types.templates, new Writer().u32(value.revision).u8(value.count).u8(value.flags).bytes);
+    },
+    template: function(value, previewLimit) {
+      var body = new Writer().u8(value.index).u16(value.length).str8(value.preview, Math.min(previewLimit || 48, 96), {singleLine: true});
+      return record(types.template, body.bytes);
+    },
+    draft: function(value) {
+      return record(types.draft, new Writer().u32(value.id).u16(value.bytes).u16(value.units).u8(value.flags).bytes);
+    },
+    sendState: function(value, restored) {
+      var body = new Writer().u32(value.draftId).u8(value.state).u8(value.code).u16(value.retryAfter).u8(value.flags)
+        .ascii8(value.account).ascii8(value.chat).ascii8(value.message || '').str8(value.title, 32, {singleLine: true})
+        .str8(value.preview, 40, {singleLine: true});
+      return record(restored ? types.pending_send : types.send_state, body.bytes);
     },
     text: function(bytes) { return record(types.text, new Writer().raw16(bytes).bytes); },
     pack: function(records, budget) {

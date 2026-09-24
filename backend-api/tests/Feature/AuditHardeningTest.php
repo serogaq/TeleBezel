@@ -2,11 +2,10 @@
 
 use App\Contracts\TdlibGateway;
 use App\Enums\AccountLifecycle;
+use App\Enums\TokenType;
 use App\Exceptions\ApiException;
 use App\Exceptions\ExceptionEnvelope;
 use App\Infrastructure\Tdlib\TdlibGateway as HttpTdlibGateway;
-use App\Models\ApiClient;
-use App\Models\Device;
 use App\Models\Instance;
 use App\Models\TelegramAccount;
 use App\Services\ReconciliationService;
@@ -24,12 +23,7 @@ beforeEach(function (): void {
         'app.url' => 'https://telebezel.test',
         'cache.default' => 'array',
     ]);
-    $this->token = 'tb_'.str_repeat('h', 43);
-    ApiClient::query()->create([
-        'name' => 'audit-test',
-        'token_prefix' => substr($this->token, 0, 12),
-        'token_hash' => hash('sha256', $this->token),
-    ]);
+    $this->token = issueTestToken(TokenType::Maintenance)['token'];
 });
 
 function auditAccount(AccountLifecycle $lifecycle = AccountLifecycle::Active, array $attributes = []): TelegramAccount
@@ -46,19 +40,7 @@ function auditAccount(AccountLifecycle $lifecycle = AccountLifecycle::Active, ar
 
 function auditOwner(Instance $instance): string
 {
-    $token = 'tbo_'.Str::random(48);
-    DB::table('owner_sessions')->insert([
-        'id' => (string) Str::uuid(),
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $token),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-
-    return $token;
+    return issueWebSession($instance)['token'];
 }
 
 test('account rate limit cannot be bypassed by changing uuid case', function (): void {
@@ -90,12 +72,12 @@ test('malformed account identifiers are a not-found envelope, never a database e
 });
 
 test('owner resources that do not exist are resource-specific not-found errors', function (): void {
-    $owner = $this->withCredentials()->withCookie('telebezel_owner', auditOwner(Instance::query()->create([])));
-    $owner->postJson('/v1/owner/proxies/'.Str::uuid().'/ping')
+    $owner = asWebSession($this, auditOwner(testInstance()));
+    $owner->postJson('/v1/proxies/'.Str::uuid().'/ping')
         ->assertNotFound()->assertJsonPath('error.code', 'proxy.not_found')->assertJsonStructure(['request_id']);
-    $owner->postJson('/v1/owner/proxies/garbage/ping')
+    $owner->postJson('/v1/proxies/garbage/ping')
         ->assertNotFound()->assertJsonPath('error.code', 'proxy.not_found');
-    $owner->deleteJson('/v1/owner/devices/garbage')
+    $owner->deleteJson('/v1/devices/garbage')
         ->assertNotFound()->assertJsonPath('error.code', 'device.not_found');
 });
 
@@ -121,23 +103,16 @@ test('database errors are classified instead of reported as an outage', function
 });
 
 test('an undecryptable stored secret is reported as a key problem', function (): void {
-    $instance = Instance::query()->create([]);
+    $instance = testInstance();
     DB::table('instances')->where('id', $instance->id)->update([
         'telegram_api_hash' => 'not-encrypted-with-this-key',
     ]);
-    $this->withCredentials()->withCookie('telebezel_owner', auditOwner($instance))->getJson('/v1/owner/settings')
+    asWebSession($this, auditOwner($instance))->getJson('/v1/settings')
         ->assertStatus(503)->assertJsonPath('error.code', 'storage.invalid_key');
 });
 
 test('device tokens cannot read authorization or proxy details', function (): void {
-    $instance = Instance::query()->create([]);
-    $token = 'tb_'.str_repeat('w', 43);
-    Device::query()->create([
-        'instance_id' => $instance->id,
-        'name' => 'Watch',
-        'token_prefix' => substr($token, 0, 12),
-        'token_hash' => hash('sha256', $token),
-    ]);
+    $token = issueTestToken(TokenType::Device)['token'];
     $account = auditAccount();
     $this->withToken($token)->getJson("/v1/telegram/accounts/{$account->id}/authorization")->assertForbidden();
     $this->withToken($token)->getJson("/v1/telegram/accounts/{$account->id}/proxy")->assertForbidden();
@@ -223,14 +198,14 @@ test('a permanently blocked account is counted and can be unblocked', function (
         'reconcile_blocked_revision' => 1,
         'reconcile_failures' => 3,
     ]);
-    $instance = Instance::query()->create([]);
+    $instance = testInstance();
     DB::table('scheduler_statuses')->insert([
         'name' => 'reconciliation',
         'last_result' => 'completed',
         'created_at' => now(),
         'updated_at' => now(),
     ]);
-    $this->withCredentials()->withCookie('telebezel_owner', auditOwner($instance))->getJson('/v1/owner/settings')
+    asWebSession($this, auditOwner($instance))->getJson('/v1/settings')
         ->assertOk()->assertJsonPath('data.scheduler.blocked_accounts', 1);
     $this->artisan('telebezel:accounts-unblock', [
         'account' => $account->id,
@@ -248,8 +223,8 @@ test('a ping answer without latency is a runtime failure, not an invalid request
     Http::fake(fn (ClientRequest $request) => Http::response([
         'data' => [],
     ]));
-    $owner = $this->withCredentials()->withCookie('telebezel_owner', auditOwner(Instance::query()->create([])));
-    $owner->postJson('/v1/owner/proxies', [
+    $owner = asWebSession($this, auditOwner(testInstance()));
+    $owner->postJson('/v1/proxies', [
         'label' => 'No latency',
         'mode' => 'socks5',
         'host' => 'proxy.example',
@@ -281,17 +256,14 @@ test('retry-after accepts both header forms and defaults for rate limits', funct
 });
 
 test('expired sessions codes and idempotency keys are purged', function (): void {
-    $instance = Instance::query()->create([]);
+    $instance = testInstance();
     $account = auditAccount();
-    DB::table('owner_sessions')->insert([
-        'id' => (string) Str::uuid(),
-        'instance_id' => $instance->id,
-        'token_hash' => str_repeat('a', 64),
-        'authenticated_at' => now()->subMonth(),
-        'last_interactive_at' => now()->subMonth(),
+    $expired = issueWebSession($instance);
+    DB::table('access_tokens')->where('id', $expired['id'])->update([
         'expires_at' => now()->subMonth(),
-        'created_at' => now()->subMonth(),
-        'updated_at' => now()->subMonth(),
+    ]);
+    $revokedDevice = issueTestToken(TokenType::Device, attributes: [
+        'revoked_at' => now()->subMonth(),
     ]);
     DB::table('bootstrap_codes')->insert([
         'id' => (string) Str::uuid(),
@@ -300,8 +272,8 @@ test('expired sessions codes and idempotency keys are purged', function (): void
         'created_at' => now()->subWeek(),
         'updated_at' => now()->subWeek(),
     ]);
-    DB::table('instance_account_idempotency_keys')->insert([
-        'instance_id' => $instance->id,
+    DB::table('account_idempotency_keys')->insert([
+        'token_id' => $revokedDevice['id'],
         'key_hash' => str_repeat('c', 64),
         'request_hash' => str_repeat('d', 64),
         'telegram_account_id' => $account->id,
@@ -310,10 +282,15 @@ test('expired sessions codes and idempotency keys are purged', function (): void
     ]);
     $live = auditOwner($instance);
     $this->artisan('telebezel:purge-expired')->assertSuccessful();
-    $this->assertDatabaseCount('owner_sessions', 1);
-    $this->assertDatabaseHas('owner_sessions', [
+    $this->assertDatabaseMissing('access_tokens', [
+        'id' => $expired['id'],
+    ]);
+    $this->assertDatabaseHas('access_tokens', [
         'token_hash' => hash('sha256', $live),
     ]);
+    $this->assertDatabaseHas('access_tokens', [
+        'id' => $revokedDevice['id'],
+    ]);
     $this->assertDatabaseCount('bootstrap_codes', 0);
-    $this->assertDatabaseCount('instance_account_idempotency_keys', 0);
+    $this->assertDatabaseCount('account_idempotency_keys', 0);
 });

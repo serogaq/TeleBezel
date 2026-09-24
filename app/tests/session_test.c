@@ -13,6 +13,14 @@ static void prefs_record(Buf *buf, const char *account, uint8_t list, uint8_t sh
   end(buf);
 }
 
+static int s_extras;
+static uint8_t s_extra_type;
+static void extra(void *context, uint8_t type, const uint8_t *record, uint16_t length) {
+  (void)context; (void)record; (void)length;
+  ++s_extras;
+  s_extra_type = type;
+}
+
 #define FIRST "00112233-4455-4677-8899-aabbccddeeff"
 #define SECOND "10112233-4455-4677-8899-aabbccddeeff"
 
@@ -22,7 +30,7 @@ int main(void) {
   TbRequestLayer layer;
   tb_requests_init(&layer, fake_request_ports(&fake));
   TbSession session;
-  tb_session_init(&session, &layer, (TbSessionPorts){fake_changed, &fake});
+  tb_session_init(&session, &layer, (TbSessionPorts){fake_changed, &fake, extra});
 
   tb_session_start(&session, true);
   assert(session.phase == TB_SESSION_HELLO && fake_last(&fake)->kind == TB_REQUEST_HELLO);
@@ -35,10 +43,15 @@ int main(void) {
   account_record(&first, FIRST, "Личный", TB_ACCOUNT_STATE_READY, 0);
   Buf second = {0};
   account_record(&second, SECOND, "Work", TB_ACCOUNT_STATE_NEEDS_LOGIN, TB_ACCOUNT_FLAG_DEFAULT);
+  begin(&second, TB_RECORD_PENDING_SEND);
+  put32(&second, 5); put8(&second, TB_SEND_STATE_PENDING); put8(&second, 0); put16(&second, 0); put8(&second, TB_SEND_FLAG_RESTORED);
+  putstr8(&second, FIRST); putstr8(&second, "42"); putstr8(&second, ""); putstr8(&second, "Ada"); putstr8(&second, "Hi");
+  end(&second);
   deliver(&layer, boot, TB_RESULT_OK, 0, &first, 0, 2);
   assert(session.phase == TB_SESSION_BOOTSTRAP && !session.loaded);
   deliver(&layer, boot, TB_RESULT_OK, 0, &second, 1, 2);
   assert(session.phase == TB_SESSION_IDLE && session.loaded && session.error == TB_ERROR_NONE && session.count == 2);
+  assert(s_extras == 1 && s_extra_type == TB_RECORD_PENDING_SEND);
   assert(strcmp(session.accounts[0].name, "Личный") == 0 && session.chat_list == TB_LIST_ARCHIVE);
   assert(strcmp(session.host, "tg.example:443") == 0 && strcmp(session.default_account, SECOND) == 0);
   assert(session.show_archive && session.unread_mode == TB_UNREAD_MODE_MESSAGES);

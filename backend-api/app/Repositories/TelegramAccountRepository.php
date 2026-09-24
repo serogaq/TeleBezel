@@ -10,7 +10,6 @@ use App\Enums\AccountLifecycle;
 use App\Exceptions\ApiException;
 use App\Models\AccountIdempotencyKey;
 use App\Models\Instance;
-use App\Models\InstanceAccountIdempotencyKey;
 use App\Models\ProxyProfile;
 use App\Models\TelegramAccount;
 use App\Support\Values;
@@ -32,13 +31,11 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
     /** @param array<string, mixed> $input
      * @param array<string, mixed> $proxy
      * @return array{AccountData, bool} */
-    public function create(bool $owner, string $scopeId, string $keyHash, string $requestHash, array $input, array $proxy, int $attempt = 0): array
+    public function create(string $tokenId, string $keyHash, string $requestHash, array $input, array $proxy, int $attempt = 0): array
     {
-        $keyModel = $owner ? InstanceAccountIdempotencyKey::class : AccountIdempotencyKey::class;
-        $scopeColumn = $owner ? 'instance_id' : 'api_client_id';
         try {
-            [$account, $created] = DB::transaction(function () use ($keyModel, $scopeColumn, $scopeId, $keyHash, $requestHash, $input, $proxy): array {
-                $existing = $keyModel::query()->where($scopeColumn, $scopeId)->where('key_hash', $keyHash)->lockForUpdate()->first();
+            [$account, $created] = DB::transaction(function () use ($tokenId, $keyHash, $requestHash, $input, $proxy): array {
+                $existing = AccountIdempotencyKey::query()->where('token_id', $tokenId)->where('key_hash', $keyHash)->lockForUpdate()->first();
                 if ($existing !== null) {
                     if (! hash_equals($existing->request_hash, $requestHash)) {
                         throw new ApiException('operation.conflict', 409);
@@ -64,8 +61,8 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
                     'proxy_config' => $proxy['mode'] === 'inherit' ? null : $proxy,
                     'proxy_config_version' => $proxy['mode'] === 'inherit' ? 0 : 1,
                 ]);
-                $keyModel::query()->create([
-                    $scopeColumn => $scopeId,
+                AccountIdempotencyKey::query()->create([
+                    'token_id' => $tokenId,
                     'key_hash' => $keyHash,
                     'request_hash' => $requestHash,
                     'telegram_account_id' => $account->id,
@@ -81,7 +78,7 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
                 throw new ApiException('operation.conflict', 409);
             }
 
-            return $this->create($owner, $scopeId, $keyHash, $requestHash, $input, $proxy, $attempt + 1);
+            return $this->create($tokenId, $keyHash, $requestHash, $input, $proxy, $attempt + 1);
         }
 
         return [$this->data($account->fresh() ?? $account), $created];
@@ -103,10 +100,16 @@ final class TelegramAccountRepository implements TelegramAccountRepositoryContra
         return $this->data($account);
     }
 
-    /** @return LengthAwarePaginator<int, AccountData> */
-    public function paginate(int $perPage, int $page): LengthAwarePaginator
+    /** @param list<string>|null $only
+     * @return LengthAwarePaginator<int, AccountData> */
+    public function paginate(int $perPage, int $page, ?array $only = null): LengthAwarePaginator
     {
-        return TelegramAccount::query()->where('lifecycle', '!=', AccountLifecycle::Removed->value)->orderBy('created_at')->paginate($perPage, ['*'], 'page', $page)->through(fn (TelegramAccount $account): AccountData => $this->data($account));
+        $query = TelegramAccount::query()->where('lifecycle', '!=', AccountLifecycle::Removed->value);
+        if ($only !== null) {
+            $query->whereKey($only);
+        }
+
+        return $query->orderBy('created_at')->paginate($perPage, ['*'], 'page', $page)->through(fn (TelegramAccount $account): AccountData => $this->data($account));
     }
 
     public function isRemoved(string $id): bool

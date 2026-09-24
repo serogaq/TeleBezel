@@ -13,6 +13,16 @@ static const char *body_value(TbReaderWindow *view) {
   return view->fallback ? view->fallback : "";
 }
 
+static const char *quote_value(TbReaderWindow *view) {
+  const TbMessageText *quote = view->quote;
+  if (quote->length > 0) { return quote->text; }
+  const size_t prefix = strlen(view->reply_sender);
+  const char *snippet = view->reply;
+  if (prefix && strncmp(snippet, view->reply_sender, prefix) == 0 && strncmp(snippet + prefix, ": ", 2) == 0) { snippet += prefix + 2; }
+  if (!*snippet && quote->loading) { return view->strings->loading; }
+  return snippet;
+}
+
 static void compose(TbReaderWindow *view) {
   const TbStrings *strings = view->strings;
   const TbMessage *message = &view->message;
@@ -20,19 +30,25 @@ static void compose(TbReaderWindow *view) {
   char day[32];
   tb_format_time(stamp, sizeof(stamp), (time_t)message->date, (time_t)message->date, clock_is_24h_style());
   tb_format_day(day, sizeof(day), strings, (time_t)message->date, time(NULL));
-  const char *sender = (message->flags & TB_MESSAGE_FLAG_OUTGOING) ? strings->you : view->private_chat ? "" : tb_or_empty(message->sender);
+  char forward[96] = "";
+  if (view->forward[0]) { snprintf(forward, sizeof(forward), strings->forwarded_from, view->forward); }
   char label[96] = "";
   if (message->kind != TB_KIND_TEXT) {
     tb_format_content(label, sizeof(label), strings, message->kind, message->action, message->duration, view->extra, "");
   }
-  snprintf(view->header_text, sizeof(view->header_text), "%s%s%s %s%s%s%s%s", sender, *sender ? "\n" : "", day, stamp,
-           (message->flags & TB_MESSAGE_FLAG_EDITED) ? " · " : "", (message->flags & TB_MESSAGE_FLAG_EDITED) ? strings->edited : "",
-           *label ? "\n" : "", label);
+  snprintf(view->header_text, sizeof(view->header_text), "%s%s%s%s%s %s%s%s%s%s", view->sender, view->sender[0] ? "\n" : "", forward,
+           *forward ? "\n" : "", day, stamp, (message->flags & TB_MESSAGE_FLAG_EDITED) ? " · " : "",
+           (message->flags & TB_MESSAGE_FLAG_EDITED) ? strings->edited : "", *label ? "\n" : "", label);
+  view->quote_label_text[0] = '\0';
+  if (view->reply[0] || view->reply_sender[0]) {
+    snprintf(view->quote_label_text, sizeof(view->quote_label_text), "%s%s%s", strings->in_reply_to, view->reply_sender[0] ? " " : "",
+             view->reply_sender);
+  }
   view->footer_text[0] = '\0';
   const TbMessageText *text = view->text;
   if (!text->loading && text->error != TB_ERROR_NONE) {
     snprintf(view->footer_text, sizeof(view->footer_text), "%s. %s", tb_error_text(strings, text->error),
-             view->fallback && *view->fallback ? strings->preview_only : strings->retry_hint);
+             view->fallback && *view->fallback ? strings->preview_only : strings->menu_hint);
   } else if (!text->loading && text->truncated) {
     snprintf(view->footer_text, sizeof(view->footer_text), "%s", strings->continued_on_phone);
   }
@@ -43,23 +59,23 @@ static void layout(TbReaderWindow *view) {
   compose(view);
   const TbTheme *theme = tb_theme();
   const GRect bounds = layer_get_bounds(window_get_root_layer(view->window));
-  const int16_t width = bounds.size.w - 2 * theme->margin - 8;
-  const int16_t left = theme->margin + 4;
-  const int16_t top = PBL_IF_ROUND_ELSE(24, 2);
-  const char *body = body_value(view);
-  text_layer_set_text(view->header, view->header_text);
-  text_layer_set_text(view->body, body);
-  text_layer_set_text(view->footer, view->footer_text);
-  const int16_t header_h = tb_theme_text_height(view->header_text, theme->meta_bold, width, 200) + 4;
-  const int16_t body_h = tb_theme_text_height(body, theme->body, width, 30000) + 8;
-  const int16_t footer_h = view->footer_text[0] ? tb_theme_text_height(view->footer_text, theme->meta, width, 200) + 4 : 0;
-  layer_set_frame(text_layer_get_layer(view->header), GRect(left, top, width, header_h));
-  layer_set_frame(text_layer_get_layer(view->body), GRect(left, top + header_h, width, body_h));
-  layer_set_frame(text_layer_get_layer(view->footer), GRect(left, top + header_h + body_h, width, footer_h));
-  scroll_layer_set_content_size(view->scroll, GSize(bounds.size.w, top + header_h + body_h + footer_h + PBL_IF_ROUND_ELSE(40, 8)));
+  const bool quoted = view->quote_label_text[0] != '\0';
+  TbPageLine lines[TB_PAGE_MAX_LINES] = {{view->header, view->header_text, theme->meta_bold, 200, 4},
+                                         {view->quote_label, view->quote_label_text, theme->meta_bold, 200, 0},
+                                         {view->quote_body, quoted ? quote_value(view) : "", theme->meta, 30000, 8},
+                                         {view->body, body_value(view), theme->body, 30000, 8},
+                                         {view->footer, view->footer_text, theme->meta, 200, 4}};
+  const int16_t bottom = tb_theme_page(bounds, lines, TB_PAGE_MAX_LINES, PBL_IF_ROUND_ELSE(36, 2));
+  scroll_layer_set_content_size(view->scroll, GSize(bounds.size.w, bottom + PBL_IF_ROUND_ELSE(40, 8)));
 }
 
 static void select_clicked(ClickRecognizerRef recognizer, void *context) {
+  (void)recognizer;
+  TbReaderWindow *view = context;
+  if (view->actions.menu) { view->actions.menu(view->actions.context); }
+}
+
+static void select_held(ClickRecognizerRef recognizer, void *context) {
   (void)recognizer;
   TbReaderWindow *view = context;
   if (view->text->error != TB_ERROR_NONE) { tb_message_text_retry(view->text); }
@@ -67,6 +83,7 @@ static void select_clicked(ClickRecognizerRef recognizer, void *context) {
 
 static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_clicked);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 0, select_held, NULL);
   window_set_click_context(BUTTON_ID_SELECT, context);
 }
 
@@ -76,6 +93,7 @@ static TextLayer *text(GFont font, GColor color) {
   text_layer_set_text_color(layer, color);
   text_layer_set_font(layer, font);
   text_layer_set_overflow_mode(layer, GTextOverflowModeWordWrap);
+  text_layer_set_text_alignment(layer, PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft));
   return layer;
 }
 
@@ -89,9 +107,13 @@ static void window_load(Window *window) {
   scroll_layer_set_context(view->scroll, view);
   scroll_layer_set_click_config_onto_window(view->scroll, window);
   view->header = text(theme->meta_bold, tb_theme_accent(false));
+  view->quote_label = text(theme->meta_bold, tb_theme_muted(false));
+  view->quote_body = text(theme->meta, tb_theme_muted(false));
   view->body = text(theme->body, GColorBlack);
   view->footer = text(theme->meta, tb_theme_muted(false));
   scroll_layer_add_child(view->scroll, text_layer_get_layer(view->header));
+  scroll_layer_add_child(view->scroll, text_layer_get_layer(view->quote_label));
+  scroll_layer_add_child(view->scroll, text_layer_get_layer(view->quote_body));
   scroll_layer_add_child(view->scroll, text_layer_get_layer(view->body));
   scroll_layer_add_child(view->scroll, text_layer_get_layer(view->footer));
   layer_add_child(root, scroll_layer_get_layer(view->scroll));
@@ -104,22 +126,29 @@ static void window_load(Window *window) {
 static void window_unload(Window *window) {
   TbReaderWindow *view = window_get_user_data(window);
   tb_message_text_close(view->text);
+  tb_message_text_close(view->quote);
   text_layer_destroy(view->footer);
   text_layer_destroy(view->body);
+  text_layer_destroy(view->quote_body);
+  text_layer_destroy(view->quote_label);
   text_layer_destroy(view->header);
   scroll_layer_destroy(view->scroll);
   view->footer = NULL;
   view->body = NULL;
+  view->quote_body = NULL;
+  view->quote_label = NULL;
   view->header = NULL;
   view->scroll = NULL;
   free(view->fallback);
   view->fallback = NULL;
 }
 
-void tb_reader_window_init(TbReaderWindow *view, TbMessageText *text, const TbStrings *strings) {
+void tb_reader_window_init(TbReaderWindow *view, TbMessageText *text, TbMessageText *quote, const TbStrings *strings, TbReaderActions actions) {
   memset(view, 0, sizeof(*view));
   view->text = text;
+  view->quote = quote;
   view->strings = strings;
+  view->actions = actions;
   view->window = window_create();
   window_set_user_data(view->window, view);
   window_set_background_color(view->window, tb_theme_background());
@@ -131,15 +160,21 @@ void tb_reader_window_deinit(TbReaderWindow *view) {
   view->window = NULL;
 }
 
-void tb_reader_window_show(TbReaderWindow *view, const TbMessage *message, bool private_chat) {
+void tb_reader_window_show(TbReaderWindow *view, const TbMessage *message, const char *sender, const char *forward) {
   free(view->fallback);
   view->fallback = NULL;
   view->message = *message;
   view->message.sender = view->sender;
   view->message.extra = NULL;
   view->message.text = NULL;
-  view->private_chat = private_chat;
-  snprintf(view->sender, sizeof(view->sender), "%s", tb_or_empty(message->sender));
+  view->message.reply = NULL;
+  view->message.forward = NULL;
+  view->message.reply_id = NULL;
+  view->message.reply_sender = NULL;
+  snprintf(view->reply, sizeof(view->reply), "%s", tb_or_empty(message->reply));
+  snprintf(view->sender, sizeof(view->sender), "%s", tb_or_empty(sender));
+  snprintf(view->forward, sizeof(view->forward), "%s", tb_or_empty(forward));
+  snprintf(view->reply_sender, sizeof(view->reply_sender), "%s", tb_or_empty(message->reply_sender));
   snprintf(view->extra, sizeof(view->extra), "%s", tb_or_empty(message->extra));
   const char *preview = tb_or_empty(message->text);
   view->fallback = malloc(strlen(preview) + 1);

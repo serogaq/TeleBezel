@@ -11,7 +11,9 @@
     "license": "proprietary",
     "require": {
         "php": "^8.5",
+        "ext-intl": "*",
         "ext-json": "*",
+        "ext-mbstring": "*",
         "ext-pdo": "*",
         "ext-pdo_pgsql": "*",
         "laravel/framework": "^13.17",

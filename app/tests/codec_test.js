@@ -6,7 +6,7 @@ var decode = require('./helpers/decode').decode;
 var fixtures = require('./fixtures/codec.json');
 
 fixtures.forEach(function(fixture) {
-  var bytes = fixture.record === 'text' ? codec.text(fixture.input.bytes) : codec[fixture.record](fixture.input, fixture.textLimit);
+  var bytes = fixture.record === 'text' ? codec.text(fixture.input.bytes) : fixture.record === 'sendState' ? codec.sendState(fixture.input, fixture.restored) : codec[fixture.record](fixture.input, fixture.textLimit);
   assert.strictEqual(Buffer.from(bytes).toString('hex'), fixture.hex, fixture.name);
   var decoded = decode(protocol, bytes)[0];
   Object.keys(fixture.decoded).forEach(function(key) {

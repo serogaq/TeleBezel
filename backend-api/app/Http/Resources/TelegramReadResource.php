@@ -36,7 +36,7 @@ final class TelegramReadResource extends ApiResource
                         return match ($kind) {
                             'chats' => self::chat($item),
                             'messages' => self::message($item),
-                            default => self::pick($item, ['type', 'chat_id', 'message_id', 'sequence', 'field']),
+                            default => self::event($item),
                         };
                     }, $data[$key]));
                 }
@@ -47,9 +47,24 @@ final class TelegramReadResource extends ApiResource
 
     /** @param array<string, mixed> $value
      * @return array<string, mixed> */
+    private static function event(array $value): array
+    {
+        $value = self::pick($value, ['type', 'chat_id', 'message_id', 'sequence', 'field', 'operation_id', 'state', 'error', 'retryable', 'reply_dropped', 'connection']);
+        if (is_array($value['error'] ?? null)) {
+            $value['error'] = self::pick(Values::object($value['error']), ['code', 'retry_after']);
+        }
+
+        return $value;
+    }
+
+    /** @param array<string, mixed> $value
+     * @return array<string, mixed> */
     private static function chat(array $value): array
     {
-        $value = self::pick($value, ['id', 'type', 'title', 'is_saved_messages', 'is_forum', 'is_marked_unread', 'unread_count', 'unread_mention_count', 'unread_reaction_count', 'notifications', 'last_read_inbox_message_id', 'last_read_outbox_message_id', 'positions', 'last_message', 'stale', 'observed_at', 'source']);
+        $value = self::pick($value, ['id', 'type', 'title', 'is_saved_messages', 'is_forum', 'is_marked_unread', 'unread_count', 'unread_mention_count', 'unread_reaction_count', 'notifications', 'last_read_inbox_message_id', 'last_read_outbox_message_id', 'positions', 'last_message', 'can_send', 'stale', 'observed_at', 'source']);
+        if (is_array($value['can_send'] ?? null)) {
+            $value['can_send'] = self::pick(Values::object($value['can_send']), ['text', 'reason']);
+        }
         if (is_array($value['notifications'] ?? null)) {
             $value['notifications'] = self::pick(Values::object($value['notifications']), ['use_default_mute_for', 'mute_for']);
         }
@@ -74,9 +89,15 @@ final class TelegramReadResource extends ApiResource
      * @return array<string, mixed> */
     private static function message(array $value): array
     {
-        $value = self::pick($value, ['id', 'chat_id', 'sender', 'date', 'edit_date', 'is_outgoing', 'author_signature', 'content', 'stale', 'observed_at', 'source']);
+        $value = self::pick($value, ['id', 'chat_id', 'sender', 'date', 'edit_date', 'is_outgoing', 'author_signature', 'forward_from', 'reply_to', 'sending_state', 'content', 'stale', 'observed_at', 'source']);
+        if (is_array($value['reply_to'] ?? null)) {
+            $value['reply_to'] = self::pick(Values::object($value['reply_to']), ['message_id', 'sender_name', 'text']);
+        }
         if (is_array($value['sender'] ?? null)) {
             $value['sender'] = self::pick(Values::object($value['sender']), ['type', 'id', 'name', 'fallback']);
+        }
+        if (is_array($value['forward_from'] ?? null)) {
+            $value['forward_from'] = self::pick(Values::object($value['forward_from']), ['type', 'id', 'name', 'fallback', 'signature']);
         }
         if (is_array($value['content'] ?? null)) {
             $value['content'] = self::pick(Values::object($value['content']), ['kind', 'text', 'fallback_key', 'duration', 'emoji', 'title', 'action', 'preview_id', 'preview_state']);

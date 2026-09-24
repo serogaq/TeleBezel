@@ -184,6 +184,28 @@ private:
   std::string rotation_cursor_;
   std::thread worker_;
 };
+class MessageSendService final {
+public:
+  MessageSendService(AccountStore &context, TdRequestBroker &broker) : context_(context), broker_(broker) {}
+  nlohmann::json send(const std::string &uuid, const SendCommand &command);
+  nlohmann::json lookup(const std::string &uuid, const std::vector<std::string> &ids) const;
+  static nlohmann::json operation_json(const std::string &id, const SendOperation &operation);
+  static void bind_pending(AccountStore &store, AccountState &account, const td_api::message &message);
+  static void succeeded(AccountStore &store, AccountState &account, const td_api::updateMessageSendSucceeded &update);
+  static void failed(AccountStore &store, AccountState &account, const td_api::updateMessageSendFailed &update);
+
+private:
+  static void publish(AccountStore &store, AccountState &account, const std::string &id,
+                      const SendOperation &operation);
+  static void finish(AccountStore &store, AccountState &account, const std::string &id, const std::string &error,
+                     std::int64_t retry_after, bool retryable);
+  void dispatch(const std::string &uuid, const SendCommand &command, std::int32_t client, std::int32_t sending_id,
+                std::chrono::steady_clock::time_point deadline);
+  nlohmann::json await_outcome(const std::string &uuid, const std::string &id,
+                               std::chrono::steady_clock::time_point until);
+  AccountStore &context_;
+  TdRequestBroker &broker_;
+};
 class RuntimeEngine final {
 public:
   RuntimeEngine(AccountStore &context, AccountRegistry &registry, TdTransport &transport, TdRequestBroker &broker)
@@ -200,6 +222,7 @@ public:
 private:
   void receive_once(std::chrono::steady_clock::time_point &next_reminder);
   void queue_generation_persist(const AccountState &account);
+  void journal_send_capability(AccountState &account, const std::string &kind, std::int64_t peer);
   AccountStore &context_;
   AccountRegistry &registry_;
   TdTransport &transport_;

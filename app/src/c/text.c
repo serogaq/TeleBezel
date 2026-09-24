@@ -61,7 +61,7 @@ bool tb_parse_id(const char *value, int64_t *out) {
   for (; *cursor; ++cursor) {
     if (*cursor < '0' || *cursor > '9') { return false; }
     const uint64_t digit = (uint64_t)(*cursor - '0');
-    if (result > (UINT64_C(9223372036854775807) - digit) / 10) {
+    if (result > UINT64_C(922337203685477580) || (result == UINT64_C(922337203685477580) && digit > 7)) {
       if (!(negative && result == UINT64_C(922337203685477580) && digit == 8 && !cursor[1])) { return false; }
       *out = INT64_MIN;
       return true;

@@ -13,14 +13,17 @@
                 },
                 "date": 1700000000,
                 "edit_date": 0,
+                "forward_from": null,
                 "id": "1048576",
                 "is_outgoing": false,
+                "reply_to": null,
                 "sender": {
                     "fallback": "User 7",
                     "id": "7",
                     "name": "Ада Лавлейс",
                     "type": "user"
-                }
+                },
+                "sending_state": null
             },
             {
                 "author_signature": "",
@@ -32,24 +35,27 @@
                 },
                 "date": 1700000000,
                 "edit_date": 0,
+                "forward_from": null,
                 "id": "1048575",
                 "is_outgoing": true,
+                "reply_to": null,
                 "sender": {
                     "fallback": "User 9007199254740993",
                     "id": "9007199254740993",
                     "name": null,
                     "type": "user"
-                }
+                },
+                "sending_state": null
             }
         ],
         "local_exhausted": false,
-        "next_cursor": "h:1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:-100200:1048575.35a00e34305305b90694f4a8a88be036e04276072298c0cda1fc73dafaab0f57",
-        "observed_at": 1790171572,
+        "next_cursor": "h:1:1fd4d832-6181-4ab5-8efb-c03237758d55:-100200:1048575.bd7b0a400cd191159daa5d5cac91d78d853ac6c9b434132e14b33f0d33c3eda2",
+        "observed_at": 1790260145,
         "partial": false,
         "refresh": "queued",
         "retry_cursor": null,
         "source": "tdlib_local",
         "stale": true,
-        "updates_cursor": "1:c0aa461e-4811-4da6-8ef7-2d520b5015fb:1.586b8fa6d8230d180704154dac1c55a7a597ca4ecd72973b45b10e7c6815a7ac"
+        "updates_cursor": "1:1fd4d832-6181-4ab5-8efb-c03237758d55:2.1a68f0ef2ec7845d218758038c8cc89a790205d1a91db2ca1b1c61eb746166ea"
     }
 }

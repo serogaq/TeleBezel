@@ -78,4 +78,14 @@ interface TdlibGateway
     public function interest(string $method, string $accountId, string $chatId, string $viewId, array $lease, string $requestId): array;
 
     public function releasePrincipalInterests(string $type, string $id, string $requestId): void;
+
+    /** @param array<string, mixed> $command
+     * @return array<string, mixed>
+     */
+    public function sendMessage(string $accountId, string $chatId, array $command, string $requestId): array;
+
+    /** @param list<string> $operationIds
+     * @return array<string, mixed>
+     */
+    public function sendStatus(string $accountId, array $operationIds, string $requestId): array;
 }

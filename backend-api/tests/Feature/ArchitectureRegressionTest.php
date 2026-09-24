@@ -5,43 +5,29 @@ use App\Data\TelegramId;
 use App\Enums\AccountLifecycle;
 use App\Exceptions\ApiException;
 use App\Http\Resources\TelegramReadResource;
-use App\Models\Instance;
-use App\Models\OwnerSession;
 use App\Models\TelegramAccount;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 beforeEach(function () {
-    $instance = Instance::query()->create([
-        'id' => (string) Str::uuid(),
-    ]);
-    $token = 'tbo_regression';
-    OwnerSession::query()->create([
-        'id' => (string) Str::uuid(),
-        'instance_id' => $instance->id,
-        'token_hash' => hash('sha256', $token),
-        'authenticated_at' => now(),
-        'last_interactive_at' => now(),
-        'expires_at' => now()->addHour(),
-    ]);
-    $this->withCredentials()->withCookie('telebezel_owner', $token);
+    asWebSession($this, issueWebSession()['token']);
 });
 test('quick reply reorder reaches its own route and creation survives a position gap', function () {
-    $first = $this->postJson('/v1/owner/quick-replies', [
+    $first = $this->postJson('/v1/quick-replies', [
         'text' => 'first',
     ])->assertCreated()->json('data.id');
-    $second = $this->postJson('/v1/owner/quick-replies', [
+    $second = $this->postJson('/v1/quick-replies', [
         'text' => 'second',
     ])->assertCreated()->json('data.id');
-    $this->deleteJson('/v1/owner/quick-replies/'.$first)->assertOk();
-    $third = $this->postJson('/v1/owner/quick-replies', [
+    $this->deleteJson('/v1/quick-replies/'.$first)->assertOk();
+    $third = $this->postJson('/v1/quick-replies', [
         'text' => 'third',
     ])->assertCreated()->json('data.id');
-    $this->putJson('/v1/owner/quick-replies/reorder', [
+    $this->putJson('/v1/quick-replies/reorder', [
         'ids' => [$third, $second],
     ])->assertOk()->assertJsonPath('data.0.id', $third);
-    $this->putJson('/v1/owner/quick-replies/reorder', [
+    $this->putJson('/v1/quick-replies/reorder', [
         'ids' => [$third],
     ])->assertStatus(409);
 });

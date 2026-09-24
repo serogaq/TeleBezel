@@ -15,24 +15,8 @@ final class TelegramAccountService
     public function __construct(private readonly TdlibGateway $tdlib, private readonly TelegramAccountRepository $repository, private readonly AccountStatePolicy $policy) {}
 
     /** @param array<string, mixed> $input
-     * @return array{AccountData, bool}
-     */
-    public function create(string $apiClientId, string $idempotencyKey, array $input, string $requestId): array
-    {
-        return $this->createIdempotent(false, $apiClientId, $idempotencyKey, $input, $requestId);
-    }
-
-    /** @param array<string, mixed> $input
-     * @return array{AccountData, bool}
-     */
-    public function createForOwner(string $instanceId, string $idempotencyKey, array $input, string $requestId): array
-    {
-        return $this->createIdempotent(true, $instanceId, $idempotencyKey, $input, $requestId);
-    }
-
-    /** @param array<string, mixed> $input
      * @return array{AccountData, bool} */
-    private function createIdempotent(bool $owner, string $scopeId, string $idempotencyKey, array $input, string $requestId): array
+    public function create(string $tokenId, string $idempotencyKey, array $input, string $requestId): array
     {
         if (strlen($idempotencyKey) < 8 || strlen($idempotencyKey) > 200) {
             throw new ApiException('request.invalid_idempotency_key', 422);
@@ -44,15 +28,16 @@ final class TelegramAccountService
             'label' => $input['label'],
             'proxy' => $proxy,
         ]));
-        [$account, $created] = $this->repository->create($owner, $scopeId, hash('sha256', $idempotencyKey), $requestHash, $input, $proxy);
+        [$account, $created] = $this->repository->create($tokenId, hash('sha256', $idempotencyKey), $requestHash, $input, $proxy);
 
         return [$this->repository->find($account->id), $created];
     }
 
-    /** @return LengthAwarePaginator<int, AccountData> */
-    public function paginate(int $perPage, string $requestId, int $page = 1): LengthAwarePaginator
+    /** @param list<string>|null $only
+     * @return LengthAwarePaginator<int, AccountData> */
+    public function paginate(int $perPage, string $requestId, int $page = 1, ?array $only = null): LengthAwarePaginator
     {
-        $paginator = $this->repository->paginate(min(50, max(1, $perPage)), $page);
+        $paginator = $this->repository->paginate(min(50, max(1, $perPage)), $page, $only);
         $ids = $paginator->getCollection()->map(fn (AccountData $account): string => $account->id)->all();
         if ($ids !== []) {
             try {

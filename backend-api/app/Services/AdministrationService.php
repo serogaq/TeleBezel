@@ -7,28 +7,32 @@ namespace App\Services;
 use App\Contracts\Repositories\AdministrationRepository;
 use App\Contracts\Repositories\OwnerAccessRepository;
 use App\Contracts\TransactionManager;
+use App\Enums\TokenType;
 use App\Exceptions\ApiException;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Str;
 
 final readonly class AdministrationService
 {
-    public function __construct(private AdministrationRepository $repository, private OwnerAccessRepository $owners, private TransactionManager $transactions) {}
+    public function __construct(private AdministrationRepository $repository, private OwnerAccessRepository $owners, private AccessTokenService $issuer, private TransactionManager $transactions) {}
 
     /** @return array{id: string, token: string} */
-    public function issue(string $name): array
+    public function issue(string $name, TokenType $type = TokenType::Maintenance): array
     {
-        $token = 'tb_'.rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        return $this->transactions->run(function () use ($name, $type): array {
+            $owner = $this->owners->lockOwner();
+            $instanceId = $owner->id ?? (string) Str::uuid();
+            if ($owner === null) {
+                $this->owners->createInstance($instanceId);
+            }
 
-        return [
-            'id' => $this->repository->issue($name, hash('sha256', $token), substr($token, 0, 12)),
-            'token' => $token,
-        ];
+            return $type === TokenType::Device ? $this->issuer->issueDevice($instanceId, $name) : $this->issuer->issue($instanceId, $type, $name);
+        });
     }
 
     public function revoke(string $id): bool
     {
-        return $this->repository->revoke($id);
+        return $this->issuer->revoke($id, (string) Str::uuid());
     }
 
     public function bootstrap(): string

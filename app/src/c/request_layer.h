@@ -19,6 +19,12 @@ typedef struct {
   char account[TB_ACCOUNT_ID_SIZE];
   char chat[TB_TELEGRAM_ID_SIZE];
   char message[TB_TELEGRAM_ID_SIZE];
+  uint32_t draft_id;
+  uint32_t templates_rev;
+  uint8_t template_index;
+  uint8_t attempt;
+  uint16_t payload_length;
+  const uint8_t *payload;
 } TbRequestArgs;
 
 typedef struct {

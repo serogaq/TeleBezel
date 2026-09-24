@@ -296,19 +296,19 @@ assert.deepStrictEqual([hiddenPrefs.chatList, hiddenPrefs.showArchive, hiddenPre
 
 var polling = harness();
 polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 110, ACCOUNT_ID: ACCOUNT});
-assert.deepStrictEqual(polling.calls[0].args.slice(1, 3), [ACCOUNT, {cursor: null}], 'the first poll carries no cursor');
-polling.reply('updates', ok({items: [{type: 'chat_changed', chat_id: '1', sequence: 1}], cursor: 'e1', has_more: false, connection: 'updating',
+assert.deepStrictEqual(polling.calls[0].args.slice(1, 3), [ACCOUNT, {cursor: null, types: 'send,connection'}], 'the first poll carries no cursor');
+polling.reply('updates', ok({events: [{type: 'connection_changed', connection: 'updating', sequence: 1}], cursor: 'e1', has_more: false, connection: 'updating',
   status: {connection: 'updating', proxy: true}}));
 assert.deepStrictEqual(polling.response(110).records, [{type: 'status', connection: protocol.connection.updating, proxy: 1}]);
 polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 111, ACCOUNT_ID: ACCOUNT});
 assert.strictEqual(polling.calls[1].args[2].cursor, 'e1', 'the cursor from the last poll is reused');
 polling.reply('updates', failure(409, 'sync.resync_required'));
 assert.strictEqual(polling.calls[2].args[2].cursor, null, 'a lost cursor restarts the journal');
-polling.reply('updates', ok({items: [], cursor: 'e2', has_more: false, status: {connection: 'waiting_for_network', proxy: false}}));
+polling.reply('updates', ok({events: [], cursor: 'e2', has_more: false, status: {connection: 'waiting_for_network', proxy: false}}));
 assert.deepStrictEqual(polling.response(111).records, [{type: 'status', connection: protocol.connection.connecting, proxy: 0}]);
 polling.request({REQUEST_KIND: R.events, REQUEST_SEQ: 112, ACCOUNT_ID: ACCOUNT});
 assert.strictEqual(polling.calls[3].args[2].cursor, 'e2');
-polling.reply('updates', ok({items: [], cursor: 'e3', has_more: false, status: {connection: 'ready', proxy: true}}));
+polling.reply('updates', ok({events: [], cursor: 'e3', has_more: false, status: {connection: 'ready', proxy: true}}));
 polling.request({REQUEST_KIND: R.chats, REQUEST_SEQ: 113, ACCOUNT_ID: ACCOUNT, LIST: 0, PAGE_OP: OP.first});
 polling.reply('chats', ok(page([chat('1')], {connection: 'ready'})));
 assert.deepStrictEqual(polling.response(113).records[0], {type: 'summary', connection: protocol.connection.ready, proxy: 1, unreadChats: 0, unreadMessages: 0});

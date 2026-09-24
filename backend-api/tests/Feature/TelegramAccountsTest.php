@@ -2,9 +2,7 @@
 
 use App\Cache\ReconciliationCacheKeys;
 use App\Enums\AccountLifecycle;
-use App\Models\ApiClient;
-use App\Models\Device;
-use App\Models\Instance;
+use App\Enums\TokenType;
 use App\Models\TelegramAccount;
 use App\Services\TelegramAccountService;
 use Illuminate\Database\QueryException;
@@ -14,12 +12,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 
 beforeEach(function (): void {
-    $this->token = 'tb_ccccccccccccccccccccccccccccccccccccccccccc';
-    ApiClient::query()->create([
-        'name' => 'stage-1-test',
-        'token_prefix' => substr($this->token, 0, 12),
-        'token_hash' => hash('sha256', $this->token),
-    ]);
+    $this->token = issueTestToken(TokenType::Maintenance)['token'];
 });
 test('creation is durable idempotent and does not store auth inputs', function (): void {
     Http::fake([
@@ -103,14 +96,7 @@ test('account creation accepts an inherited proxy and rejects inherited proxy de
     ])->assertStatus(422)->assertJsonPath('error.code', 'request.invalid');
 });
 test('device tokens cannot manage Telegram accounts through public routes', function (): void {
-    $instance = Instance::query()->create([]);
-    $token = 'tb_'.str_repeat('d', 43);
-    Device::query()->create([
-        'instance_id' => $instance->id,
-        'name' => 'Watch',
-        'token_prefix' => substr($token, 0, 12),
-        'token_hash' => hash('sha256', $token),
-    ]);
+    $token = issueTestToken(TokenType::Device)['token'];
     $account = telegramAccountsTestAccount();
     $this->withToken($token)->withHeader('Idempotency-Key', 'device-create-key')->postJson('/v1/telegram/accounts', [
         'label' => 'Forbidden',
@@ -479,12 +465,7 @@ test('account rate limits use separate shared authorization budgets', function (
             'value' => '+15550000000',
         ])->assertAccepted();
     }
-    $secondToken = 'tb_ddddddddddddddddddddddddddddddddddddddddddd';
-    ApiClient::query()->create([
-        'name' => 'stage-1-second-test',
-        'token_prefix' => substr($secondToken, 0, 12),
-        'token_hash' => hash('sha256', $secondToken),
-    ]);
+    $secondToken = issueTestToken(TokenType::Maintenance)['token'];
     $this->withToken($secondToken)->postJson($url, [
         'action' => 'submit_phone_number',
         'authorization_version' => '1',
@@ -514,12 +495,13 @@ test('preview proxy validates its identifier and returns only bounded image byte
             ],
         ]),
     ]);
+    $device = issueTestToken(TokenType::Device)['token'];
     $url = '/v1/telegram/accounts/'.$account->id.'/chats/42/messages/55/preview/';
-    $this->withToken($this->token)->get($url.$id)
+    $this->withToken($device)->get($url.$id)
         ->assertOk()->assertHeader('Content-Type', 'image/jpeg')->assertHeader('Cache-Control', 'no-store, private');
-    expect($this->withToken($this->token)->get($url.$id)->getContent())->toBe('jpeg-test');
-    $this->withToken($this->token)->getJson($url.'bad')->assertNotFound()->assertJsonPath('error.code', 'message.cache_miss');
-    $this->withToken($this->token)->getJson($url.$id.'?view_id=90112233-4455-4677-8899-aabbccddeeff')
+    expect($this->withToken($device)->get($url.$id)->getContent())->toBe('jpeg-test');
+    $this->withToken($device)->getJson($url.'bad')->assertNotFound()->assertJsonPath('error.code', 'message.cache_miss');
+    $this->withToken($device)->getJson($url.$id.'?view_id=90112233-4455-4677-8899-aabbccddeeff')
         ->assertStatus(422)->assertJsonPath('error.code', 'request.invalid');
 });
 

@@ -19,5 +19,9 @@ interface QuickReplyRepository
 
     public function update(string $instanceId, string $id, string $text): void;
 
-    public function delete(string $instanceId, string $id): void;
+    public function delete(string $instanceId, string $id): bool;
+
+    public function revision(string $instanceId): int;
+
+    public function bumpRevision(string $instanceId): void;
 }

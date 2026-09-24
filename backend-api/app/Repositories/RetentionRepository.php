@@ -24,15 +24,11 @@ final class RetentionRepository implements RetentionRepositoryContract
         return DB::transaction(function () use ($now, $idempotency, $sessions): array {
             $counts = [
                 'account_idempotency_keys' => DB::table('account_idempotency_keys')->where('created_at', '<', $idempotency)->delete(),
-                'instance_account_idempotency_keys' => DB::table('instance_account_idempotency_keys')->where('created_at', '<', $idempotency)->delete(),
-                'owner_account_idempotency_keys' => DB::table('owner_account_idempotency_keys')->where('created_at', '<', $idempotency)->delete(),
+                'message_sends' => DB::table('message_sends')->where('created_at', '<', $idempotency)->delete(),
             ];
-            $expired = DB::table('owner_sessions')->where(function (Builder $query) use ($sessions): void {
+            $counts['access_tokens'] = DB::table('access_tokens')->whereNotNull('expires_at')->where(function (Builder $query) use ($sessions): void {
                 $query->where('expires_at', '<', $sessions)->orWhere('revoked_at', '<', $sessions);
-            })->whereNotExists(function (Builder $query): void {
-                $query->select(DB::raw(1))->from('owner_account_idempotency_keys')->whereColumn('owner_account_idempotency_keys.owner_session_id', 'owner_sessions.id');
-            });
-            $counts['owner_sessions'] = $expired->delete();
+            })->delete();
             $counts['bootstrap_codes'] = DB::table('bootstrap_codes')->where(function (Builder $query) use ($now): void {
                 $query->where('expires_at', '<', $now->subDay())->orWhere('consumed_at', '<', $now->subDay());
             })->delete();

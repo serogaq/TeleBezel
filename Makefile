@@ -10,6 +10,8 @@ CMAKE_BIN ?= $(shell if command -v uvx >/dev/null 2>&1; then echo 'uvx --from cm
 CLANG_FORMAT_BIN ?= $(shell if command -v uvx >/dev/null 2>&1; then echo 'uvx --from clang-format==$(CLANG_FORMAT_VERSION) clang-format'; else echo clang-format; fi)
 PEBBLE ?= pebble
 PLATFORM ?= emery
+SCREENS ?= all
+CLAY_PORT ?= 8733
 PBW ?= app/build/app.pbw
 IP ?=
 QEMU_FLAGS ?=
@@ -19,7 +21,7 @@ TDLIB_BUILD_DIR ?= backend-tdlib/build
 TDLIB_CMAKE_ARGS ?=
 CMAKE_GENERATOR_ARGS ?= $(if $(wildcard $(TDLIB_BUILD_DIR)/CMakeCache.txt),,-G Ninja)
 
-.PHONY: help toolchain-check app-build app-check app-qemu app-emulator-check app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test offline-restart-test image-smoke check clean
+.PHONY: help toolchain-check app-build app-check app-qemu app-emulator-check app-screens open-clay app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test offline-restart-test image-smoke check clean
 help:
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -46,9 +48,28 @@ app-qemu: ## Run the PBW in QEMU against the mock API until closed or Ctrl+C; BA
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
 	@PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" PBW="$(abspath $(PBW))" QEMU_FLAGS="$(QEMU_FLAGS)" bash tests/emulator/qemu.sh "$(PLATFORM)"
 
-app-emulator-check: ## Walk the read path in QEMU against the mock API and save screenshots: PLATFORM=emery
+app-emulator-check: ## Build with TB_DIAG=1, walk the read and send paths in QEMU against the mock API, save screenshots and check memory: PLATFORM=emery
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
-	PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" bash tests/emulator/read_path.sh "$(PLATFORM)"
+	cd app && PATH="$(NODE_BIN):$$PATH" TB_DIAG=1 pebble build
+	python3 .github/scripts/validate_pbw.py app/build/app.pbw
+	PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" bash tests/emulator/read_path.sh "$(PLATFORM)"
+	PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" bash tests/emulator/send_path.sh "$(PLATFORM)"
+	python3 tests/emulator/diag_summary.py "$(PLATFORM)" tests/emulator/diag-baseline.json app/build/emulator/$(PLATFORM)/diag-summary.json \
+		app/build/emulator/$(PLATFORM)/diag.log app/build/emulator/$(PLATFORM)/diag-connecting.log app/build/emulator/$(PLATFORM)/send/diag.log \
+		app/build/emulator/$(PLATFORM)/serial.log app/build/emulator/$(PLATFORM)/send/serial.log
+	@echo 'app/build/app.pbw is now a TB_DIAG build; run make app-build before installing on a watch'
+
+app-screens: ## Screenshot cases in QEMU against the mock API and join them into one sheet per watch: PLATFORM="emery,gabbro" SCREENS="compose,reply" (see SCREENS=list)
+	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
+	@python=$$(head -1 "$$(command -v $(PEBBLE))" | sed 's/^#!//'); \
+	if test "$(SCREENS)" = list; then "$$python" tests/emulator/screens.py --list; exit 0; fi; \
+	(cd app && PATH="$(NODE_BIN):$$PATH" pebble build >/dev/null) && python3 .github/scripts/validate_pbw.py app/build/app.pbw && \
+	PATH="$(NODE_BIN):$$PATH" "$$python" tests/emulator/screens.py --platform "$(PLATFORM)" --screens "$(SCREENS)" --sdk "$(PEBBLE_SDK_VERSION)"
+
+open-clay: ## Open the Clay settings of the app running in the emulator (make app-qemu) in the browser; Ctrl+C closes them like the phone's back arrow: PLATFORM=emery [CLAY_PORT=8733]
+	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
+	@python=$$(head -1 "$$(command -v $(PEBBLE))" | sed 's/^#!//'); \
+	exec "$$python" tests/emulator/clay.py --platform "$(PLATFORM)" --port "$(CLAY_PORT)"
 
 app-install: ## Install an existing PBW on a watch: IP=phone-ip (or CloudPebble)
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
@@ -128,9 +149,9 @@ secrets-provision: ## Grant only required container UIDs access to secret files 
 db-migrate: ## Apply production-safe migrations explicitly
 	docker compose run --rm -e DB_STATEMENT_TIMEOUT=30000 -e DB_LOCK_TIMEOUT=5000 backend-api php artisan telebezel:migrate-locked
 
-api-client-issue: ## Issue an API token: make api-client-issue NAME=my-watch
+api-client-issue: ## Issue an API token: make api-client-issue NAME=my-watch [TYPE=device|maintenance]
 	test -n "$(NAME)"
-	docker compose run --rm backend-api php artisan telebezel:api-client-issue "$(NAME)"
+	docker compose run --rm backend-api php artisan telebezel:api-client-issue "$(NAME)" --type="$(or $(TYPE),maintenance)"
 
 integration-test: ## Run the real Compose health path
 	bash tests/integration/health_path.sh

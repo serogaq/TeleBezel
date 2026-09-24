@@ -22,6 +22,12 @@ const char *tb_error_text(const TbStrings *strings, int32_t error) {
     case TB_RESULT_CURSOR_LOST: return strings->busy;
     case TB_RESULT_TOO_MANY_VIEWS: return strings->too_many_views;
     case TB_RESULT_MESSAGE_UNAVAILABLE: return strings->message_unavailable;
+    case TB_RESULT_SEND_FORBIDDEN: return strings->send_forbidden;
+    case TB_RESULT_REPLY_UNAVAILABLE: return strings->reply_unavailable;
+    case TB_RESULT_TEXT_TOO_LONG: return strings->text_too_long_error;
+    case TB_RESULT_DRAFT_LOST: return strings->draft_lost;
+    case TB_RESULT_SEND_UNKNOWN: return strings->send_unknown;
+    case TB_RESULT_SEND_RATE_LIMITED: return strings->send_rate_limited;
     case TB_ERROR_PHONE_UNREACHABLE: return strings->phone_unreachable;
     case TB_ERROR_NO_RESPONSE: return strings->no_response;
     case TB_ERROR_OUT_OF_MEMORY: return strings->out_of_memory;

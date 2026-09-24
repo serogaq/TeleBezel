@@ -4,38 +4,63 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use App\Contracts\Repositories\AuthenticationRepository;
+use App\Contracts\Repositories\AccessTokenRepository;
+use App\Data\AccessTokenData;
 use App\Data\PrincipalContext;
 use App\Exceptions\ApiException;
 
 final readonly class AuthenticationService
 {
-    public function __construct(private AuthenticationRepository $principals) {}
+    public const string COOKIE = 'telebezel_session';
+
+    public const string CSRF_HEADER = 'X-TeleBezel-CSRF';
+
+    public function __construct(private AccessTokenRepository $tokens, private string $appKey) {}
 
     public function token(?string $token): PrincipalContext
     {
-        if ($token === null || preg_match('/^tb_[A-Za-z0-9_-]{43}$/D', $token) !== 1) {
+        if ($token === null || ! self::wellFormed($token)) {
             throw new ApiException('auth.unauthorized', 401);
         }
+        $data = $this->tokens->find(hash('sha256', $token));
+        if ($data === null || $data->claims === null) {
+            throw new ApiException('auth.unauthorized', 401);
+        }
+        if (($data->expiresAt !== null && ! $data->expiresAt->isFuture()) || ($data->idleTimeoutSeconds !== null && ($data->lastActiveAt === null || ! $data->lastActiveAt->addSeconds($data->idleTimeoutSeconds)->isFuture()))) {
+            $this->tokens->revoke($data->id);
+            throw new ApiException('auth.unauthorized', 401);
+        }
+        $this->tokens->touch($data);
 
-        return $this->principals->token(hash('sha256', $token)) ?? throw new ApiException('auth.unauthorized', 401);
+        return $this->principal($data);
     }
 
-    public function owner(?string $token): PrincipalContext
+    public function cookie(?string $token, ?string $csrf, bool $safeMethod): PrincipalContext
     {
-        if ($token === null) {
-            throw new ApiException('owner.authentication_required', 401);
+        if ($token === null || ! self::wellFormed($token)) {
+            throw new ApiException('auth.unauthorized', 401);
+        }
+        if (! $safeMethod && ($csrf === null || ! hash_equals($this->csrf($token), $csrf))) {
+            throw new ApiException('auth.csrf_mismatch', 419);
         }
 
-        $session = $this->principals->owner(hash('sha256', $token));
-        if ($session !== null && ($session->expiresAt->isPast() || $session->authenticatedAt->addHours(12)->isPast() || $session->lastInteractiveAt->addMinutes(30)->isPast())) {
-            $this->principals->revokeOwnerSession($session->id);
-            $session = null;
-        }
-        if ($session === null) {
-            throw new ApiException('owner.authentication_required', 401);
-        }
+        return $this->token($token);
+    }
 
-        return new PrincipalContext('owner', $session->id, $session->instanceId);
+    public function csrf(string $token): string
+    {
+        return hash_hmac('sha256', 'telebezel-csrf-v1|'.hash('sha256', $token), $this->appKey);
+    }
+
+    public static function wellFormed(string $token): bool
+    {
+        return preg_match('/^tb_[A-Za-z0-9_-]{43}$/D', $token) === 1;
+    }
+
+    private function principal(AccessTokenData $data): PrincipalContext
+    {
+        $claims = $data->claims ?? throw new ApiException('auth.unauthorized', 401);
+
+        return new PrincipalContext($data->type->value, $data->id, $data->instanceId, $claims->permissions, $claims->accounts);
     }
 }

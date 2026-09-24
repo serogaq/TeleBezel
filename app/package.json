@@ -17,7 +17,7 @@
     "lint": "eslint src/pkjs tests scripts",
     "test:js": "node tests/run.js",
     "test:c": "node tests/c.js",
-    "test:e2e": "node tests/e2e/read_path.js",
+    "test:e2e": "node tests/e2e/read_path.js && node tests/e2e/send_path.js",
     "test": "npm run generate && npm run lint && npm run test:js && npm run test:c && npm run test:e2e"
   },
   "dependencies": {
@@ -32,9 +32,7 @@
     "sdkVersion": "3",
     "enableMultiJS": true,
     "targetPlatforms": [
-      "diorite",
       "emery",
-      "flint",
       "gabbro"
     ],
     "capabilities": [
@@ -64,10 +62,25 @@
       "TEXT_LIMIT",
       "PAGE_FLAGS",
       "RETRY_AFTER",
-      "CONFIG_DEFAULT_ACCOUNT"
+      "CONFIG_DEFAULT_ACCOUNT",
+      "DRAFT_ID",
+      "TEMPLATE_INDEX",
+      "TEMPLATES_REV",
+      "ATTEMPT"
     ],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "raw",
+          "name": "STRINGS_EN",
+          "file": "generated/strings_en.bin"
+        },
+        {
+          "type": "raw",
+          "name": "STRINGS_RU",
+          "file": "generated/strings_ru.bin"
+        }
+      ]
     }
   }
 }

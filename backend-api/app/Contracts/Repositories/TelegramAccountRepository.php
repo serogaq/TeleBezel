@@ -13,12 +13,13 @@ interface TelegramAccountRepository
     /** @param array<string, mixed> $input
      * @param array<string, mixed> $proxy
      * @return array{AccountData, bool} */
-    public function create(bool $owner, string $scopeId, string $keyHash, string $requestHash, array $input, array $proxy, int $attempt = 0): array;
+    public function create(string $tokenId, string $keyHash, string $requestHash, array $input, array $proxy, int $attempt = 0): array;
 
     public function find(string $id): AccountData;
 
-    /** @return LengthAwarePaginator<int, AccountData> */
-    public function paginate(int $perPage, int $page): LengthAwarePaginator;
+    /** @param list<string>|null $only
+     * @return LengthAwarePaginator<int, AccountData> */
+    public function paginate(int $perPage, int $page, ?array $only = null): LengthAwarePaginator;
 
     public function isRemoved(string $id): bool;
 

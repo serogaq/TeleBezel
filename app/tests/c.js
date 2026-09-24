@@ -10,9 +10,12 @@ var suites = {
   pull_test: ['src/c/pull.c'],
   connection_test: ['src/c/connection.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c'],
   chats_test: ['src/c/chats.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
-  history_test: ['src/c/history.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
+  history_test: ['src/c/history.c', 'src/c/scratch.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
   message_text_test: ['src/c/message_text.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
-  format_test: ['src/c/format.c', 'src/c/errors.c', 'src/c/request_layer.c']
+  format_test: ['src/c/format.c', 'src/c/errors.c', 'src/c/request_layer.c'],
+  notify_test: ['src/c/notify.c'],
+  send_tracker_test: ['src/c/send_tracker.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
+  compose_test: ['src/c/compose.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c']
 };
 var only = process.argv.slice(2);
 fs.mkdirSync(path.join(root, 'build'), {recursive: true});
