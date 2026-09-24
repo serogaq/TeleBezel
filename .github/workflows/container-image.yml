@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - if: inputs.component == 'backend-api'
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.0.0
       - if: inputs.component == 'backend-tdlib'
         uses: ./.github/actions/tdlib-image-cache # zizmor: ignore[self-repository]
         with: {arch: "${{ matrix.arch }}"}
@@ -109,7 +109,7 @@ jobs:
           merge-multiple: true
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.0.0
       - name: Create candidate manifest without touching version or latest
         env: {IMAGE: "${{ inputs.image-name }}", CANDIDATE: "candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.component }}"}
         run: |
@@ -183,7 +183,7 @@ jobs:
         with: {fetch-depth: 0, persist-credentials: false}
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.0.0
       - id: tags
         env:
           IMAGE: "${{ inputs.image-name }}"
