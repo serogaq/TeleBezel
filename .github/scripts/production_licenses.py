@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Keep the production dependency/license inventory in sync with lockfiles."""
+"""Keep the production dependency/license inventory in sync with lockfiles.
+
+Versions are left out on purpose: a version bump does not change the inventory,
+while a new or removed package or a changed license does.
+"""
 
 import json
 import sys
@@ -9,13 +13,13 @@ root = Path(__file__).resolve().parents[2]
 target = root / "docs/licenses/production-dependencies.tsv"
 composer = json.loads((root / "backend-api/composer.lock").read_text())
 npm = json.loads((root / "app/package-lock.json").read_text())
-rows = [("ecosystem", "package", "version", "license")]
+rows = [("ecosystem", "package", "license")]
 for package in composer["packages"]:
-    rows.append(("Composer", package["name"], package["version"], ",".join(package.get("license", [])) or "UNKNOWN"))
+    rows.append(("Composer", package["name"], ",".join(package.get("license", [])) or "UNKNOWN"))
 for path, package in npm["packages"].items():
     if path.startswith("node_modules/") and not package.get("dev"):
-        rows.append(("npm", path.removeprefix("node_modules/"), package["version"], package.get("license", "UNKNOWN")))
-content = "\n".join("\t".join(row) for row in [rows[0], *sorted(rows[1:])]) + "\n"
+        rows.append(("npm", path.removeprefix("node_modules/"), package.get("license", "UNKNOWN")))
+content = "\n".join("\t".join(row) for row in [rows[0], *sorted(set(rows[1:]))]) + "\n"
 if sys.argv[1:] == ["--write"]:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
