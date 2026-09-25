@@ -18,7 +18,7 @@ jobs:
         with: {php-version: "${{ steps.toolchain.outputs.php-version }}", extensions: pdo_pgsql, tools: "composer:${{ steps.toolchain.outputs.composer-version }}", coverage: none}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with: {version: "${{ steps.toolchain.outputs.uv-version }}", enable-cache: true}
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.0.0
       - run: python3 .github/scripts/check_toolchain_drift.py && make workflow-audit
       - working-directory: app
         run: npm ci && npm audit
@@ -106,7 +106,7 @@ jobs:
     steps:
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.0.0
       - id: digest
         env: {IMAGE: "ghcr.io/${{ github.repository_owner }}/telebezel-${{ matrix.component }}", VERSION: "${{ matrix.version }}"}
         run: |
