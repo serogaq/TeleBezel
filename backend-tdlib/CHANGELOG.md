@@ -27,3 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Message sending with replies keyed by operation ID: at most 256 operations per account for 24 hours, the temporary message replaced by the confirmed one, refusals mapped to safe codes and `send_changed` journal events.
 - `forward_from` in message projections: the original author of a forwarded or imported message.
 - `connection_changed` journal events, a `can_send` hint derived from chat type, membership and permissions, and `reply_to` with the replied sender and a short text in message projections.
+
+### Changed
+
+- The image is based on Debian 13.7, which carries the fixed pcre2 and OpenSSL
+  packages flagged by the image scan.

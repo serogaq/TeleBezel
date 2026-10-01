@@ -123,7 +123,7 @@ test "$code" = 503
 grep -q 'service.database_unavailable' "$work_dir/postgres-down.json"
 curl_bounded -fsS "http://127.0.0.1:$API_PORT/healthz" >/dev/null
 "${compose[@]}" start postgres
-"${compose[@]}" exec -T backend-api php artisan tinker --execute='echo config("logging.default");' | grep -q stderr
+"${compose[@]}" exec -T backend-api php artisan tinker --execute='echo config("logging.default");' | grep stderr >/dev/null
 "${compose[@]}" logs --no-color --no-log-prefix backend-api | python3 -c '
 import json,sys
 events=[]

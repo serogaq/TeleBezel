@@ -32,7 +32,7 @@ docker exec -e EXPECTED_VERSION="$expected_version" "$container" php -r '
   exit(($body["version"] ?? null) === getenv("EXPECTED_VERSION") ? 0 : 1);
 '
 test "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$container")" = "$expected_version"
-docker logs "$container" 2>&1 | grep -q '"message":"http_request"'
+docker logs "$container" 2>&1 | grep '"message":"http_request"' >/dev/null
 docker exec "$container" sh -c 'test ! -e /app/telebezel_test && test -z "$(find /app -type f \( -name "*.sqlite" -o -name "*.sqlite3" -o -name "*.db" \) -print -quit)"'
 test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$container")" = true
 test "$(docker inspect -f '{{json .HostConfig.CapDrop}}' "$container")" = '["ALL"]'

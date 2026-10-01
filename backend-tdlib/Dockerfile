@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.11
-FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS build
+FROM debian:13.7-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS build
 ARG CMAKE_VERSION=4.4.3
 ARG VERSION=0.3.0
 ARG TARGETARCH
@@ -49,7 +49,7 @@ RUN --mount=type=cache,id=telebezel-tdlib-build-${TARGETARCH},target=/src/build,
     && bash tests/sanitizers.sh build /opt/cmake/bin/cmake
 
 
-FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime
+FROM debian:13.7-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
 ARG VERSION=0.3.0
 LABEL org.opencontainers.image.source="https://github.com/serogaq/TeleBezel" \
       org.opencontainers.image.title="TeleBezel backend-tdlib" \

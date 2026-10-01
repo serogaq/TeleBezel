@@ -72,7 +72,7 @@ int main(void) {
   TbMediaDataRecord data;
   assert(tb_codec_media_data(&body, &data));
   assert(data.offset == 4000 && data.data.length == 4 && data.data.data[0] == 'T' && data.data.data[3] == 4);
-  for (uint16_t cut = 0; cut + 3 < sizeof(tb_vector_media_info); ++cut) {
+  for (uint16_t cut = 0; (size_t)cut + 3 < sizeof(tb_vector_media_info); ++cut) {
     TbCursor cursor;
     tb_cursor_init(&cursor, tb_vector_media_info + 3, cut);
     assert(!tb_codec_media_info(&cursor, &info));
