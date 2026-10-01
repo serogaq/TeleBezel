@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"runtime"
 	"testing"
 	"time"
 
@@ -164,6 +165,35 @@ func TestRejectsUntrustedInputSafely(t *testing.T) {
 	cancel()
 	if _, err := Render(cancelled, encode(t, landscape(640, 480)), emery); err == nil {
 		t.Fatal("a cancelled render finished")
+	}
+}
+
+func TestLargeSourcesStayWithinTheirMemory(t *testing.T) {
+	input := encode(t, screenshot(3000, 3000))
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	result, err := Render(context.Background(), input, gabbro)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(t, "large screenshot", result, gabbro)
+	if result.Class != "graphic" {
+		t.Fatalf("a reduced screenshot was classified as %s", result.Class)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 48<<20 {
+		t.Fatalf("a 9 megapixel render allocated %d MiB", allocated>>20)
+	}
+	wide := append([]byte(nil), input...)
+	for index := 0; index+8 < len(wide); index++ {
+		if wide[index] == 0xFF && wide[index+1] == 0xC0 {
+			wide[index+5], wide[index+6], wide[index+7], wide[index+8] = 0x0F, 0xA0, 0x13, 0x88
+			break
+		}
+	}
+	if _, err := Render(context.Background(), wide, gabbro); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("5000x4000 is over the pixel limit, got %v", err)
 	}
 }
 

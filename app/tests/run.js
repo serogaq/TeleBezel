@@ -30,5 +30,6 @@ require('./reader_test');
 require('./compose_test');
 require('./contract_test');
 require('./media_test');
+require('./updates_test');
 require('./config_page_test');
 process.stdout.write('PKJS tests passed\n');

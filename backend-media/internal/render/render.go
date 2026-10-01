@@ -25,7 +25,7 @@ const PipelineVersion = "1"
 const (
 	MaxInputBytes = 5 << 20
 	MaxSide       = 8192
-	MaxPixels     = 40_000_000
+	MaxPixels     = 16_000_000
 	MaxBudget     = 28672
 	MinBudget     = 2048
 	MaxCanvas     = 260
@@ -110,9 +110,8 @@ func Render(ctx context.Context, input []byte, spec Spec) (result Result, err er
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	source := linear(decoded)
-	width, height := fit(source.width, source.height, spec.Width, spec.Height)
-	class := classify(source)
+	width, height := fit(config.Width, config.Height, spec.Width, spec.Height)
+	source, class := linear(decoded)
 	plans := plan(spec, class)
 	digest := sha256.Sum256(append(append([]byte(PipelineVersion+"|"), input...), []byte(fmt.Sprintf("|%+v", spec))...))
 	tag := binary.LittleEndian.Uint32(digest[:4]) | 1
@@ -212,41 +211,88 @@ func toSRGB(value float32) float32 {
 	return float32(1.055*math.Pow(float64(value), 1/2.4) - 0.055)
 }
 
-// linear converts once into linear light so averaging does not darken edges.
-func linear(img image.Image) plane {
-	bounds := img.Bounds()
-	result := plane{width: bounds.Dx(), height: bounds.Dy(), rgb: make([]float32, bounds.Dx()*bounds.Dy()*3)}
-	put := func(offset int, r, g, b uint8) {
-		result.rgb[offset] = toLinear[r]
-		result.rgb[offset+1] = toLinear[g]
-		result.rgb[offset+2] = toLinear[b]
+const planeLimit = 2_000_000
+
+var shade = func() (table [256]uint32) {
+	for index := range table {
+		table[index] = uint32(toSRGB(toLinear[index]) * 63)
 	}
+	return table
+}()
+
+func pixels(img image.Image) func(x, y int) (uint8, uint8, uint8) {
+	bounds := img.Bounds()
 	switch source := img.(type) {
 	case *image.YCbCr:
-		for y := 0; y < result.height; y++ {
-			for x := 0; x < result.width; x++ {
-				yi := source.YOffset(bounds.Min.X+x, bounds.Min.Y+y)
-				ci := source.COffset(bounds.Min.X+x, bounds.Min.Y+y)
-				r, g, b := color.YCbCrToRGB(source.Y[yi], source.Cb[ci], source.Cr[ci])
-				put((y*result.width+x)*3, r, g, b)
-			}
+		return func(x, y int) (uint8, uint8, uint8) {
+			yi := source.YOffset(bounds.Min.X+x, bounds.Min.Y+y)
+			ci := source.COffset(bounds.Min.X+x, bounds.Min.Y+y)
+			return color.YCbCrToRGB(source.Y[yi], source.Cb[ci], source.Cr[ci])
 		}
 	case *image.Gray:
-		for y := 0; y < result.height; y++ {
-			for x := 0; x < result.width; x++ {
-				value := source.Pix[source.PixOffset(bounds.Min.X+x, bounds.Min.Y+y)]
-				put((y*result.width+x)*3, value, value, value)
-			}
+		return func(x, y int) (uint8, uint8, uint8) {
+			value := source.Pix[source.PixOffset(bounds.Min.X+x, bounds.Min.Y+y)]
+			return value, value, value
 		}
 	default:
-		for y := 0; y < result.height; y++ {
-			for x := 0; x < result.width; x++ {
-				r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
-				put((y*result.width+x)*3, uint8(r>>8), uint8(g>>8), uint8(b>>8))
+		return func(x, y int) (uint8, uint8, uint8) {
+			r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
+			return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
+		}
+	}
+}
+
+// linear converts once into linear light so averaging does not darken edges.
+func linear(img image.Image) (plane, string) {
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	factor := 1
+	for ((width+factor-1)/factor)*((height+factor-1)/factor) > planeLimit {
+		factor++
+	}
+	result := plane{width: (width + factor - 1) / factor, height: (height + factor - 1) / factor}
+	result.rgb = make([]float32, result.width*result.height*3)
+	at := pixels(img)
+	step := max(1, int(math.Sqrt(float64(width*height)/40000)))
+	colours := map[uint32]bool{}
+	flat, total := 0, 0
+	for y := 0; y < height; y++ {
+		row := (y / factor) * result.width
+		sampled := y%step == 0
+		var previous uint32
+		for x := 0; x < width; x++ {
+			r, g, b := at(x, y)
+			offset := (row + x/factor) * 3
+			result.rgb[offset] += toLinear[r]
+			result.rgb[offset+1] += toLinear[g]
+			result.rgb[offset+2] += toLinear[b]
+			if sampled && x%step == 0 {
+				key := shade[r]<<12 | shade[g]<<6 | shade[b]
+				colours[key] = true
+				if x > 0 && key == previous {
+					flat++
+				}
+				previous = key
+				total++
 			}
 		}
 	}
-	return result
+	if factor > 1 {
+		for y := 0; y < result.height; y++ {
+			rows := min(factor, height-y*factor)
+			for x := 0; x < result.width; x++ {
+				count := float32(rows * min(factor, width-x*factor))
+				offset := (y*result.width + x) * 3
+				result.rgb[offset] /= count
+				result.rgb[offset+1] /= count
+				result.rgb[offset+2] /= count
+			}
+		}
+	}
+	if total > 0 && float64(flat)/float64(total) > 0.6 && len(colours) < 512 {
+		return result, "graphic"
+	}
+	return result, "photo"
 }
 
 // resample averages the source area behind each target pixel (downscaling)
@@ -296,32 +342,6 @@ func resample(source plane, width, height int) []float32 {
 		}
 	}
 	return out
-}
-
-// classify tells photos from screenshots and diagrams by how flat they are
-// and how few distinct colours they use.
-func classify(source plane) string {
-	step := max(1, int(math.Sqrt(float64(source.width*source.height)/40000)))
-	colours := map[uint32]bool{}
-	flat, total := 0, 0
-	for y := 0; y < source.height; y += step {
-		var previous uint32
-		for x := 0; x < source.width; x += step {
-			offset := (y*source.width + x) * 3
-			key := uint32(toSRGB(source.rgb[offset])*63)<<12 | uint32(toSRGB(source.rgb[offset+1])*63)<<6 |
-				uint32(toSRGB(source.rgb[offset+2])*63)
-			colours[key] = true
-			if x > 0 && key == previous {
-				flat++
-			}
-			previous = key
-			total++
-		}
-	}
-	if total > 0 && float64(flat)/float64(total) > 0.6 && len(colours) < 512 {
-		return "graphic"
-	}
-	return "photo"
 }
 
 type rgb [3]float32

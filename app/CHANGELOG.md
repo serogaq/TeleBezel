@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A reset of the phone side (new server or token) aborts the update poll in
+  flight; a late answer from before the reset no longer reaches the new
+  request's callbacks or overwrites its cursor.
 - Photos from link previews, including carousels of several photos, and
   purchased paid media open in the viewer like albums; paid posts no longer
   carry a "disappearing" mark.

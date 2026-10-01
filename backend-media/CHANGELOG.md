@@ -17,3 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   size checks before decoding, a render deadline and bounded concurrency.
 - No volumes, no network egress, no Telegram or database access; the image is
   `scratch` with a single static binary running as UID 10003.
+
+### Fixed
+
+- The peak memory of a render no longer grows with the source: a source above
+  2 Mpx is box-averaged while it is converted into linear light, and sources
+  above 16 Mpx are refused. A 40 Mpx JPEG used to need about 500 MiB; 16 Mpx
+  now takes under 100 MiB.
