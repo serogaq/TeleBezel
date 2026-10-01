@@ -56,6 +56,10 @@ done
 curl -fsS "$base/settings" >/dev/null
 
 ab() { agent-browser --session "$session" "$@"; }
+press() {
+  ab scrollintoview "$1" >/dev/null
+  ab click "$1" >/dev/null
+}
 assert_eval() {
   local expression="$1" expected="$2" actual
   for _ in {1..100}; do
@@ -83,18 +87,19 @@ step=start
 
 sign_out() {
   ab eval "window.telebezelPage = 'old'" >/dev/null
-  ab click '#sign-out' >/dev/null
+  press '#sign-out'
   assert_eval "window.telebezelPage === undefined && document.querySelector('#access').hidden === false" true
 }
 
 step=bootstrap
+ab set viewport 1280 1024 >/dev/null
 ab open "$base/settings" >/dev/null
 assert_eval "document.querySelector('#access').hidden" false
 assert_eval "document.querySelector('#configuration').hidden" true
 ab fill '#bootstrap [name=bootstrap_code]' "$bootstrap_code" >/dev/null
 test "$(ab get value '#bootstrap [name=bootstrap_code]')" = "$bootstrap_code"
 ab fill '#bootstrap [name=password]' 'correct horse battery staple' >/dev/null
-ab click '#bootstrap button' >/dev/null
+press '#bootstrap button'
 assert_eval "document.querySelector('#configuration').hidden" false
 assert_eval "document.querySelector('#recovery').hidden" false
 recovery_code=$(ab eval "document.querySelector('#recovery').textContent.split('\\n').at(-1)" | python3 -c 'import json, sys; print(json.load(sys.stdin))')
@@ -104,10 +109,10 @@ test -n "$recovery_code"
 # The retry must reuse the same payload and key, returning the same account.
 step=account-retry
 ab fill '#account-add [name=label]' 'Browser account' >/dev/null
-ab click '#account-add button' >/dev/null
+press '#account-add button'
 assert_eval "sessionStorage.getItem('telebezel.pending-account-create') !== null" true
 assert_eval "JSON.parse(sessionStorage.getItem('telebezel.pending-account-create')).body === JSON.stringify({label:'Browser account',proxy:{mode:'inherit'}})" true
-ab click '#account-add button' >/dev/null
+press '#account-add button'
 assert_eval "sessionStorage.getItem('telebezel.pending-account-create') === null" true
 assert_eval "document.querySelectorAll('#accounts .item').length" 1
 python3 - "$work/create-requests.jsonl" <<'PY'
@@ -126,13 +131,13 @@ PY
 step=login
 sign_out
 ab fill '#login [name=password]' 'correct horse battery staple' >/dev/null
-ab click '#login button' >/dev/null
+press '#login button'
 assert_eval "document.querySelector('#configuration').hidden" false
 step=recover
 sign_out
 ab fill '#recover [name=recovery_code]' "$recovery_code" >/dev/null
 ab fill '#recover [name=password]' 'new correct horse battery staple' >/dev/null
-ab click '#recover button' >/dev/null
+press '#recover button'
 assert_eval "document.querySelector('#configuration').hidden" false
 assert_eval "document.querySelectorAll('#accounts .item').length" 1
 
