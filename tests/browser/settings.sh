@@ -46,6 +46,10 @@ python3 "$root/tests/browser/lost_response_proxy.py" "$proxy_port" "$laravel_por
 proxy_pid=$!
 base="http://127.0.0.1:$proxy_port"
 for _ in {1..100}; do
+  if curl -fsS "http://127.0.0.1:$laravel_port/settings" >/dev/null 2>&1; then break; fi
+  sleep 0.1
+done
+for _ in {1..50}; do
   if curl -fsS "$base/settings" >/dev/null 2>&1; then break; fi
   sleep 0.1
 done
@@ -59,11 +63,23 @@ assert_eval() {
     if test "$actual" = "$expected"; then return; fi
     sleep 0.1
   done
-  printf 'Browser assertion failed: %s returned %s; expected %s\n' "$expression" "$actual" "$expected" >&2
-  ab eval "document.querySelector('#status').textContent" >&2 || true
-  tail -n 8 "$work/laravel.log" >&2 || true
+  printf 'Browser assertion failed at %s: %s returned %s; expected %s\n' "$step" "$expression" "$actual" "$expected" >&2
+  ab eval "JSON.stringify({url: location.href, ready: document.readyState, status: document.querySelector('#status').textContent,
+    access: document.querySelector('#access').hidden, configuration: document.querySelector('#configuration').hidden,
+    forms: [...document.querySelectorAll('#access form')].map(form => ({id: form.id, valid: form.checkValidity(),
+      fields: [...form.elements].filter(field => field.name).map(field => ({name: field.name, length: field.value.length, message: field.validationMessage}))})),
+    buttons: [...document.querySelectorAll('#access button')].map(button => { const box = button.getBoundingClientRect(); const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return {form: button.form?.id, box: [Math.round(box.x), Math.round(box.y), Math.round(box.width), Math.round(box.height)], hit: top ? top.tagName + '#' + top.id + '.' + top.className : null}; }),
+    viewport: [innerWidth, innerHeight],
+    requests: performance.getEntriesByType('resource').filter(entry => entry.name.includes('/v1/')).map(entry => [entry.name.replace(location.origin, ''), entry.responseStatus, Math.round(entry.duration)])})" >&2 || true
+  printf -- '--- page errors\n' >&2; ab errors >&2 || true
+  printf -- '--- console\n' >&2; ab console >&2 || true
+  printf -- '--- browser requests\n' >&2; ab network requests --filter /v1/ >&2 || true
+  printf -- '--- proxy\n' >&2; cat "$work/proxy.log" >&2 || true
+  printf -- '--- laravel\n' >&2; cat "$work/laravel.log" >&2 || true
   exit 1
 }
+step=start
 
 sign_out() {
   ab eval "window.telebezelPage = 'old'" >/dev/null
@@ -71,6 +87,7 @@ sign_out() {
   assert_eval "window.telebezelPage === undefined && document.querySelector('#access').hidden === false" true
 }
 
+step=bootstrap
 ab open "$base/settings" >/dev/null
 assert_eval "document.querySelector('#access').hidden" false
 assert_eval "document.querySelector('#configuration').hidden" true
@@ -85,6 +102,7 @@ test -n "$recovery_code"
 
 # The proxy forwards the first create to Laravel, then drops its response.
 # The retry must reuse the same payload and key, returning the same account.
+step=account-retry
 ab fill '#account-add [name=label]' 'Browser account' >/dev/null
 ab click '#account-add button' >/dev/null
 assert_eval "sessionStorage.getItem('telebezel.pending-account-create') !== null" true
@@ -105,10 +123,12 @@ assert requests[0]['status'] == 202 and requests[1]['status'] == 200
 assert requests[0]['id'] == requests[1]['id']
 PY
 
+step=login
 sign_out
 ab fill '#login [name=password]' 'correct horse battery staple' >/dev/null
 ab click '#login button' >/dev/null
 assert_eval "document.querySelector('#configuration').hidden" false
+step=recover
 sign_out
 ab fill '#recover [name=recovery_code]' "$recovery_code" >/dev/null
 ab fill '#recover [name=password]' 'new correct horse battery staple' >/dev/null
@@ -116,6 +136,7 @@ ab click '#recover button' >/dev/null
 assert_eval "document.querySelector('#configuration').hidden" false
 assert_eval "document.querySelectorAll('#accounts .item').length" 1
 
+step=language
 ab select '#language' ru >/dev/null
 assert_eval "document.documentElement.lang" '"ru"'
 assert_eval "document.querySelector('#configuration').hidden" false
