@@ -29,3 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Message sends with replies: idempotent per `Idempotency-Key`, `202` with an operation that becomes `pending`, `sent`, `failed` or `unknown`, a status endpoint, and `send_changed` events in `/updates` for the sending token only.
 - `GET /v1/quick-replies` with a revision, and `types` filtering for `/updates`.
 - `can_send`, `reply_to`, `sending_state` and `forward_from` in chat and message projections.
+
+### Fixed
+
+- Signing out of `/settings` stops the account refresh first, so a late answer
+  for the old session no longer shows the sign-in form on the page that is
+  about to reload.

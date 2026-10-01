@@ -65,6 +65,12 @@ assert_eval() {
   exit 1
 }
 
+sign_out() {
+  ab eval "window.telebezelPage = 'old'" >/dev/null
+  ab click '#sign-out' >/dev/null
+  assert_eval "window.telebezelPage === undefined && document.querySelector('#access').hidden === false" true
+}
+
 ab open "$base/settings" >/dev/null
 assert_eval "document.querySelector('#access').hidden" false
 assert_eval "document.querySelector('#configuration').hidden" true
@@ -99,13 +105,11 @@ assert requests[0]['status'] == 202 and requests[1]['status'] == 200
 assert requests[0]['id'] == requests[1]['id']
 PY
 
-ab click '#sign-out' >/dev/null
-assert_eval "document.querySelector('#access').hidden" false
+sign_out
 ab fill '#login [name=password]' 'correct horse battery staple' >/dev/null
 ab click '#login button' >/dev/null
 assert_eval "document.querySelector('#configuration').hidden" false
-ab click '#sign-out' >/dev/null
-assert_eval "document.querySelector('#access').hidden" false
+sign_out
 ab fill '#recover [name=recovery_code]' "$recovery_code" >/dev/null
 ab fill '#recover [name=password]' 'new correct horse battery staple' >/dev/null
 ab click '#recover button' >/dev/null

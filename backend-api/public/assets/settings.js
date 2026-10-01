@@ -9,12 +9,14 @@
     document.cookie = `telebezel_locale=${event.target.value}; path=/; max-age=31536000; SameSite=Strict`;
     location.reload();
   });
+  let leaving = false;
   const client = globalThis.TeleBezelSettingsApi.create({
     fetch: globalThis.fetch.bind(globalThis),
     csrf: document.querySelector('meta[name="csrf-token"]').content,
     apiCsrf: document.querySelector('meta[name="api-csrf"]').content,
     flow,
     onUnauthorized: () => {
+      if (leaving) return;
       document.getElementById('configuration').hidden = true;
       document.getElementById('access').hidden = false;
     },
@@ -80,7 +82,7 @@
   document.getElementById('proxy-direct').addEventListener('click', async () => { try { await request('/v1/proxies/direct', {method: 'POST', body: '{}'}); await renderSettings(); status.textContent = t('direct_selected'); } catch (error) { status.textContent = explain(error); } });
 
   const scheduleAccountRefresh = () => {
-    if (accountRefreshTimer !== null || document.hidden) return;
+    if (accountRefreshTimer !== null || document.hidden || leaving) return;
     accountRefreshTimer = setTimeout(async () => {
       accountRefreshTimer = null;
       try {
@@ -257,7 +259,12 @@
   const renderDevices = devices => { const list = document.getElementById('devices'); list.replaceChildren(); devices.forEach(device => { const item = node('div', null, 'item'); item.append(node('p', device.name), node('p', device.revoked_at ? t('revoked') : t('last_seen', {when: device.last_seen_at || t('never')}), 'meta')); if (!device.revoked_at) { const revoke = node('button', t('revoke'), 'danger'); revoke.type = 'button'; revoke.addEventListener('click', async () => { await request(`/v1/devices/${device.id}`, {method: 'DELETE'}); await renderSettings(); }); item.append(revoke); } list.append(item); }); };
   document.getElementById('device-add').addEventListener('submit', async event => { event.preventDefault(); try { const device = await request('/v1/devices', {method: 'POST', body: JSON.stringify({name: formValue(event.target, 'name')})}); const output = document.getElementById('device-token'); output.hidden = false; output.textContent = t('device_token_copy', {token: device.token}); await renderSettings(); status.textContent = t('device_created'); } catch (error) { status.textContent = explain(error); } });
   document.getElementById('rotate-recovery').addEventListener('click', async () => { try { const data = await request('/v1/session/recovery-code', {method: 'POST', body: '{}'}); showRecovery(data.recovery_code); status.textContent = t('recovery_created'); } catch (error) { status.textContent = explain(error); } });
-  document.getElementById('sign-out').addEventListener('click', async () => { await request('/v1/session/logout', {method: 'POST', body: '{}'}); location.reload(); });
+  document.getElementById('sign-out').addEventListener('click', async () => {
+    leaving = true;
+    clearTimeout(accountRefreshTimer);
+    accountRefreshTimer = null;
+    try { await request('/v1/session/logout', {method: 'POST', body: '{}'}); } finally { location.reload(); }
+  });
 
   authenticated().catch(error => {
     if (error.status === 401) {
