@@ -4,12 +4,13 @@ import sys
 
 model = json.load(sys.stdin)
 services = model['services']
-api, tdlib, postgres, scheduler = (services[name] for name in ('backend-api', 'backend-tdlib', 'postgres', 'scheduler'))
+api, tdlib, postgres, scheduler, media = (services[name] for name in ('backend-api', 'backend-tdlib', 'postgres', 'scheduler', 'backend-media'))
 
 def sources(service, key):
     return {entry['source'] for entry in service.get(key, [])}
 
-assert set(api['networks']) == {'api-ingress', 'api-db', 'api-tdlib'}
+assert set(api['networks']) == {'api-ingress', 'api-db', 'api-tdlib', 'api-media'}
+assert set(media['networks']) == {'api-media'}
 assert set(tdlib['networks']) == {'api-tdlib', 'tdlib-egress'}
 assert set(postgres['networks']) == {'api-db'}
 assert set(scheduler['networks']) == {'api-db', 'api-tdlib'}
@@ -18,17 +19,20 @@ assert not api.get('ports')
 assert ingress['ports'][0]['host_ip'] == '127.0.0.1' and ingress['ports'][0]['target'] == 8080
 assert set(ingress['networks']) == {'api-ingress', 'integration-host'}
 assert not ingress.get('secrets')
-assert not tdlib.get('ports') and not postgres.get('ports')
+assert not tdlib.get('ports') and not postgres.get('ports') and not media.get('ports')
+assert not media.get('volumes')
 assert not api.get('volumes')
 assert not scheduler.get('volumes')
 tdlib_volumes = tdlib.get('volumes', [])
 assert {entry['source'] for entry in tdlib_volumes if entry['type'] == 'volume'} == {'tdlib-data'}
 assert all(entry['target'] != '/run/secrets/telebezel-proxies' for entry in tdlib_volumes)
 assert sources(postgres, 'volumes') == {'postgres-data'}
-assert sources(api, 'secrets') == {'laravel_app_key', 'postgres_password', 'tdlib_internal_token'}
+assert sources(api, 'secrets') == {'laravel_app_key', 'postgres_password', 'tdlib_internal_token', 'media_internal_token'}
+assert sources(media, 'secrets') == {'media_internal_token'}
 assert sources(tdlib, 'secrets') == {'tdlib_internal_token', 'tdlib_database_master_key'}
 assert sources(postgres, 'secrets') == {'postgres_password'}
 assert sources(scheduler, 'secrets') == {'laravel_app_key', 'postgres_password', 'tdlib_internal_token'}
-assert api['read_only'] and tdlib['read_only'] and postgres['read_only'] and scheduler['read_only']
+assert api['read_only'] and tdlib['read_only'] and postgres['read_only'] and scheduler['read_only'] and media['read_only']
+assert media['cap_drop'] == ['ALL'] and media['user'] == '10003:10003'
 assert scheduler.get('entrypoint') is None
 assert scheduler['command'][:2] == ['sh', '-c']

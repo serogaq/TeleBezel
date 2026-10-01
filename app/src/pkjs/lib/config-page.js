@@ -22,7 +22,9 @@ function build(s, state) {
     {type: 'section', items: [{type: 'heading', defaultValue: s.section_watch}].concat(defaultAccount(s, state), [
       {type: 'toggle', id: 'show_archive', messageKey: 'SHOW_ARCHIVE', label: s.show_archive, description: s.show_archive_hint, defaultValue: true},
       {type: 'select', id: 'unread_mode', messageKey: 'UNREAD_MODE', label: s.unread_mode, description: s.unread_mode_hint, defaultValue: 'chats',
-        options: [{label: s.unread_mode_chats, value: 'chats'}, {label: s.unread_mode_messages, value: 'messages'}]}
+        options: [{label: s.unread_mode_chats, value: 'chats'}, {label: s.unread_mode_messages, value: 'messages'}]},
+      {type: 'select', id: 'photo_mode', messageKey: 'PHOTO_MODE', label: s.photo_mode, description: s.photo_mode_hint, defaultValue: 'auto',
+        options: [{label: s.photo_mode_auto, value: 'auto'}, {label: s.photo_mode_manual, value: 'manual'}]}
     ])},
     {type: 'submit', defaultValue: s.save}
   ];

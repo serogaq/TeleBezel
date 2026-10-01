@@ -1,6 +1,7 @@
 'use strict';
 var http = require('http');
 var url = require('url');
+var tbi = require('../helpers/tbi');
 
 var TOKEN = 'tb_' + new Array(44).join('e');
 var FIRST = '00112233-4455-4677-8899-aabbccddeeff';
@@ -28,12 +29,18 @@ var main = [
 for (var index = 0; index < 21; ++index) { main.push(chat(String(1000 + index), 'Chat ' + (index + 1), 'basic_group', index % 3, 'Message number ' + index)); }
 var archive = [chat('2001', 'Старый проект', 'basic_group', 0, 'Архивное сообщение'), chat('2002', 'Bot', 'private', 0, '/start')];
 
-function messages(chatId) {
+function messages(chatId, sent) {
   var list = [];
   for (var id = 70; id >= 1; --id) {
     var content = {kind: 'text', text: 'Сообщение ' + id + (id % 7 === 0 ? '\nвторая строка' : '')};
     if (id === 70) { content = {kind: 'text', text: LONG_TEXT}; }
-    if (id === 69) { content = {kind: 'photo', text: 'Подпись к фото', fallback_key: 'message.photo'}; }
+    if (id === 69) { content = {kind: 'photo', text: 'Подпись к фото. Длинная подпись канала проверяет, что пункт «Фото» перестаёт быть выделенным, когда текст прокручен вниз, и снова выделяется, когда вы возвращаетесь в самый верх сообщения.', fallback_key: 'message.photo', media: photo(1280, 960)}; }
+    if (id === 58 || id === 56) { content = {kind: 'photo', fallback_key: 'message.photo', media: photo(960, 1280, {album_id: '5000'})}; }
+    if (id === 57) { content = {kind: 'photo', text: 'Альбом из трёх фото', fallback_key: 'message.photo', media: photo(1280, 720, {album_id: '5000'})}; }
+    if (id === 54) { content = {kind: 'photo', text: 'Осторожно, спойлер', fallback_key: 'message.photo', media: photo(1280, 960, {has_spoiler: true})}; }
+    if (id === 53) { content = {kind: 'photo', fallback_key: 'message.photo', media: photo(1280, 960, {type: 'none', restriction: 'self_destruct'})}; }
+    if (id === 51) { content = {kind: 'text', text: 'https://t.me/news/1 Карусель из превью ссылки', media: photo(1280, 960, {count: 3})}; }
+    if (id === 52) { content = {kind: 'video', duration: 42, text: 'Видео', fallback_key: 'message.video', media: photo(640, 360, {type: 'thumbnail'})}; }
     if (id === 68) { content = {kind: 'sticker', fallback_key: 'message.sticker'}; }
     if (id === 67) { content = {kind: 'voice_note', duration: 74, fallback_key: 'message.voice_note'}; }
     if (id === 66) { content = {kind: 'service', action: 'pinned', fallback_key: 'message.service'}; }
@@ -44,6 +51,15 @@ function messages(chatId) {
         : id === 61 ? {message_id: '70', sender_name: 'Ада', text: LONG_TEXT.slice(0, 100)} : null,
       forward_from: id === 62 ? {type: 'chat', id: '-1001234567890', name: 'Новости', fallback: 'Chat -1001234567890', signature: 'Редактор'} : null,
       sending_state: id === 60 ? 'failed' : id === 55 ? 'pending' : null, content: content});
+  }
+  if (chatId === '-1001234567890') {
+    list.forEach(function(item) {
+      item.sender = {type: 'chat', id: chatId, name: 'Новости', fallback: 'Chat ' + chatId};
+      item.is_channel_post = true;
+      item.author_signature = Number(item.id) % 2 ? 'Редактор' : '';
+      item.is_outgoing = false;
+      item.sending_state = null;
+    });
   }
   if (chatId === '1') {
     list.forEach(function(item) {
@@ -56,7 +72,42 @@ function messages(chatId) {
         : id % 3 === 1 ? {type: 'hidden', name: 'Борис', fallback: 'Борис'} : null;
     });
   }
+  (sent || []).forEach(function(entry) {
+    if (entry.chat !== chatId || !entry.messageId) { return; }
+    list.unshift({id: entry.messageId, chat_id: chatId, sender: {type: 'user', id: '1', name: null, fallback: 'User 1'}, date: Math.floor(entry.created / 1000),
+      edit_date: 0, is_outgoing: true, author_signature: '', reply_to: entry.reply ? {message_id: entry.reply, sender_name: 'Ада', text: 'Сообщение ' + entry.reply} : null,
+      forward_from: null, sending_state: entry.state === 'sent' ? null : 'pending', content: {kind: 'text', text: entry.text}});
+  });
   return list;
+}
+
+function photo(width, height, extra) {
+  var value = {type: 'photo', width: width, height: height, has_spoiler: false, album_id: null, restriction: null};
+  Object.keys(extra || {}).forEach(function(key) { value[key] = extra[key]; });
+  return value;
+}
+
+var PALETTE = [0xC0, 0xFF, 0xC7, 0xCB, 0xDB, 0xF0, 0xF4, 0xF8, 0xFC, 0xD8, 0xC4, 0xE4, 0xEA, 0xD5, 0xC8, 0xE0];
+
+function scene(variant) {
+  return function(x, y, width, height) {
+    var horizon = Math.floor(height * (0.55 + 0.1 * variant));
+    var sunX = Math.floor(width * (0.3 + 0.2 * variant));
+    var sunY = Math.floor(height * 0.28);
+    var dx = x - sunX;
+    var dy = y - sunY;
+    var radius = Math.floor(Math.min(width, height) / 7);
+    if (dx * dx + dy * dy < radius * radius) { return 8; }
+    if (y < horizon) { return y < horizon / 3 ? 2 : y < horizon * 2 / 3 ? 3 : 4; }
+    var hill = Math.floor(horizon + 18 * Math.sin((x + variant * 40) / 23));
+    if (y < hill) { return 13; }
+    return ((x >> 2) + (y >> 2)) % 2 ? 11 : 10;
+  };
+}
+
+function fit(item, spec) {
+  var ratio = Math.min(spec.width / item.width, spec.height / item.height);
+  return {width: Math.max(1, Math.floor(item.width * ratio)), height: Math.max(1, Math.floor(item.height * ratio))};
 }
 
 function envelope(data) { return {data: data, request_id: 'mock'}; }
@@ -79,6 +130,8 @@ function create(options) {
   var pendingEvents = [];
   var sendModes = [];
   var newest = {};
+  var mediaSeen = {};
+  var mediaDelay = options.mediaDelay === undefined ? 1 : options.mediaDelay;
   var templates = {items: [{id: 't1', text: 'Уже еду', position: 0}, {id: 't2', text: 'Перезвоню позже', position: 1}], revision: 3};
   function operation(entry) {
     return {id: entry.id, state: entry.state, chat_id: entry.chat, reply_to_message_id: entry.reply || null, message_id: entry.messageId,
@@ -169,7 +222,7 @@ function create(options) {
     }
     if (path.length === 7 && path[6] === 'messages') {
       if (!query.view_id) { send(422, {error: {code: 'request.invalid'}}); return; }
-      var all = messages(path[5]);
+      var all = messages(path[5], sendOrder);
       var cursor = query.cursor || query.retry_cursor;
       var refresh = 'unchanged';
       if (options.refresh === 'pending' && !cursor) {
@@ -177,7 +230,7 @@ function create(options) {
         if (newest[path[5]] === 1) { all = all.filter(function(item) { return Number(item.id) <= 67; }); }
         if (newest[path[5]] <= 2) { refresh = 'pending'; }
       }
-      var anchor = cursor ? Number(cursor.split(':')[1]) : 71;
+      var anchor = cursor ? Number(cursor.split(':')[1]) : Infinity;
       var older = all.filter(function(item) { return Number(item.id) < anchor; });
       var chunk = older.slice(0, Number(query.limit || 30));
       var last = chunk.length ? Number(chunk[chunk.length - 1].id) : anchor;
@@ -185,8 +238,57 @@ function create(options) {
         refresh: refresh})));
       return;
     }
+    if (path.length === 9 && path[6] === 'messages' && path[8] === 'media') {
+      var chatMessages = messages(path[5], sendOrder);
+      var target = chatMessages.filter(function(item) { return item.id === path[7]; })[0];
+      var media = target && target.content.media;
+      if (!media) { send(404, {error: {code: 'message.cache_miss'}}); return; }
+      var members = media.album_id ? chatMessages.filter(function(item) { return item.content.media && item.content.media.album_id === media.album_id; })
+        .sort(function(a, b) { return Number(a.id) - Number(b.id); }) : Array.apply(null, Array(Math.min(10, media.count || 1))).map(function() { return target; });
+      var position = Number(query.index || 0);
+      var item = members[position];
+      if (!item) { send(422, {error: {code: 'request.invalid'}}); return; }
+      var descriptor = {index: position, count: members.length, item_message_id: item.id, has_spoiler: item.content.media.has_spoiler, retry_after: null};
+      var itemMedia = item.content.media;
+      if (itemMedia.restriction) { send(200, envelope(Object.assign({state: 'restricted'}, descriptor))); return; }
+      if (itemMedia.has_spoiler && query.reveal !== '1') { send(200, envelope(Object.assign({state: 'spoiler'}, descriptor))); return; }
+      var seenKey = path[5] + '|' + item.id + '|' + query.shape;
+      mediaSeen[seenKey] = (mediaSeen[seenKey] || 0) + 1;
+      if (mediaSeen[seenKey] <= mediaDelay) { send(200, envelope(Object.assign({state: 'downloading', retry_after: 1}, descriptor))); return; }
+      var spec = {width: Number(query.width), height: Number(query.height)};
+      var size = fit(itemMedia, spec);
+      var draw = scene(position + (item.id === '69' ? 0 : 1));
+      var budget = Number(query.budget || 28672);
+      var bits = 4;
+      var encoded = null;
+      function render() {
+        var shrunk = size;
+        return tbi.sample({width: shrunk.width, height: shrunk.height, canvasWidth: spec.width, canvasHeight: spec.height, shape: query.shape === 'round' ? 1 : 0,
+          bits: bits, tag: Number(item.id) * 16 + position + bits * 256 + size.width * 4096, palette: bits === 4 ? PALETTE : [0xC0, 0xD5, 0xEA, 0xFF],
+          pixel: function(x, y) { var value = draw(x, y, shrunk.width, shrunk.height); return bits === 4 ? value : value % 4; }});
+      }
+      var full = size;
+      encoded = render();
+      while (encoded.size > budget && size.width > full.width * 0.75) {
+        size = {width: Math.floor(size.width * 0.95), height: Math.floor(size.height * 0.95)};
+        encoded = render();
+      }
+      if (encoded.size > budget) {
+        bits = 2;
+        size = full;
+        encoded = render();
+      }
+      while (encoded.size > budget && size.width > 16) {
+        size = {width: Math.floor(size.width * 0.9), height: Math.floor(size.height * 0.9)};
+        encoded = render();
+      }
+      var tag = Number(item.id) * 16 + position + bits * 256 + size.width * 4096;
+      send(200, envelope(Object.assign({state: 'ready', rendition: {tag: tag, width: size.width, height: size.height, shape: query.shape,
+        format: 'p' + bits, crc32: encoded.crc, bytes_base64: Buffer.from(encoded.bytes).toString('base64')}}, descriptor)));
+      return;
+    }
     if (path.length === 8 && path[6] === 'messages') {
-      var found = messages(path[5]).filter(function(item) { return item.id === path[7]; })[0];
+      var found = messages(path[5], sendOrder).filter(function(item) { return item.id === path[7]; })[0];
       if (!found) { send(404, {error: {code: 'message.cache_miss'}}); return; }
       send(200, envelope({item: found, partial: false, stale: true, source: 'tdlib_memory', refresh: 'unchanged', fallback_reason: null, updates_cursor: 'u', observed_at: BASE_DATE}));
       return;
@@ -219,7 +321,7 @@ module.exports = {create: create, TOKEN: TOKEN, FIRST: FIRST, SECOND: SECOND, LO
 if (require.main === module) {
   var instance = create({defaultAccount: process.env.MOCK_DEFAULT_ACCOUNT || null, accounts: process.env.MOCK_ACCOUNTS === undefined ? undefined : Number(process.env.MOCK_ACCOUNTS),
     connection: process.env.MOCK_CONNECTION ? process.env.MOCK_CONNECTION.split(',') : null, proxy: process.env.MOCK_PROXY === '1',
-    refresh: process.env.MOCK_REFRESH || null});
+    refresh: process.env.MOCK_REFRESH || null, mediaDelay: process.env.MOCK_MEDIA_DELAY === undefined ? undefined : Number(process.env.MOCK_MEDIA_DELAY)});
   (process.env.MOCK_SEND_MODES ? process.env.MOCK_SEND_MODES.split(',') : []).forEach(function(mode) {
     instance.nextSend(mode === 'rate_limited'
       ? {status: 429, code: 'message.send_rate_limited', headers: {'Retry-After': '30'}} : mode);

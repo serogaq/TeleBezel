@@ -35,7 +35,7 @@ static void run(TbPull *pull, Clock *clock, uint32_t until) {
 int main(void) {
   Clock clock = {.now = 1000};
   TbPull pull;
-  tb_pull_init(&pull, (TbPullPorts){changed, trigger, schedule, cancel, now, &clock});
+  tb_pull_init(&pull, (TbPullPorts){changed, trigger, schedule, cancel, now, &clock, &clock});
 
   tb_pull_press(&pull);
   assert(pull.phase == TB_PULL_RISING_HALF && clock.timer);

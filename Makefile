@@ -17,11 +17,15 @@ IP ?=
 QEMU_FLAGS ?=
 LOG_FLAGS ?=
 GHCR_OWNER ?= serogaq
+SERVICE ?=
+GO_BIN ?= $(shell if command -v mise >/dev/null 2>&1 && mise where go@$(GO_VERSION) >/dev/null 2>&1; then printf '%s/bin/go' "$$(mise where go@$(GO_VERSION))"; else command -v go; fi)
+MEDIA_SAMPLES ?=
+MEDIA_DOCKER ?= 0
 TDLIB_BUILD_DIR ?= backend-tdlib/build
 TDLIB_CMAKE_ARGS ?=
 CMAKE_GENERATOR_ARGS ?= $(if $(wildcard $(TDLIB_BUILD_DIR)/CMakeCache.txt),,-G Ninja)
 
-.PHONY: help toolchain-check app-build app-check app-qemu app-emulator-check app-screens open-clay app-install api-check functional-test tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test offline-restart-test image-smoke check clean
+.PHONY: help toolchain-check app-build app-size app-check app-qemu app-emulator-check app-screens open-clay app-install api-check functional-test media-check media-samples tdlib-check tdlib-analysis tdlib-sanitizers tdlib-linux-check workflow-audit compose-config compose-build compose-up compose-down compose-ps compose-logs secrets-init secrets-provision preflight bootstrap-code db-migrate api-client-issue integration-test offline-restart-test image-smoke check clean
 help:
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -41,6 +45,9 @@ app-build: ## Build and validate app/build/app.pbw
 	cd app && PATH="$(NODE_BIN):$$PATH" pebble build
 	python3 .github/scripts/validate_pbw.py app/build/app.pbw
 
+app-size: app-build ## Show the static footprint against the stage budget and the largest functions
+	python3 tests/emulator/size_report.py "$(PEBBLE_SDK_VERSION)" 20
+
 app-check: app-build ## Build, lint, and test the Pebble app
 	cd app && PATH="$(NODE_BIN):$$PATH" npm test
 
@@ -48,18 +55,20 @@ app-qemu: ## Run the PBW in QEMU against the mock API until closed or Ctrl+C; BA
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
 	@PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" PBW="$(abspath $(PBW))" QEMU_FLAGS="$(QEMU_FLAGS)" bash tests/emulator/qemu.sh "$(PLATFORM)"
 
-app-emulator-check: ## Build with TB_DIAG=1, walk the read and send paths in QEMU against the mock API, save screenshots and check memory: PLATFORM=emery
+app-emulator-check: ## Build with TB_DIAG=1, walk the read, send and media paths in QEMU against the mock API, save screenshots and check memory: PLATFORM=emery [LANG_PACK=ru|none|path]
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
 	cd app && PATH="$(NODE_BIN):$$PATH" TB_DIAG=1 pebble build
-	python3 .github/scripts/validate_pbw.py app/build/app.pbw
+	TB_DIAG=1 python3 .github/scripts/validate_pbw.py app/build/app.pbw
 	PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" bash tests/emulator/read_path.sh "$(PLATFORM)"
 	PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" bash tests/emulator/send_path.sh "$(PLATFORM)"
+	PATH="$(NODE_BIN):$$PATH" PEBBLE_SDK_VERSION="$(PEBBLE_SDK_VERSION)" bash tests/emulator/media_path.sh "$(PLATFORM)"
 	python3 tests/emulator/diag_summary.py "$(PLATFORM)" tests/emulator/diag-baseline.json app/build/emulator/$(PLATFORM)/diag-summary.json \
 		app/build/emulator/$(PLATFORM)/diag.log app/build/emulator/$(PLATFORM)/diag-connecting.log app/build/emulator/$(PLATFORM)/send/diag.log \
-		app/build/emulator/$(PLATFORM)/serial.log app/build/emulator/$(PLATFORM)/send/serial.log
+		app/build/emulator/$(PLATFORM)/media/diag.log app/build/emulator/$(PLATFORM)/serial.log app/build/emulator/$(PLATFORM)/send/serial.log \
+		app/build/emulator/$(PLATFORM)/media/serial.log
 	@echo 'app/build/app.pbw is now a TB_DIAG build; run make app-build before installing on a watch'
 
-app-screens: ## Screenshot cases in QEMU against the mock API and join them into one sheet per watch: PLATFORM="emery,gabbro" SCREENS="compose,reply" (see SCREENS=list)
+app-screens: ## Screenshot cases in QEMU against the mock API and join them into one sheet per watch: PLATFORM="emery,gabbro" SCREENS="compose,reply" (see SCREENS=list) [LANG_PACK=ru|none|path]
 	@command -v "$(PEBBLE)" >/dev/null 2>&1 || { echo 'Pebble CLI is required' >&2; exit 1; }
 	@python=$$(head -1 "$$(command -v $(PEBBLE))" | sed 's/^#!//'); \
 	if test "$(SCREENS)" = list; then "$$python" tests/emulator/screens.py --list; exit 0; fi; \
@@ -93,6 +102,14 @@ functional-test: ## Test Laravel/PostgreSQL against the C++ HTTP runtime with fa
 	$(CMAKE_BIN) --build $(TDLIB_BUILD_DIR) --target telebezel-tdlib-fixture --parallel 2
 	TDLIB_FIXTURE_BIN="$(abspath $(TDLIB_BUILD_DIR))/telebezel-tdlib-fixture" $(MAKE) api-check
 
+media-check: ## Vet, lint, scan and test backend-media, including a short fuzz run; MEDIA_DOCKER=1 runs it in the pinned Go image
+	GO_BIN="$(GO_BIN)" MEDIA_DOCKER="$(MEDIA_DOCKER)" bash tests/media/check.sh
+
+media-samples: ## Render JPEG files as emery and gabbro would show them: MEDIA_SAMPLES="a.jpg b.jpg" (writes app/build/media-samples.png)
+	@test -n "$(MEDIA_SAMPLES)" || { echo 'Set MEDIA_SAMPLES to one or more JPEG files' >&2; exit 1; }
+	mkdir -p app/build
+	cd backend-media && $(GO_BIN) run ./cmd/media-samples -sheet $(abspath app/build/media-samples.png) $(abspath $(MEDIA_SAMPLES))
+
 tdlib-check: ## Configure, build, and test backend-tdlib
 	$(CLANG_FORMAT_BIN) --dry-run --Werror $$(find backend-tdlib/include backend-tdlib/src backend-tdlib/tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print)
 	$(CMAKE_BIN) -S backend-tdlib -B $(TDLIB_BUILD_DIR) $(CMAKE_GENERATOR_ARGS) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTELEBEZEL_BUILD_TESTS=ON -DTELEBEZEL_SANITIZER=none $(TDLIB_CMAKE_ARGS)
@@ -123,13 +140,32 @@ workflow-audit: ## Run actionlint and zizmor through pinned tools
 compose-config: ## Validate the Compose model
 	docker compose config --quiet
 
-compose-build: ## Build both application images
-	docker compose build backend-api backend-tdlib
+compose-build: ## Build the application images
+	docker compose build backend-api backend-tdlib backend-media
+
+compose-up: ## Start every service of the active Compose config (COMPOSE_FILE in .env) in order: dependencies, explicit migration, API and the rest, reconciliation
+	@missing=$$(for name in postgres_password laravel_app_key tdlib_internal_token tdlib_database_master_key media_internal_token; do test -f secrets/$$name || printf ' %s' $$name; done); \
+	if [ -n "$$missing" ]; then echo "Missing secrets:$$missing (run make secrets-init)" >&2; exit 1; fi
+	docker compose up -d --wait --wait-timeout 120 postgres backend-tdlib backend-media
+	$(MAKE) --no-print-directory db-migrate
+	docker compose up -d --wait --wait-timeout 120
+	docker compose run --rm backend-api php artisan telebezel:accounts-reconcile
+	docker compose ps
+
+compose-down: ## Stop and remove the containers, keeping volumes and secrets
+	docker compose down --remove-orphans
+
+compose-ps: ## Show the services of the active Compose config
+	docker compose ps -a
+
+compose-logs: ## Follow logs: make compose-logs [SERVICE=backend-media]
+	docker compose logs -f --tail=200 $(SERVICE)
 
 secrets-init: ## Create ignored local development secrets if absent
 	@umask 077; test -f secrets/postgres_password || openssl rand -base64 32 > secrets/postgres_password
 	@umask 077; test -f secrets/tdlib_internal_token || openssl rand -hex 32 > secrets/tdlib_internal_token
 	@umask 077; test -f secrets/tdlib_database_master_key || openssl rand -hex 32 > secrets/tdlib_database_master_key
+	@umask 077; test -f secrets/media_internal_token || openssl rand -hex 32 > secrets/media_internal_token
 	@umask 077; test -f secrets/laravel_app_key || { printf 'base64:' > secrets/laravel_app_key; openssl rand -base64 32 | tr -d '\n' >> secrets/laravel_app_key; printf '\n' >> secrets/laravel_app_key; }
 	@$(MAKE) --no-print-directory secrets-provision
 
@@ -145,6 +181,7 @@ secrets-provision: ## Grant only required container UIDs access to secret files 
 	bash tests/secrets/provision_file.sh secrets/laravel_app_key 10001
 	bash tests/secrets/provision_file.sh secrets/tdlib_internal_token 10001 10002
 	bash tests/secrets/provision_file.sh secrets/tdlib_database_master_key 10002
+	bash tests/secrets/provision_file.sh secrets/media_internal_token 10001 10003
 
 db-migrate: ## Apply production-safe migrations explicitly
 	docker compose run --rm -e DB_STATEMENT_TIMEOUT=30000 -e DB_LOCK_TIMEOUT=5000 backend-api php artisan telebezel:migrate-locked
@@ -160,10 +197,10 @@ offline-restart-test: ## Confirm offline history with a real authorized account 
 	bash tests/integration/offline_restart.sh
 
 image-smoke: ## Smoke an image: make image-smoke COMPONENT=backend-api
-	test "$(COMPONENT)" = backend-api -o "$(COMPONENT)" = backend-tdlib
+	test "$(COMPONENT)" = backend-api -o "$(COMPONENT)" = backend-tdlib -o "$(COMPONENT)" = backend-media
 	bash .github/scripts/image_smoke_$(subst -,_,$(COMPONENT)).sh "ghcr.io/$(GHCR_OWNER)/telebezel-$(COMPONENT):local"
 
-check: toolchain-check app-check functional-test tdlib-check workflow-audit compose-config ## Run local checks including scripted API/TDLib integration
+check: toolchain-check app-check functional-test media-check tdlib-check workflow-audit compose-config ## Run local checks including scripted API/TDLib integration
 
 clean: ## Remove generated build output
 	rm -rf app/build backend-tdlib/build

@@ -115,10 +115,12 @@ final class TdlibGateway implements TdlibGatewayContract
         return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages/{$messageId}", $query, $requestId);
     }
 
-    /** @return array<string, mixed> */
-    public function preview(string $accountId, string $chatId, string $messageId, string $previewId, string $requestId): array
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function media(string $accountId, string $chatId, string $messageId, array $query, string $requestId): array
     {
-        return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages/{$messageId}/preview/{$previewId}", [], $requestId);
+        return $this->request('GET', "/internal/v1/accounts/{$accountId}/chats/{$chatId}/messages/{$messageId}/media", $query, $requestId);
     }
 
     /** @param array<string, mixed> $query

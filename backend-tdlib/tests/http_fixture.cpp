@@ -28,10 +28,25 @@ const std::map<std::string, std::int32_t> functions{{"phone", api::setAuthentica
                                                     {"add_proxy", api::addProxy::ID},
                                                     {"ping", api::pingProxy::ID},
                                                     {"send", api::sendMessage::ID},
-                                                    {"reply_lookup", api::getMessage::ID}};
+                                                    {"reply_lookup", api::getMessage::ID},
+                                                    {"file", api::getFile::ID},
+                                                    {"download", api::downloadFile::ID},
+                                                    {"read_file", api::readFilePart::ID}};
 api::object_ptr<api::formattedText> formatted(const std::string &text) {
   auto result = api::make_object<api::formattedText>();
   result->text_ = text;
+  return result;
+}
+api::object_ptr<api::file> file(const Json &data) {
+  auto result = api::make_object<api::file>();
+  result->id_ = data.value("id", 0);
+  result->size_ = data.value("size", 0);
+  result->local_ = api::make_object<api::localFile>();
+  result->local_->is_downloading_completed_ = data.value("completed", false);
+  result->local_->is_downloading_active_ = data.value("active", false);
+  result->local_->downloaded_size_ = result->local_->is_downloading_completed_ ? result->size_ : 0;
+  result->remote_ = api::make_object<api::remoteFile>();
+  result->remote_->unique_id_ = data.value("unique", "unique-" + std::to_string(result->id_));
   return result;
 }
 api::object_ptr<api::MessageContent> media(const Json &data) {
@@ -40,6 +55,17 @@ api::object_ptr<api::MessageContent> media(const Json &data) {
   if (kind == "photo") {
     auto content = api::make_object<api::messagePhoto>();
     content->caption_ = formatted(caption);
+    content->has_spoiler_ = data.value("spoiler", false);
+    content->is_secret_ = data.value("secret", false);
+    content->photo_ = api::make_object<api::photo>();
+    for (const auto &size : data.value("sizes", Json::array())) {
+      auto item = api::make_object<api::photoSize>();
+      item->type_ = "x";
+      item->width_ = size.value("width", 0);
+      item->height_ = size.value("height", 0);
+      item->photo_ = file(size);
+      content->photo_->sizes_.push_back(std::move(item));
+    }
     return content;
   }
   if (kind == "voice_note") {
@@ -71,6 +97,9 @@ api::object_ptr<api::message> message(const Json &data) {
   result->sender_id_ = api::make_object<api::messageSenderUser>(std::stoll(data.value("sender", "9007199254740993")));
   result->date_ = data.value("date", 1700000000);
   result->is_outgoing_ = data.value("outgoing", false);
+  result->is_channel_post_ = data.value("channel_post", false);
+  result->author_signature_ = data.value("signature", "");
+  result->media_album_id_ = std::stoll(data.value("album", "0"));
   if (data.contains("content")) {
     result->content_ = media(data.at("content"));
   } else if (!data.value("unsupported", false)) {
@@ -159,6 +188,10 @@ int main(int argc, char **argv) {
           response = std::move(history);
         } else if (kind == "message")
           response = message(command.at("item"));
+        else if (kind == "file")
+          response = file(command.at("item"));
+        else if (kind == "data")
+          response = api::make_object<api::data>(command.at("text").get<std::string>());
         else if (kind == "ok")
           response = api::make_object<api::ok>();
         else if (kind != "timeout")

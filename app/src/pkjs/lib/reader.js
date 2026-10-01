@@ -1,6 +1,7 @@
 'use strict';
 var accountInfo = require('./accounts');
 var composeFactory = require('./compose');
+var mediaTools = require('./media');
 var message = require('./message');
 var updatesFactory = require('./updates');
 var ACCOUNT_PATTERN = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
@@ -11,6 +12,8 @@ var RETRY_WAIT_LIMIT_S = 5;
 var TEXT_CACHE_LIMIT = 300;
 var TITLE_CACHE_LIMIT = 500;
 var FULL_TEXT_LIMIT = 16384;
+var MEDIA_WAIT_MS = 4000;
+var MEDIA_POLL_MS = 1000;
 var NEEDS_LOGIN = ['awaiting_phone_number', 'awaiting_code', 'awaiting_password', 'awaiting_email_address',
   'awaiting_email_code', 'awaiting_qr_confirmation', 'registration_required', 'premium_purchase_required', 'closed',
   'error', 'logging_out'];
@@ -32,6 +35,8 @@ function create(options) {
   var titles = {};
   var titleOrder = [];
   var updates = options.updates || updatesFactory.create({api: options.api});
+  var mediaCache = mediaTools.createCache();
+  var mediaStream = 0;
 
   function budget() {
     var size = inboxSize > 0 ? inboxSize : 2048;
@@ -181,7 +186,8 @@ function create(options) {
           chatList: value.showArchive && preferences.data.chat_list === 'archive' ? protocol.list.archive : protocol.list.main,
           host: value.address,
           showArchive: value.showArchive,
-          unreadMode: value.unreadMode === 'messages' ? protocol.unread_mode.messages : protocol.unread_mode.chats
+          unreadMode: value.unreadMode === 'messages' ? protocol.unread_mode.messages : protocol.unread_mode.chats,
+          photoMode: value.photoMode === 'manual' ? protocol.photo_mode.manual : protocol.photo_mode.auto
         })];
         accounts.data.filter(function(account) { return account && ACCOUNT_PATTERN.test(account.id); }).slice(0, 8).forEach(function(account) {
           records.push(codec.account({
@@ -351,8 +357,9 @@ function create(options) {
     return name && signature ? name + ' · ' + signature : name || signature;
   }
 
-  function messageRecord(message, chat, textLimit) {
+  function messageRecord(message, chat, textLimit, grouped) {
     var described = describe(message, chat);
+    var mediaFlags = mediaTools.flags(protocol, message) | (grouped && grouped.spoiler ? protocol.media_flag.spoiler : 0);
     var flags = protocol.message_flag;
     var reply = message.reply_to && typeof message.reply_to === 'object' && MESSAGE_PATTERN.test(message.reply_to.message_id || '')
       ? message.reply_to : null;
@@ -371,7 +378,11 @@ function create(options) {
       duration: described.duration,
       sender: described.sender,
       extra: described.extra,
-      text: described.text
+      text: described.text,
+      media: mediaFlags,
+      album: mediaTools.albumKey(message.content && message.content.media ? message.content.media.album_id : null),
+      mediaCount: grouped ? grouped.count : mediaTools.inner(message.content && message.content.media),
+      signature: typeof message.author_signature === 'string' ? message.author_signature : ''
     }, textLimit);
   }
 
@@ -430,7 +441,9 @@ function create(options) {
         return message && MESSAGE_PATTERN.test(message.id);
       });
       items.forEach(function(message) { remember(account, chat, message); });
-      respond(sequence, protocol.result.ok, items.map(function(message) { return messageRecord(message, chat, bounds.text); }), pageFlags(data));
+      respond(sequence, protocol.result.ok, mediaTools.group(items).map(function(entry) {
+        return messageRecord(entry.message, chat, bounds.text, entry);
+      }), pageFlags(data));
     });
   }
 
@@ -486,6 +499,105 @@ function create(options) {
       })].concat(compose.consume(value, account, outcome, false));
       respond(sequence, protocol.result.ok, records, 0);
     });
+  }
+
+  function sendMedia(sequence, info, bytes, offset) {
+    var messages = mediaTools.chunks(codec, info, bytes, offset, budget());
+    messages.forEach(function(payload, index) {
+      options.transport.send({
+        RESPONSE_KIND: protocol.response.data,
+        REQUEST_SEQ: sequence,
+        RESULT_CODE: protocol.result.ok,
+        CHUNK_INDEX: index,
+        CHUNK_TOTAL: messages.length,
+        PAGE_FLAGS: 0,
+        PAYLOAD: payload
+      }, sequence, 'bulk');
+    });
+  }
+
+  function mediaState(name) {
+    return Object.prototype.hasOwnProperty.call(protocol.media_state, name) ? protocol.media_state[name] : protocol.media_state.unavailable;
+  }
+
+  function media(sequence, payload) {
+    var account = payload.ACCOUNT_ID;
+    var chat = payload.ENTITY_ID;
+    var id = payload.MESSAGE_ID;
+    var spec = mediaTools.parseSpec(protocol, payload.MEDIA_SPEC);
+    var index = Number.isInteger(payload.MEDIA_INDEX) ? payload.MEDIA_INDEX : 0;
+    var offset = Number.isInteger(payload.MEDIA_OFFSET) && payload.MEDIA_OFFSET > 0 ? payload.MEDIA_OFFSET : 0;
+    var tag = Number.isInteger(payload.MEDIA_TAG) ? payload.MEDIA_TAG >>> 0 : 0;
+    if (!ACCOUNT_PATTERN.test(account || '') || !CHAT_PATTERN.test(chat || '') || !MESSAGE_PATTERN.test(id || '') || !spec ||
+        index < 0 || index >= protocol.limit.album_items) {
+      reject(sequence, payload, ['ACCOUNT_ID', 'ENTITY_ID', 'MESSAGE_ID', 'MEDIA_SPEC', 'MEDIA_INDEX']);
+      return;
+    }
+    var value = settingsOrFail(sequence);
+    if (!value) { return; }
+    var key = [composeFactory.fingerprint(value), account, chat, id, index, spec.width, spec.height, spec.shape, spec.budget, spec.formats,
+      spec.reveal ? 1 : 0].join('|');
+    if (mediaStream && mediaStream !== sequence) { options.transport.cancel(mediaStream); }
+    mediaStream = sequence;
+    var slot = begin('media', sequence);
+    var cached = mediaCache.get(key);
+    if (cached) {
+      finish('media', slot);
+      sendMedia(sequence, cached.info, cached.bytes, offset && cached.info.tag === tag && offset < cached.bytes.length ? offset : 0);
+      return;
+    }
+    var params = {index: index, width: spec.width, height: spec.height, shape: spec.shape, budget: spec.budget, formats: spec.formats,
+      reveal: spec.reveal ? 1 : 0};
+    function request() {
+      call('media', slot, function(callback) { return options.api.media(value, account, chat, id, params, callback); }, function(result) {
+        if (!result.ok) {
+          finish('media', slot);
+          fail(sequence, result);
+          return;
+        }
+        var data = result.data;
+        var state = mediaState(data.state);
+        var retryAfter = Number.isInteger(data.retry_after) && data.retry_after > 0 ? Math.min(data.retry_after, 30) : 1;
+        var waiting = state === protocol.media_state.downloading || state === protocol.media_state.preparing;
+        if (waiting && now() - slot.started + retryAfter * 1000 <= MEDIA_WAIT_MS) {
+          slot.timer = setTimer(request, Math.max(MEDIA_POLL_MS, Math.min(retryAfter * 1000, MEDIA_WAIT_MS)));
+          return;
+        }
+        finish('media', slot);
+        var info = {state: state, index: Number.isInteger(data.index) ? data.index : index, count: Number.isInteger(data.count) ? data.count : 1,
+          flags: data.has_spoiler === true ? protocol.media_flag.spoiler : 0, tag: 0, total: 0, retryAfter: waiting ? retryAfter : 0,
+          item: MESSAGE_PATTERN.test(data.item_message_id || '') ? data.item_message_id : ''};
+        if (state !== protocol.media_state.ready) {
+          sendMedia(sequence, info, [], 0);
+          return;
+        }
+        var rendition = data.rendition && typeof data.rendition === 'object' ? data.rendition : {};
+        var bytes = mediaTools.decodeBase64(rendition.bytes_base64);
+        if (!bytes || bytes.length < 22 || !Number.isInteger(rendition.tag)) {
+          respond.detail = 'invalid rendition';
+          respond(sequence, protocol.result.protocol_error);
+          return;
+        }
+        info.tag = rendition.tag >>> 0;
+        info.total = bytes.length;
+        mediaCache.put({key: key, info: info, bytes: bytes});
+        sendMedia(sequence, info, bytes, offset && info.tag === tag && offset < bytes.length ? offset : 0);
+      });
+    }
+    request();
+  }
+
+  function mediaCancel(sequence) {
+    var slot = slots.media;
+    if (slot) {
+      slot.cancelled = true;
+      if (slot.handle) { slot.handle.abort(); }
+      if (slot.timer) { clearTimer(slot.timer); }
+      delete slots.media;
+    }
+    if (mediaStream) { options.transport.cancel(mediaStream); }
+    mediaStream = 0;
+    respond(sequence, protocol.result.ok, [], 0);
   }
 
   function release(value) {
@@ -551,6 +663,8 @@ function create(options) {
       case kinds.send: compose.send(sequence, payload); break;
       case kinds.send_check: compose.sendCheck(sequence, payload); break;
       case kinds.draft_discard: compose.discard(sequence, payload); break;
+      case kinds.media: media(sequence, payload); break;
+      case kinds.media_cancel: mediaCancel(sequence); break;
       default: reject(sequence, payload, ['REQUEST_KIND']);
     }
   }
@@ -572,6 +686,9 @@ function create(options) {
     textOrder = [];
     titles = {};
     titleOrder = [];
+    mediaCache.clear();
+    if (mediaStream) { options.transport.cancel(mediaStream); }
+    mediaStream = 0;
     options.leases.reset();
     compose.reset(options.settings.load(options.storage));
   }

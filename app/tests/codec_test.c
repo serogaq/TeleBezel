@@ -30,7 +30,7 @@ int main(void) {
   TbPrefsRecord prefs;
   assert(tb_codec_prefs(&body, &prefs));
   assert(prefs.chat_list == TB_LIST_ARCHIVE && equals(prefs.host, "tg.example:443"));
-  assert(prefs.show_archive == 0 && prefs.unread_mode == TB_UNREAD_MODE_MESSAGES);
+  assert(prefs.show_archive == 0 && prefs.unread_mode == TB_UNREAD_MODE_MESSAGES && prefs.photo_mode == TB_PHOTO_MODE_MANUAL);
 
   body = single(tb_vector_summary, sizeof(tb_vector_summary), TB_RECORD_SUMMARY);
   TbSummaryRecord summary;
@@ -58,6 +58,25 @@ int main(void) {
   assert(equals(message.reply_id, "55") && equals(message.reply_sender, "Ада") && equals(message.reply_text, "Когда встреча?"));
   assert(message.kind == TB_KIND_VOICE_NOTE && message.duration == 74 && equals(message.sender, "Ada Lovelace"));
   assert(equals(message.text, "Hello, мир 😀") && equals(message.forward, "News · Editor"));
+  assert(message.media == (TB_MEDIA_FLAG_IMAGE | TB_MEDIA_FLAG_ALBUM) && message.album == 305419896u && message.media_count == 3 &&
+         equals(message.signature, "Editor"));
+
+  body = single(tb_vector_media_info, sizeof(tb_vector_media_info), TB_RECORD_MEDIA_INFO);
+  TbMediaInfoRecord info;
+  assert(tb_codec_media_info(&body, &info));
+  assert(info.state == TB_MEDIA_STATE_READY && info.index == 1 && info.count == 3 && info.tag == 3735928559u && info.total == 24580 &&
+         equals(info.item, "9007199254740993"));
+  body = single(tb_vector_media_info_waiting, sizeof(tb_vector_media_info_waiting), TB_RECORD_MEDIA_INFO);
+  assert(tb_codec_media_info(&body, &info) && info.state == TB_MEDIA_STATE_DOWNLOADING && info.retry_after == 2 && info.item.length == 0);
+  body = single(tb_vector_media_data, sizeof(tb_vector_media_data), TB_RECORD_MEDIA_DATA);
+  TbMediaDataRecord data;
+  assert(tb_codec_media_data(&body, &data));
+  assert(data.offset == 4000 && data.data.length == 4 && data.data.data[0] == 'T' && data.data.data[3] == 4);
+  for (uint16_t cut = 0; cut + 3 < sizeof(tb_vector_media_info); ++cut) {
+    TbCursor cursor;
+    tb_cursor_init(&cursor, tb_vector_media_info + 3, cut);
+    assert(!tb_codec_media_info(&cursor, &info));
+  }
 
   body = single(tb_vector_message_truncated, sizeof(tb_vector_message_truncated), TB_RECORD_MESSAGE);
   assert(tb_codec_message(&body, &message));

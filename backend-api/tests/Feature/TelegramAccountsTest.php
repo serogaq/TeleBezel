@@ -484,27 +484,6 @@ test('account rate limits use separate shared authorization budgets', function (
         'value' => '001234',
     ])->assertStatus(429)->assertHeader('Retry-After');
 });
-test('preview proxy validates its identifier and returns only bounded image bytes', function (): void {
-    $account = telegramAccountsTestAccount();
-    $id = str_repeat('a', 64);
-    Http::fake([
-        '*' => Http::response([
-            'data' => [
-                'mime_type' => 'image/jpeg',
-                'bytes_base64' => base64_encode('jpeg-test'),
-            ],
-        ]),
-    ]);
-    $device = issueTestToken(TokenType::Device)['token'];
-    $url = '/v1/telegram/accounts/'.$account->id.'/chats/42/messages/55/preview/';
-    $this->withToken($device)->get($url.$id)
-        ->assertOk()->assertHeader('Content-Type', 'image/jpeg')->assertHeader('Cache-Control', 'no-store, private');
-    expect($this->withToken($device)->get($url.$id)->getContent())->toBe('jpeg-test');
-    $this->withToken($device)->getJson($url.'bad')->assertNotFound()->assertJsonPath('error.code', 'message.cache_miss');
-    $this->withToken($device)->getJson($url.$id.'?view_id=90112233-4455-4677-8899-aabbccddeeff')
-        ->assertStatus(422)->assertJsonPath('error.code', 'request.invalid');
-});
-
 function telegramAccountsTestAccount(): TelegramAccount
 {
     return TelegramAccount::query()->create([

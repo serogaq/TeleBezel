@@ -30,6 +30,20 @@ static void submit(TbMessageText *reader) {
   changed(reader);
 }
 
+#define TB_TEXT_CHUNK 512
+
+static bool reserve(TbMessageText *reader, size_t length) {
+  if (length <= reader->capacity) { return true; }
+  size_t capacity = reader->capacity ? reader->capacity : TB_TEXT_CHUNK;
+  while (capacity < length) { capacity *= 2; }
+  if (capacity > reader->limit) { capacity = reader->limit; }
+  char *grown = realloc(reader->text, capacity + 1);
+  if (!grown) { return false; }
+  reader->text = grown;
+  reader->capacity = (uint16_t)capacity;
+  return true;
+}
+
 static bool append(TbMessageText *reader, const TbResponse *response) {
   TbCursor cursor;
   tb_cursor_init(&cursor, response->payload, response->length);
@@ -43,6 +57,10 @@ static bool append(TbMessageText *reader, const TbResponse *response) {
     if (size < part.length) {
       while (size > 0 && (part.data[size] & 0xC0) == 0x80) { --size; }
       reader->truncated = true;
+    }
+    if (!reserve(reader, reader->length + size)) {
+      reader->truncated = true;
+      return true;
     }
     memcpy(reader->text + reader->length, part.data, size);
     reader->length = (uint16_t)(reader->length + size);
@@ -91,8 +109,10 @@ void tb_message_text_init(TbMessageText *reader, TbRequestLayer *requests, TbVie
 
 bool tb_message_text_open(TbMessageText *reader, const char *account, const char *chat, const char *message) {
   tb_message_text_close(reader);
-  reader->text = malloc((size_t)reader->limit + 1);
+  reader->capacity = reader->limit < TB_TEXT_CHUNK ? reader->limit : TB_TEXT_CHUNK;
+  reader->text = malloc((size_t)reader->capacity + 1);
   if (!reader->text) {
+    reader->capacity = 0;
     reader->error = TB_ERROR_OUT_OF_MEMORY;
     return false;
   }
@@ -119,6 +139,7 @@ void tb_message_text_close(TbMessageText *reader) {
   }
   free(reader->text);
   reader->text = NULL;
+  reader->capacity = 0;
   reader->length = 0;
   reader->loading = false;
   reader->truncated = false;

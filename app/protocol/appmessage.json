@@ -1,5 +1,5 @@
 {
-  "request": {"bootstrap": 1, "hello": 2, "chats": 3, "history": 4, "message": 5, "view_close": 6, "set_default": 7, "events": 8, "templates": 9, "draft": 10, "send": 11, "send_check": 12, "draft_discard": 13},
+  "request": {"bootstrap": 1, "hello": 2, "chats": 3, "history": 4, "message": 5, "view_close": 6, "set_default": 7, "events": 8, "templates": 9, "draft": 10, "send": 11, "send_check": 12, "draft_discard": 13, "media": 14, "media_cancel": 15},
   "response": {"data": 1, "ready": 2, "refresh": 3, "push": 4},
   "result": {
     "ok": 0,
@@ -37,7 +37,7 @@
     "truncated": 64,
     "stale": 128
   },
-  "record": {"account": 1, "prefs": 2, "chat": 3, "message": 4, "text": 5, "summary": 6, "status": 7, "templates": 8, "template": 9, "draft": 10, "send_state": 11, "pending_send": 12},
+  "record": {"account": 1, "prefs": 2, "chat": 3, "message": 4, "text": 5, "summary": 6, "status": 7, "templates": 8, "template": 9, "draft": 10, "send_state": 11, "pending_send": 12, "media_info": 13, "media_data": 14},
   "connection": {"connecting": 0, "updating": 1, "ready": 2},
   "unread_mode": {"chats": 0, "messages": 1},
   "kind": {
@@ -84,13 +84,18 @@
   "chat_type": {"private": 0, "basic_group": 1, "supergroup": 2, "channel": 3, "secret": 4, "unknown": 5},
   "chat_flag": {"muted": 1, "pinned": 2, "marked_unread": 4, "mention": 8, "preview_outgoing": 16, "saved": 32},
   "message_flag": {"outgoing": 1, "edited": 2, "truncated": 4, "pending": 8, "failed": 16, "reply": 32},
+  "media_flag": {"image": 1, "spoiler": 2, "restricted": 4, "album": 8, "channel_post": 16},
+  "media_state": {"ready": 0, "downloading": 1, "preparing": 2, "spoiler": 3, "restricted": 4, "unsupported": 5, "unavailable": 6, "none": 7},
+  "media_shape": {"rect": 0, "round": 1},
+  "media_format": {"p1": 1, "p2": 2, "p4": 4},
+  "photo_mode": {"auto": 0, "manual": 1},
   "account_state": {"ready": 0, "needs_login": 1, "connecting": 2, "logging_out": 3, "removing": 4},
   "account_flag": {"default": 1},
   "send_state": {"pending": 0, "sent": 1, "failed": 2, "unknown": 3},
   "send_flag": {"retryable": 1, "reply_dropped": 2, "restored": 4},
   "draft_flag": {"too_long": 1},
   "can_send": {"unknown": 0, "allowed": 1, "read_only": 2, "restricted": 3, "not_member": 4, "banned": 5, "secret_chat": 6, "user_deleted": 7},
-  "limit": {"account_id": 36, "telegram_id": 20, "short_string": 255, "draft_bytes": 1024, "text_units": 4096},
+  "limit": {"account_id": 36, "telegram_id": 20, "short_string": 255, "draft_bytes": 1024, "text_units": 4096, "media_budget": 28672, "album_items": 10},
   "errors": {
     "auth.unauthorized": "reauth",
     "auth.insufficient_scope": "reauth",
@@ -117,6 +122,9 @@
     "message.reply_unavailable": "show",
     "message.send_failed": "show",
     "operation.not_found": "show",
-    "operation.conflict": "show"
+    "operation.conflict": "show",
+    "media.unsupported": "show",
+    "media.unavailable": "show",
+    "media.restricted": "show"
   }
 }

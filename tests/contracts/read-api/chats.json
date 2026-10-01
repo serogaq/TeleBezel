@@ -24,6 +24,7 @@
                     "edit_date": 0,
                     "forward_from": null,
                     "id": "1048576",
+                    "is_channel_post": false,
                     "is_outgoing": false,
                     "reply_to": null,
                     "sender": {
@@ -55,7 +56,7 @@
         ],
         "local_exhausted": false,
         "next_cursor": null,
-        "observed_at": 1790260145,
+        "observed_at": 1790369868,
         "partial": true,
         "retry_cursor": null,
         "source": "tdlib_memory",
@@ -64,6 +65,6 @@
             "chats": 1,
             "messages": 3
         },
-        "updates_cursor": "1:1fd4d832-6181-4ab5-8efb-c03237758d55:2.1a68f0ef2ec7845d218758038c8cc89a790205d1a91db2ca1b1c61eb746166ea"
+        "updates_cursor": "1:8d1c359e-cb64-4b6a-a9e0-f442df02086d:2.7419eba0160954808f0eca4021af26eb5982e97f9f62bfde920247cc19ac8b05"
     }
 }

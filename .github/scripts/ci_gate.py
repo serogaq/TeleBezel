@@ -11,6 +11,7 @@ def validate(values):
         ("EXPECT_APP", ("APP",)),
         ("EXPECT_API", ("API", "API_IMAGE")),
         ("EXPECT_TDLIB", ("TDLIB", "TDLIB_ANALYSIS", "TDLIB_IMAGE")),
+        ("EXPECT_MEDIA", ("MEDIA", "MEDIA_IMAGE")),
         ("EXPECT_INTEGRATION", ("INTEGRATION",)),
     ):
         expected = values.get(flag)

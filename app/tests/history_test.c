@@ -21,6 +21,15 @@ static void page(Buf *buf, int newest, int count) {
   }
 }
 
+static void album_record(Buf *buf, const char *id, const char *text, uint32_t album, uint8_t count) {
+  begin(buf, TB_RECORD_MESSAGE);
+  putstr8(buf, id); put32(buf, 1700000000); put8(buf, 0); put8(buf, TB_KIND_PHOTO); put8(buf, 0); put16(buf, 0);
+  putstr8(buf, "News"); putstr8(buf, ""); putstr16(buf, text);
+  putstr8(buf, ""); putstr8(buf, ""); putstr8(buf, ""); putstr8(buf, "");
+  put8(buf, TB_MEDIA_FLAG_IMAGE | TB_MEDIA_FLAG_ALBUM | TB_MEDIA_FLAG_CHANNEL_POST); put32(buf, album); put8(buf, count); putstr8(buf, "Editor");
+  end(buf);
+}
+
 static void ids(const TbHistory *history, const char *expected) {
   char joined[256] = "";
   for (uint16_t index = 0; index < history->count; ++index) {
@@ -182,6 +191,24 @@ int main(void) {
   page(&chunked, 8, 1);
   deliver(&layer, streamed, TB_RESULT_OK, TB_FLAG_HAS_MORE, &chunked, 1, 2);
   ids(&history, "8,9");
+
+  tb_history_open(&history, ACCOUNT, "-100500", TB_CHAT_TYPE_CHANNEL, false);
+  Buf albums = {0};
+  album_record(&albums, "103", "", 7, 2);
+  album_record(&albums, "102", "Подпись", 7, 1);
+  message_record(&albums, "101", "Plain");
+  reply(&fake, &layer, TB_RESULT_OK, TB_FLAG_HAS_MORE, &albums);
+  ids(&history, "101,102");
+  assert(history.items[1].album == 7 && history.items[1].media_count == 2 && strcmp(history.items[1].text, "Подпись") == 0);
+  assert(strcmp(history.items[1].signature, "Editor") == 0 && (history.items[1].media & TB_MEDIA_FLAG_CHANNEL_POST));
+  tb_history_load_older(&history);
+  Buf older = {0};
+  album_record(&older, "100", "", 9, 1);
+  album_record(&older, "99", "", 9, 1);
+  album_record(&older, "98", "", 7, 3);
+  reply(&fake, &layer, TB_RESULT_OK, TB_FLAG_HAS_MORE, &older);
+  ids(&history, "98,99,101,102");
+  assert(history.items[1].album == 9 && history.items[0].media_count == 3);
   tb_history_deinit(&history);
   return 0;
 }

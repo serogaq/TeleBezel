@@ -8,12 +8,13 @@ gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 
 
-def values(app=False, api=False, tdlib=False, integration=False):
+def values(app=False, api=False, tdlib=False, integration=False, media=False):
     result = {"CHANGES": "success", "AUDIT": "success"}
     for flag, enabled, jobs in (
         ("EXPECT_APP", app, ("APP",)),
         ("EXPECT_API", api, ("API", "API_IMAGE")),
         ("EXPECT_TDLIB", tdlib, ("TDLIB", "TDLIB_ANALYSIS", "TDLIB_IMAGE")),
+        ("EXPECT_MEDIA", media, ("MEDIA", "MEDIA_IMAGE")),
         ("EXPECT_INTEGRATION", integration, ("INTEGRATION",)),
     ):
         result[flag] = str(enabled).lower()
@@ -28,7 +29,8 @@ class CiGateTest(unittest.TestCase):
             values(app=True),
             values(api=True, integration=True),
             values(tdlib=True, integration=True),
-            values(app=True, api=True, tdlib=True, integration=True),
+            values(media=True, integration=True),
+            values(app=True, api=True, tdlib=True, media=True, integration=True),
         ):
             gate.validate(case)
 

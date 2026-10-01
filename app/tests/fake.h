@@ -88,6 +88,7 @@ static inline void message_record(Buf *buf, const char *id, const char *text) {
   putstr8(buf, id); put32(buf, 1700000000); put8(buf, 0); put8(buf, TB_KIND_TEXT); put8(buf, 0); put16(buf, 0);
   putstr8(buf, "Ada"); putstr8(buf, ""); putstr16(buf, text);
   putstr8(buf, ""); putstr8(buf, ""); putstr8(buf, ""); putstr8(buf, "");
+  put8(buf, 0); put32(buf, 0); put8(buf, 0); putstr8(buf, "");
   end(buf);
 }
 static inline void deliver(TbRequestLayer *layer, uint32_t sequence, int32_t result, uint32_t flags, const Buf *buf, uint16_t index, uint16_t total) {

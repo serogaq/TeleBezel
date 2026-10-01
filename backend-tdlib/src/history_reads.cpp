@@ -115,8 +115,6 @@ nlohmann::json ReadModelService::messages(const std::string &uuid, std::int64_t 
     const bool full = items.size() >= limit;
     if (items.size() > limit)
       items.resize(limit);
-    for (auto &item : items)
-      prepare_preview(item, uuid, fence);
     const auto last_id = items.empty() ? anchor : reads::projection_id(items.back());
     const bool progressed = !items.empty() && (anchor == 0 || last_id < anchor);
     // partial: the page could not be completed from local storage, unlike
@@ -161,7 +159,6 @@ nlohmann::json ReadModelService::message(const std::string &uuid, std::int64_t c
   const auto respond = [&](const AccountState &account, nlohmann::json item, const char *source,
                            const std::string &refresh) {
     decorate_sender(account, item);
-    prepare_preview(item, uuid, fence);
     return ReadEnvelope::capture(cursors_, account, fence)
         .wrap({{"item", item}, {"partial", false}, {"refresh", refresh}, {"fallback_reason", nullptr}}, source);
   };

@@ -71,32 +71,6 @@ final readonly class TelegramReadService
         return $this->tdlib->message($uuid, $chat->value, $message->value, $input->all() + $this->principal($principal), $requestId);
     }
 
-    /** @return array{mime_type: string, bytes: string} */
-    public function preview(string $uuid, string $chatId, string $messageId, string $previewId, string $requestId): array
-    {
-        $chat = new TelegramId($chatId, 'chat.not_found');
-        $message = new TelegramId($messageId, 'message.not_found');
-        if (preg_match('/\A[0-9a-f]{64}\z/D', $previewId) !== 1) {
-            throw new ApiException('message.cache_miss', 404);
-        }
-        $this->assertReadable($uuid, $requestId);
-        $preview = $this->tdlib->preview($uuid, $chat->value, $message->value, $previewId, $requestId);
-        $mime = $preview['mime_type'] ?? null;
-        $encoded = $preview['bytes_base64'] ?? null;
-        if (! in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true) || ! is_string($encoded) || strlen($encoded) > 700000) {
-            throw new ApiException('service.tdlib_unavailable', 503);
-        }
-        $bytes = base64_decode($encoded, true);
-        if ($bytes === false || strlen($bytes) > 512 * 1024) {
-            throw new ApiException('service.tdlib_unavailable', 503);
-        }
-
-        return [
-            'mime_type' => $mime,
-            'bytes' => $bytes,
-        ];
-    }
-
     /** @return array<string, mixed> */
     public function updates(string $uuid, Input $input, PrincipalContext $principal, string $requestId): array
     {

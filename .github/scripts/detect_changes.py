@@ -9,11 +9,12 @@ if base == "ALL":
 else:
     paths = subprocess.check_output(["git", "diff", "--name-only", f"{base}...{head}"], text=True).splitlines()
 
-shared = any(not p.startswith(("app/", "backend-api/", "backend-tdlib/")) for p in paths)
+shared = any(not p.startswith(("app/", "backend-api/", "backend-tdlib/", "backend-media/")) for p in paths)
 app = shared or any(p.startswith("app/") for p in paths)
 api = shared or any(p.startswith("backend-api/") for p in paths)
 tdlib = shared or any(p.startswith("backend-tdlib/") for p in paths)
-integration = shared or any(p.startswith(("backend-api/", "backend-tdlib/", "tests/integration/")) for p in paths)
+media = shared or any(p.startswith("backend-media/") for p in paths)
+integration = shared or any(p.startswith(("backend-api/", "backend-tdlib/", "backend-media/", "tests/integration/")) for p in paths)
 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-    for key, value in {"app": app, "api": api, "tdlib": tdlib, "integration": integration}.items():
+    for key, value in {"app": app, "api": api, "tdlib": tdlib, "media": media, "integration": integration}.items():
         output.write(f"{key}={str(value).lower()}\n")

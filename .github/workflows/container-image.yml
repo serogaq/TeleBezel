@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - if: inputs.component == 'backend-api'
+      - if: inputs.component == 'backend-api' || inputs.component == 'backend-media'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.0.0
       - if: inputs.component == 'backend-tdlib'
         uses: ./.github/actions/tdlib-image-cache # zizmor: ignore[self-repository]
@@ -195,7 +195,7 @@ jobs:
         run: |
           git fetch --tags origin
           git fetch --no-tags origin main:refs/remotes/origin/main
-          suffix=api; [[ "$COMPONENT" == backend-tdlib ]] && suffix=tdlib
+          suffix=api; [[ "$COMPONENT" == backend-tdlib ]] && suffix=tdlib; [[ "$COMPONENT" == backend-media ]] && suffix=media
           test "$(python3 .github/scripts/release.py "$COMPONENT" "$VERSION-$suffix")" = "$VERSION"
           if gh release view "$VERSION-$suffix" >/dev/null 2>&1; then echo 'Release already exists; refusing tag rerun' >&2; exit 1; fi
           if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then echo 'Version image tag already exists; manual reconciliation required' >&2; exit 1; fi

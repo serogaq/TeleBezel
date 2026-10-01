@@ -24,15 +24,17 @@
       "chatList": 1,
       "host": "tg.example:443",
       "showArchive": false,
-      "unreadMode": 1
+      "unreadMode": 1,
+      "photoMode": 1
     },
-    "hex": "0237002430303131323233332d343435352d343637372d383839392d616162626363646465656666010e74672e6578616d706c653a3434330001",
+    "hex": "0238002430303131323233332d343435352d343637372d383839392d616162626363646465656666010e74672e6578616d706c653a343433000101",
     "decoded": {
       "defaultAccount": "00112233-4455-4677-8899-aabbccddeeff",
       "chatList": 1,
       "host": "tg.example:443",
       "showArchive": 0,
-      "unreadMode": 1
+      "unreadMode": 1,
+      "photoMode": 1
     }
   },
   {
@@ -117,9 +119,13 @@
       "replyId": "55",
       "replySender": "Ада",
       "replyText": "Когда встреча?",
-      "forwardFrom": "News · Editor"
+      "forwardFrom": "News · Editor",
+      "media": 9,
+      "album": 305419896,
+      "mediaCount": 3,
+      "signature": "Editor"
     },
-    "hex": "04700010393030373139393235343734303939337bf153652303004a000c416461204c6f76656c61636500120048656c6c6f2c20d0bcd0b8d18020f09f988002353506d090d0b4d0b01ad09ad0bed0b3d0b4d0b020d0b2d181d182d180d0b5d187d0b03f0e4e65777320c2b720456469746f72",
+    "hex": "047d0010393030373139393235343734303939337bf153652303004a000c416461204c6f76656c61636500120048656c6c6f2c20d0bcd0b8d18020f09f988002353506d090d0b4d0b01ad09ad0bed0b3d0b4d0b020d0b2d181d182d180d0b5d187d0b03f0e4e65777320c2b720456469746f7209785634120306456469746f72",
     "decoded": {
       "id": "9007199254740993",
       "date": 1700000123,
@@ -133,7 +139,11 @@
       "replyId": "55",
       "replySender": "Ада",
       "replyText": "Когда встреча?",
-      "forwardFrom": "News · Editor"
+      "forwardFrom": "News · Editor",
+      "media": 9,
+      "album": 305419896,
+      "mediaCount": 3,
+      "signature": "Editor"
     },
     "textLimit": 300
   },
@@ -151,7 +161,7 @@
       "extra": "",
       "text": "Длинный текст сообщения"
     },
-    "hex": "041f0002343201000000040000000000000b00d094d0bbd0b8d0bde280a600000000",
+    "hex": "04260002343201000000040000000000000b00d094d0bbd0b8d0bde280a60000000000000000000000",
     "decoded": {
       "id": "42",
       "date": 1,
@@ -162,7 +172,11 @@
       "sender": "",
       "extra": "",
       "text": "Длин…",
-      "forwardFrom": ""
+      "forwardFrom": "",
+      "media": 0,
+      "album": 0,
+      "mediaCount": 0,
+      "signature": ""
     },
     "textLimit": 12
   },
@@ -296,6 +310,79 @@
       "message": "",
       "title": "Ada",
       "preview": "Hi"
+    }
+  },
+  {
+    "name": "media_info",
+    "record": "mediaInfo",
+    "input": {
+      "state": 0,
+      "index": 1,
+      "count": 3,
+      "flags": 1,
+      "tag": 3735928559,
+      "total": 24580,
+      "retryAfter": 0,
+      "item": "9007199254740993"
+    },
+    "hex": "0d1f0000010301efbeadde0460000000001039303037313939323534373430393933",
+    "decoded": {
+      "state": 0,
+      "index": 1,
+      "count": 3,
+      "flags": 1,
+      "tag": 3735928559,
+      "total": 24580,
+      "retryAfter": 0,
+      "item": "9007199254740993"
+    }
+  },
+  {
+    "name": "media_info_waiting",
+    "record": "mediaInfo",
+    "input": {
+      "state": 1,
+      "index": 0,
+      "count": 1,
+      "flags": 0,
+      "tag": 0,
+      "total": 0,
+      "retryAfter": 2,
+      "item": ""
+    },
+    "hex": "0d0f00010001000000000000000000020000",
+    "decoded": {
+      "state": 1,
+      "index": 0,
+      "count": 1,
+      "flags": 0,
+      "tag": 0,
+      "total": 0,
+      "retryAfter": 2,
+      "item": ""
+    }
+  },
+  {
+    "name": "media_data",
+    "record": "mediaData",
+    "input": {
+      "offset": 4000,
+      "bytes": [
+        84,
+        66,
+        1,
+        4
+      ]
+    },
+    "hex": "0e0800a00f000054420104",
+    "decoded": {
+      "offset": 4000,
+      "bytes": [
+        84,
+        66,
+        1,
+        4
+      ]
     }
   }
 ]

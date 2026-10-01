@@ -10,7 +10,7 @@ for volume in "${project}_postgres-data" "${project}_tdlib-data"; do
 done
 
 missing=false
-for name in postgres_password laravel_app_key tdlib_internal_token tdlib_database_master_key; do
+for name in postgres_password laravel_app_key tdlib_internal_token tdlib_database_master_key media_internal_token; do
   if test ! -s "secrets/$name"; then missing=true; fi
 done
 if test "$state_exists" = true && test "$missing" = true; then
@@ -24,5 +24,6 @@ if test ! -s secrets/laravel_app_key; then
 fi
 test -s secrets/tdlib_internal_token || openssl rand -hex 32 > secrets/tdlib_internal_token
 test -s secrets/tdlib_database_master_key || openssl rand -hex 32 > secrets/tdlib_database_master_key
+test -s secrets/media_internal_token || openssl rand -hex 32 > secrets/media_internal_token
 
 echo 'Secrets are ready. Existing files were preserved.'

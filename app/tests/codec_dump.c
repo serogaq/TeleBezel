@@ -41,7 +41,7 @@ int main(void) {
         print_span("defaultAccount", record.default_account);
         printf(",\"chatList\":%d,", record.chat_list);
         print_span("host", record.host);
-        printf(",\"showArchive\":%d,\"unreadMode\":%d}\n", record.show_archive, record.unread_mode);
+        printf(",\"showArchive\":%d,\"unreadMode\":%d,\"photoMode\":%d}\n", record.show_archive, record.unread_mode, record.photo_mode);
       } else if (type == TB_RECORD_SUMMARY) {
         TbSummaryRecord record;
         if (!tb_codec_summary(&body, &record)) { printf("{\"error\":\"summary\"}\n"); return 1; }
@@ -74,6 +74,21 @@ int main(void) {
         print_span("text", record.text);
         printf(",");
         print_span("replyId", record.reply_id);
+        printf(",\"media\":%d,\"album\":%lu,\"mediaCount\":%d,", record.media, (unsigned long)record.album, record.media_count);
+        print_span("signature", record.signature);
+        printf("}\n");
+      } else if (type == TB_RECORD_MEDIA_INFO) {
+        TbMediaInfoRecord record;
+        if (!tb_codec_media_info(&body, &record)) { printf("{\"error\":\"media_info\"}\n"); return 1; }
+        printf("{\"type\":\"media_info\",\"state\":%d,\"index\":%d,\"count\":%d,\"flags\":%d,\"tag\":%lu,\"total\":%lu,\"retryAfter\":%d,",
+               record.state, record.index, record.count, record.flags, (unsigned long)record.tag, (unsigned long)record.total, record.retry_after);
+        print_span("item", record.item);
+        printf("}\n");
+      } else if (type == TB_RECORD_MEDIA_DATA) {
+        TbMediaDataRecord record;
+        if (!tb_codec_media_data(&body, &record)) { printf("{\"error\":\"media_data\"}\n"); return 1; }
+        printf("{\"type\":\"media_data\",\"offset\":%lu,", (unsigned long)record.offset);
+        print_span("bytes", record.data);
         printf("}\n");
       } else if (type == TB_RECORD_TEMPLATES) {
         TbTemplatesRecord record;

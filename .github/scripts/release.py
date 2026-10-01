@@ -6,7 +6,7 @@ from pathlib import Path
 
 component = sys.argv[1]
 tag = sys.argv[2]
-suffix = {"app": "app", "backend-api": "api", "backend-tdlib": "tdlib"}[component]
+suffix = {"app": "app", "backend-api": "api", "backend-tdlib": "tdlib", "backend-media": "media"}[component]
 semver = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 match = re.fullmatch(semver + "-" + suffix, tag)
 if not match:

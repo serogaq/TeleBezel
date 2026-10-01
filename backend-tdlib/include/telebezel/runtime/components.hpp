@@ -84,14 +84,14 @@ public:
   nlohmann::json chat(const std::string &uuid, std::int64_t chat_id) const;
   nlohmann::json messages(const std::string &uuid, std::int64_t chat_id, std::size_t limit, const std::string &cursor);
   nlohmann::json message(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id);
-  nlohmann::json preview(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id,
-                         const std::string &preview_id);
+  nlohmann::json media(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id, std::size_t index,
+                       std::int32_t min_side, bool reveal, bool bytes);
   nlohmann::json updates(const std::string &uuid, const std::string &cursor, std::size_t limit,
                          std::chrono::seconds wait = std::chrono::seconds(0)) const;
-  std::size_t preview_entry_count();
+  std::size_t media_entry_count();
 
 private:
-  enum class RefreshKind : std::uint8_t { history, message, preview, evict };
+  enum class RefreshKind : std::uint8_t { history, message, evict };
   struct RefreshJob {
     RefreshKind kind{RefreshKind::history};
     std::string uuid;
@@ -102,13 +102,16 @@ private:
     std::int64_t anchor{0};
     std::size_t limit{0};
     std::string key;
-    std::int32_t preview_file_id{0};
-    std::size_t preview_size{0};
+    std::int32_t file_id{0};
+    std::size_t file_size{0};
     std::int32_t client{0};
   };
-  struct PreviewEntry {
-    enum class State : std::uint8_t { queued, downloading, ready, failed } state{State::queued};
+  struct MediaEntry {
+    enum class State : std::uint8_t { downloading, ready, failed } state{State::downloading};
     std::string uuid;
+    std::string generation;
+    std::string epoch;
+    std::uint64_t authorization_generation{0};
     std::int32_t client{0};
     std::int32_t file_id{0};
     std::size_t reserved{0};
@@ -134,14 +137,14 @@ private:
   HistoryPage fetch_history(std::int32_t client, std::int64_t chat_id, std::int64_t anchor, std::size_t limit,
                             bool only_local, std::chrono::steady_clock::time_point deadline);
   std::string enqueue_refresh(RefreshJob job);
-  std::string enqueue_preview(RefreshJob &job, std::chrono::steady_clock::time_point now);
   void remember_outcome(const std::string &key, bool changed);
-  void invalidate_preview(const std::string &key);
-  bool reserve_preview(const RefreshJob &job);
-  void drop_preview(const std::string &key);
-  bool trim_preview_entries(std::chrono::steady_clock::time_point now);
-  void release_preview(const std::string &key, bool ready, std::size_t bytes);
-  void prepare_preview(nlohmann::json &item, const std::string &uuid, const ReadFence &fence);
+  void invalidate_media(const std::string &key);
+  bool reserve_media(const std::string &key, const std::string &uuid, const ReadFence &fence, std::int32_t file_id,
+                     std::size_t size);
+  void drop_media(const std::string &key);
+  void trim_media_entries(std::chrono::steady_clock::time_point now, const std::string &uuid, const ReadFence &fence);
+  void release_media(const std::string &key, bool ready, std::size_t bytes);
+  void queue_job(RefreshJob job);
   void refresh_loop();
   void refresh_once();
   bool run_refresh(const RefreshJob &job);
@@ -156,9 +159,9 @@ private:
   std::deque<std::string> refresh_rotation_;
   std::set<std::string> refresh_keys_;
   std::map<std::string, RefreshOutcome> refresh_results_;
-  std::map<std::string, PreviewEntry> preview_entries_;
-  std::size_t preview_reserved_bytes_{0};
-  std::size_t preview_cache_bytes_{0};
+  std::map<std::string, MediaEntry> media_entries_;
+  std::size_t media_reserved_bytes_{0};
+  std::size_t media_cache_bytes_{0};
   bool refresh_stopping_{true};
   std::thread refresh_thread_;
 };

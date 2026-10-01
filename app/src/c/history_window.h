@@ -3,7 +3,8 @@
 #include "generated/localization.h"
 #include "history.h"
 #include "notify_view.h"
-#include "pull.h"
+#include "pull_view.h"
+#include "touch.h"
 
 typedef struct {
   void (*activate)(void *context, int index);
@@ -18,7 +19,9 @@ typedef struct {
   MenuLayer *menu;
   Layer *pull_layer;
   TbPull pull;
-  AppTimer *pull_timer;
+  TbPullClock pull_clock;
+  TbPullTouch pull_touch;
+  TbTouch touch;
   TbHistory *history;
   TbNotifyView notice;
   const TbStrings *strings;

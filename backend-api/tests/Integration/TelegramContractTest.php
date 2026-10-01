@@ -612,9 +612,16 @@ test('watch read contract shapes match the shared fixtures', function (): void {
             'id' => '1048575',
             'chat' => '-100200',
             'outgoing' => true,
+            'album' => '777',
             'content' => [
                 'kind' => 'photo',
                 'caption' => 'Подпись',
+                'sizes' => [[
+                    'id' => 31,
+                    'size' => 4,
+                    'width' => 1280,
+                    'height' => 960,
+                ]],
             ],
         ]],
     ]);
@@ -623,7 +630,12 @@ test('watch read contract shapes match the shared fixtures', function (): void {
         ->assertJsonPath('data.items.1.content.kind', 'photo')
         ->assertJsonPath('data.items.1.content.text', 'Подпись')
         ->assertJsonPath('data.items.1.is_outgoing', true)
+        ->assertJsonPath('data.items.1.content.media.type', 'photo')
+        ->assertJsonPath('data.items.1.content.media.width', 1280)
+        ->assertJsonPath('data.items.1.content.media.album_id', '777')
+        ->assertJsonPath('data.items.1.is_channel_post', false)
         ->json();
+    expect(json_encode($history))->not->toContain('unique-31');
     contractEventually(fn () => $this->td->control([
         'op' => 'stats',
     ])['pending'] === 0);
@@ -652,7 +664,7 @@ function contractShape(mixed $value): mixed
     if (is_array($value)) {
         $shape = [];
         foreach ($value as $key => $item) {
-            if ($key === 'request_id' || $key === 'preview_id' || $key === 'preview_state') {
+            if ($key === 'request_id') {
                 continue;
             }
             $shape[$key] = contractShape($item);
@@ -787,4 +799,120 @@ test('after a runtime restart a pending send becomes unknown and is never sent a
     expect($this->td->control([
         'op' => 'stats',
     ])['sends'])->toBe([]);
+});
+
+function contractPhoto(string $id, bool $spoiler = false): array
+{
+    return [
+        'id' => $id,
+        'chat' => '-100300',
+        'album' => '9001',
+        'channel_post' => true,
+        'signature' => 'Редактор',
+        'content' => [
+            'kind' => 'photo',
+            'caption' => 'Пост',
+            'spoiler' => $spoiler,
+            'sizes' => [[
+                'id' => (int) $id,
+                'size' => 4,
+                'width' => 320,
+                'height' => 240,
+            ]],
+        ],
+    ];
+}
+
+test('a channel photo travels from TDLib through the renderer to the watch and is cached', function (): void {
+    contractState($this, 'ready');
+    config([
+        'telebezel.media.base_url' => 'http://media.test',
+        'telebezel.media.token' => str_repeat('m', 64),
+        'telebezel.media.cache_directory' => sys_get_temp_dir().'/telebezel-functional-'.bin2hex(random_bytes(4)),
+    ]);
+    $rendition = (string) file_get_contents(dirname(__DIR__, 3).'/tests/contracts/media/round_p4_landscape.tbi');
+    $rendered = 0;
+    Http::fake([
+        'http://media.test/*' => function () use ($rendition, &$rendered) {
+            $rendered++;
+
+            return Http::response($rendition, 200, [
+                'Content-Type' => 'application/octet-stream',
+            ]);
+        },
+    ]);
+    Http::allowStrayRequests([$this->td->url.'/*']);
+    $history = fn (): array => [
+        'op' => 'response',
+        'function' => 'history',
+        'kind' => 'history',
+        'items' => [contractPhoto('103'), contractPhoto('102', true), contractPhoto('101')],
+    ];
+    $file = fn (bool $completed, bool $active = false): array => [
+        'op' => 'response',
+        'function' => 'file',
+        'kind' => 'file',
+        'item' => [
+            'id' => 102,
+            'size' => 4,
+            'completed' => $completed,
+            'active' => $active,
+        ],
+    ];
+    $message = [
+        'op' => 'response',
+        'function' => 'message',
+        'kind' => 'message',
+        'item' => contractPhoto('102', true),
+    ];
+    $device = $this->device['token'];
+    $url = $this->base.'/chats/-100300/messages/102/media?index=1&width=260&height=260&shape=round&budget=28672&formats=p4,p2';
+    $this->td->control($message);
+    $this->td->control($history());
+    $this->withToken($device)->getJson($url)->assertOk()->assertJsonPath('data.state', 'spoiler')->assertJsonPath('data.count', 3)
+        ->assertJsonPath('data.item_message_id', '102')->assertJsonMissingPath('data.rendition');
+    foreach ([[$file(false), 'downloading'], [$file(false, true), 'downloading']] as [$status, $state]) {
+        $this->td->control($message);
+        $this->td->control($history());
+        $this->td->control($status);
+        if ($state === 'downloading' && ! $status['item']['active']) {
+            $this->td->control([
+                'op' => 'response',
+                'function' => 'download',
+                'kind' => 'file',
+                'item' => [
+                    'id' => 102,
+                    'size' => 4,
+                    'active' => true,
+                ],
+            ]);
+        }
+        $this->withToken($device)->getJson($url.'&reveal=1')->assertOk()->assertJsonPath('data.state', $state)->assertJsonPath('data.retry_after', 1);
+    }
+    foreach ([0, 1] as $round) {
+        $this->td->control($message);
+        $this->td->control($history());
+        $this->td->control($file(true));
+    }
+    $this->td->control([
+        'op' => 'response',
+        'function' => 'read_file',
+        'kind' => 'data',
+        'text' => 'jpeg',
+    ]);
+    $ready = $this->withToken($device)->getJson($url.'&reveal=1')->assertOk()->assertJsonPath('data.state', 'ready')
+        ->assertJsonPath('data.rendition.width', 260)->assertJsonPath('data.rendition.height', 146)->assertJsonPath('data.rendition.shape', 'round')
+        ->json('data.rendition');
+    expect(base64_decode($ready['bytes_base64']))->toBe($rendition);
+    $this->td->control($message);
+    $this->td->control($history());
+    $this->td->control($file(true));
+    $this->withToken($device)->getJson($url.'&reveal=1')->assertOk()->assertJsonPath('data.rendition.tag', $ready['tag']);
+    expect($rendered)->toBe(1);
+    $stats = $this->td->control([
+        'op' => 'stats',
+    ]);
+    expect($stats['counts']['download'])->toBe(1)->and($stats['counts']['read_file'])->toBe(1);
+    $other = issueTestToken(TokenType::Device, null, [(string) Str::uuid()])['token'];
+    $this->withToken($other)->getJson($url)->assertNotFound()->assertJsonPath('error.code', 'account.not_found');
 });

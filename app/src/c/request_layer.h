@@ -6,6 +6,7 @@
 #define TB_ACCOUNT_ID_SIZE 37
 #define TB_TELEGRAM_ID_SIZE 21
 #define TB_QUEUE_RETRY_MS 100
+#define TB_MEDIA_SPEC_SIZE 8
 
 typedef enum { TB_SEND_OK, TB_SEND_FAILED, TB_SEND_UNREACHABLE, TB_SEND_BUSY } TbSendResult;
 typedef enum { TB_OUTCOME_RESPONSE, TB_OUTCOME_TIMEOUT, TB_OUTCOME_UNREACHABLE, TB_OUTCOME_CANCELLED, TB_OUTCOME_PROTOCOL } TbRequestOutcome;
@@ -25,6 +26,10 @@ typedef struct {
   uint8_t attempt;
   uint16_t payload_length;
   const uint8_t *payload;
+  uint8_t media_index;
+  uint8_t media_spec[TB_MEDIA_SPEC_SIZE];
+  uint32_t media_offset;
+  uint32_t media_tag;
 } TbRequestArgs;
 
 typedef struct {

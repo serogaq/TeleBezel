@@ -51,7 +51,7 @@ function create(protocol) {
     },
     prefs: function(value) {
       var body = new Writer().ascii8(value.defaultAccount).u8(value.chatList).str8(value.host, 64, {singleLine: true})
-        .u8(value.showArchive ? 1 : 0).u8(value.unreadMode);
+        .u8(value.showArchive ? 1 : 0).u8(value.unreadMode).u8(value.photoMode || 0);
       return record(types.prefs, body.bytes);
     },
     summary: function(value) {
@@ -79,6 +79,7 @@ function create(protocol) {
       body.raw16(encoded.bytes);
       body.ascii8(value.replyId || '').str8(value.replySender, 32, {singleLine: true}).str8(value.replyText, 64, {singleLine: true});
       body.str8(value.forwardFrom, 48, {singleLine: true});
+      body.u8(value.media || 0).u32(value.album || 0).u8(value.mediaCount || 0).str8(value.signature, 32, {singleLine: true});
       return record(types.message, body.bytes);
     },
     templates: function(value) {
@@ -98,6 +99,16 @@ function create(protocol) {
       return record(restored ? types.pending_send : types.send_state, body.bytes);
     },
     text: function(bytes) { return record(types.text, new Writer().raw16(bytes).bytes); },
+    mediaInfo: function(value) {
+      var body = new Writer().u8(value.state).u8(value.index).u8(value.count).u8(value.flags || 0).u32(value.tag || 0).u32(value.total || 0)
+        .u16(value.retryAfter || 0).ascii8(value.item || '');
+      return record(types.media_info, body.bytes);
+    },
+    mediaData: function(offset, bytes) {
+      var body = new Writer().u32(offset);
+      for (var index = 0; index < bytes.length; ++index) { body.bytes.push(bytes[index]); }
+      return record(types.media_data, body.bytes);
+    },
     pack: function(records, budget) {
       var chunks = [];
       var current = [];

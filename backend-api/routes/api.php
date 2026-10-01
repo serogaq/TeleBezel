@@ -56,7 +56,7 @@ Route::middleware(['token', 'token-rate-limit'])->prefix('/v1')->whereUuid('id')
             Route::get('/{uuid}/chats/{chatId}', [TelegramReadController::class, 'chat']);
             Route::get('/{uuid}/chats/{chatId}/messages', [TelegramReadController::class, 'messages']);
             Route::get('/{uuid}/chats/{chatId}/messages/{messageId}', [TelegramReadController::class, 'message']);
-            Route::get('/{uuid}/chats/{chatId}/messages/{messageId}/preview/{previewId}', [TelegramReadController::class, 'preview']);
+            Route::get('/{uuid}/chats/{chatId}/messages/{messageId}/media', [TelegramReadController::class, 'media'])->name('media');
             Route::get('/{uuid}/updates', [TelegramReadController::class, 'updates']);
             Route::put('/{uuid}/chats/{chatId}/interests/{viewId}', [TelegramReadController::class, 'putInterest']);
             Route::delete('/{uuid}/chats/{chatId}/interests/{viewId}', [TelegramReadController::class, 'deleteInterest']);

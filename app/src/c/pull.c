@@ -1,7 +1,7 @@
 #include "pull.h"
 #include <string.h>
 
-static uint32_t now(const TbPull *pull) { return pull->ports.now(pull->ports.context); }
+static uint32_t now(const TbPull *pull) { return pull->ports.now(pull->ports.clock); }
 
 static void changed(TbPull *pull) { pull->ports.changed(pull->ports.context); }
 
@@ -11,7 +11,7 @@ static void animate(TbPull *pull, TbPullPhase phase, uint16_t to, uint32_t durat
   pull->to = to;
   pull->started = now(pull);
   pull->duration = duration;
-  pull->ports.schedule(pull->ports.context, TB_PULL_FRAME);
+  pull->ports.schedule(pull->ports.clock, TB_PULL_FRAME);
 }
 
 static void fire(TbPull *pull) {
@@ -35,7 +35,7 @@ static void settle(TbPull *pull) {
       const uint32_t current = now(pull);
       pull->phase = TB_PULL_WAITING;
       const uint32_t left = pull->armed_until > current ? pull->armed_until - current : 0;
-      pull->ports.schedule(pull->ports.context, left > 0 ? left : 1);
+      pull->ports.schedule(pull->ports.clock, left > 0 ? left : 1);
       break;
     }
     case TB_PULL_WAITING:
@@ -76,7 +76,7 @@ void tb_pull_press(TbPull *pull) {
 
 void tb_pull_drag(TbPull *pull, uint16_t level) {
   if (pull->phase == TB_PULL_RISING_FULL || pull->phase == TB_PULL_HOLDING) { return; }
-  pull->ports.cancel(pull->ports.context);
+  pull->ports.cancel(pull->ports.clock);
   pull->phase = TB_PULL_DRAGGING;
   pull->armed_until = 0;
   pull->level = level > TB_PULL_FULL ? TB_PULL_FULL : level;
@@ -97,19 +97,19 @@ void tb_pull_tick(TbPull *pull) {
   if (pull->phase == TB_PULL_IDLE || pull->phase == TB_PULL_DRAGGING) { return; }
   if (pull->phase == TB_PULL_WAITING) {
     if (now(pull) >= pull->armed_until) { settle(pull); }
-    else { pull->ports.schedule(pull->ports.context, pull->armed_until - now(pull)); }
+    else { pull->ports.schedule(pull->ports.clock, pull->armed_until - now(pull)); }
     changed(pull);
     return;
   }
   const uint32_t elapsed = now(pull) - pull->started;
   pull->level = eased(pull, elapsed);
   if (elapsed >= pull->duration) { settle(pull); }
-  else { pull->ports.schedule(pull->ports.context, TB_PULL_FRAME); }
+  else { pull->ports.schedule(pull->ports.clock, TB_PULL_FRAME); }
   changed(pull);
 }
 
 void tb_pull_reset(TbPull *pull) {
-  pull->ports.cancel(pull->ports.context);
+  pull->ports.cancel(pull->ports.clock);
   pull->phase = TB_PULL_IDLE;
   pull->level = 0;
   pull->armed_until = 0;

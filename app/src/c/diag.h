@@ -8,6 +8,8 @@ typedef struct {
   uint16_t items;
   uint32_t budget;
   uint16_t draft_bytes;
+  uint16_t media_bytes;
+  uint8_t media_phase;
 } TbDiagCounters;
 
 typedef void (*TbDiagProbe)(TbDiagCounters *out);

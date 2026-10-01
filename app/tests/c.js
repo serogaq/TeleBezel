@@ -15,7 +15,10 @@ var suites = {
   format_test: ['src/c/format.c', 'src/c/errors.c', 'src/c/request_layer.c'],
   notify_test: ['src/c/notify.c'],
   send_tracker_test: ['src/c/send_tracker.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
-  compose_test: ['src/c/compose.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c']
+  compose_test: ['src/c/compose.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c'],
+  image_test: ['src/c/image.c'],
+  gesture_test: ['src/c/gesture.c'],
+  media_test: ['src/c/media.c', 'src/c/image.c', 'src/c/request_layer.c', 'src/c/codec.c', 'src/c/text.c', 'src/c/errors.c']
 };
 var only = process.argv.slice(2);
 fs.mkdirSync(path.join(root, 'build'), {recursive: true});

@@ -2,81 +2,40 @@
 #ifndef PBL_SDK_3
 #include <stdio.h>
 #endif
+#include <stddef.h>
 #include <string.h>
 #include "errors.h"
 #include "generated/protocol.h"
 
+#define TB_STRING(name) ((uint8_t)(offsetof(TbStrings, name) / sizeof(const char *)))
+
+static const uint8_t s_result_strings[] = {
+  0, TB_STRING(config_missing), TB_STRING(config_invalid), TB_STRING(backend_unavailable), TB_STRING(api_unauthorized),
+  TB_STRING(backend_not_ready), TB_STRING(protocol_error), TB_STRING(account_needs_login), TB_STRING(account_gone), TB_STRING(chat_not_found),
+  TB_STRING(rate_limited), TB_STRING(busy), TB_STRING(busy), TB_STRING(too_many_views), TB_STRING(message_unavailable), TB_STRING(wrong_token_type),
+  TB_STRING(send_forbidden), TB_STRING(reply_unavailable), TB_STRING(text_too_long_error), TB_STRING(draft_lost), TB_STRING(send_unknown),
+  TB_STRING(send_rate_limited)};
+
+static const uint8_t s_local_strings[] = {TB_STRING(phone_unreachable), TB_STRING(no_response), TB_STRING(out_of_memory)};
+
+static const char *string_at(const TbStrings *strings, uint8_t index) { return ((const char *const *)(const void *)strings)[index]; }
+
 const char *tb_error_text(const TbStrings *strings, int32_t error) {
-  switch (error) {
-    case TB_RESULT_CONFIG_MISSING: return strings->config_missing;
-    case TB_RESULT_CONFIG_INVALID: return strings->config_invalid;
-    case TB_RESULT_BACKEND_UNAVAILABLE: return strings->backend_unavailable;
-    case TB_RESULT_API_UNAUTHORIZED: return strings->api_unauthorized;
-    case TB_RESULT_WRONG_TOKEN_TYPE: return strings->wrong_token_type;
-    case TB_RESULT_BACKEND_NOT_READY: return strings->backend_not_ready;
-    case TB_RESULT_ACCOUNT_NEEDS_LOGIN: return strings->account_needs_login;
-    case TB_RESULT_ACCOUNT_GONE: return strings->account_gone;
-    case TB_RESULT_CHAT_NOT_FOUND: return strings->chat_not_found;
-    case TB_RESULT_RATE_LIMITED: return strings->rate_limited;
-    case TB_RESULT_BUSY: return strings->busy;
-    case TB_RESULT_CURSOR_LOST: return strings->busy;
-    case TB_RESULT_TOO_MANY_VIEWS: return strings->too_many_views;
-    case TB_RESULT_MESSAGE_UNAVAILABLE: return strings->message_unavailable;
-    case TB_RESULT_SEND_FORBIDDEN: return strings->send_forbidden;
-    case TB_RESULT_REPLY_UNAVAILABLE: return strings->reply_unavailable;
-    case TB_RESULT_TEXT_TOO_LONG: return strings->text_too_long_error;
-    case TB_RESULT_DRAFT_LOST: return strings->draft_lost;
-    case TB_RESULT_SEND_UNKNOWN: return strings->send_unknown;
-    case TB_RESULT_SEND_RATE_LIMITED: return strings->send_rate_limited;
-    case TB_ERROR_PHONE_UNREACHABLE: return strings->phone_unreachable;
-    case TB_ERROR_NO_RESPONSE: return strings->no_response;
-    case TB_ERROR_OUT_OF_MEMORY: return strings->out_of_memory;
-    default: return strings->protocol_error;
-  }
+  if (error > 0 && error < (int32_t)sizeof(s_result_strings)) { return string_at(strings, s_result_strings[error]); }
+  if (error >= TB_ERROR_PHONE_UNREACHABLE && error <= TB_ERROR_OUT_OF_MEMORY) { return string_at(strings, s_local_strings[error - TB_ERROR_PHONE_UNREACHABLE]); }
+  return strings->protocol_error;
 }
 
 const char *tb_kind_label(const TbStrings *strings, uint8_t kind) {
-  switch (kind) {
-    case TB_KIND_PHOTO: return strings->kind_photo;
-    case TB_KIND_VIDEO: return strings->kind_video;
-    case TB_KIND_VOICE_NOTE: return strings->kind_voice_note;
-    case TB_KIND_VIDEO_NOTE: return strings->kind_video_note;
-    case TB_KIND_STICKER: return strings->kind_sticker;
-    case TB_KIND_DOCUMENT: return strings->kind_document;
-    case TB_KIND_AUDIO: return strings->kind_audio;
-    case TB_KIND_ANIMATION: return strings->kind_animation;
-    case TB_KIND_LOCATION: return strings->kind_location;
-    case TB_KIND_VENUE: return strings->kind_venue;
-    case TB_KIND_CONTACT: return strings->kind_contact;
-    case TB_KIND_POLL: return strings->kind_poll;
-    case TB_KIND_DICE: return strings->kind_dice;
-    case TB_KIND_CALL: return strings->kind_call;
-    case TB_KIND_GAME: return strings->kind_game;
-    case TB_KIND_STORY: return strings->kind_story;
-    case TB_KIND_EXPIRED: return strings->kind_expired;
-    case TB_KIND_PAID_MEDIA: return strings->kind_paid_media;
-    case TB_KIND_SERVICE: return strings->kind_service;
-    default: return strings->kind_unsupported;
-  }
+  if (kind >= TB_KIND_PHOTO && kind <= TB_KIND_UNSUPPORTED) { return string_at(strings, (uint8_t)(TB_STRING(kind_photo) + kind - TB_KIND_PHOTO)); }
+  return strings->kind_unsupported;
 }
 
 const char *tb_action_label(const TbStrings *strings, uint8_t action) {
-  switch (action) {
-    case TB_ACTION_MEMBERS_ADDED: return strings->action_members_added;
-    case TB_ACTION_MEMBER_JOINED: return strings->action_member_joined;
-    case TB_ACTION_MEMBER_LEFT: return strings->action_member_left;
-    case TB_ACTION_TITLE_CHANGED: return strings->action_title_changed;
-    case TB_ACTION_PHOTO_CHANGED: return strings->action_photo_changed;
-    case TB_ACTION_CHAT_CREATED: return strings->action_chat_created;
-    case TB_ACTION_PINNED: return strings->action_pinned;
-    case TB_ACTION_SCREENSHOT: return strings->action_screenshot;
-    case TB_ACTION_CONTACT_JOINED: return strings->action_contact_joined;
-    case TB_ACTION_VIDEO_CHAT: return strings->action_video_chat;
-    case TB_ACTION_AUTO_DELETE: return strings->action_auto_delete;
-    case TB_ACTION_UPGRADED: return strings->action_upgraded;
-    case TB_ACTION_TOPIC_CREATED: return strings->action_topic_created;
-    default: return strings->kind_service;
+  if (action >= TB_ACTION_MEMBERS_ADDED && action <= TB_ACTION_TOPIC_CREATED) {
+    return string_at(strings, (uint8_t)(TB_STRING(action_members_added) + action - TB_ACTION_MEMBERS_ADDED));
   }
+  return strings->kind_service;
 }
 
 const char *tb_account_state_text(const TbStrings *strings, uint8_t state) {
@@ -130,6 +89,26 @@ void tb_format_content(char *out, size_t size, const TbStrings *strings, uint8_t
   } else {
     snprintf(out, size, "[%s%s]", tb_kind_label(strings, kind), detail);
   }
+}
+
+void tb_format_message(char *out, size_t size, const TbStrings *strings, uint8_t kind, uint8_t action, uint16_t duration,
+                       const char *extra, const char *text, uint8_t media, uint8_t count) {
+  text = text ? text : "";
+  const bool paid = kind == TB_KIND_PAID_MEDIA;
+  const char *mark = (media & TB_MEDIA_FLAG_RESTRICTED) && !paid ? strings->media_disappearing
+                     : (media & TB_MEDIA_FLAG_SPOILER)          ? strings->media_spoiler
+                                                                : "";
+  char detail[64];
+  if ((media & TB_MEDIA_FLAG_ALBUM) && count > 1) {
+    snprintf(detail, sizeof(detail), "%s %d%s%s", paid ? tb_kind_label(strings, kind) : strings->media_album, count, *mark ? " · " : "", mark);
+    snprintf(out, size, *text ? "[%s] %s" : "[%s]", detail, text);
+    return;
+  }
+  if (*mark) {
+    snprintf(detail, sizeof(detail), "%s%s· %s", extra ? extra : "", extra && *extra ? " " : "", mark);
+    extra = detail;
+  }
+  tb_format_content(out, size, strings, kind, action, duration, extra, text);
 }
 
 bool tb_same_day(time_t left, time_t right) {

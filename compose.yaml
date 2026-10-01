@@ -37,17 +37,23 @@ services:
       OCTANE_SERVER: frankenphp
       TDLIB_BASE_URL: http://backend-tdlib:8081
       TDLIB_INTERNAL_TOKEN_FILE: /run/secrets/tdlib_internal_token
-    secrets: [laravel_app_key, postgres_password, tdlib_internal_token]
+      MEDIA_BASE_URL: http://backend-media:8082
+      MEDIA_INTERNAL_TOKEN_FILE: /run/secrets/media_internal_token
+      MEDIA_CACHE_DIRECTORY: /var/cache/telebezel-media
+      MEDIA_CACHE_BYTES: "58720256"
+    secrets: [laravel_app_key, postgres_password, tdlib_internal_token, media_internal_token]
     tmpfs:
       - /tmp:size=32m,mode=1777
       - /config:size=16m,uid=10001,gid=10001,mode=0700
       - /data:size=16m,uid=10001,gid=10001,mode=0700
       - /app/storage:size=32m,uid=10001,gid=10001,mode=0750
       - /app/bootstrap/cache:size=8m,uid=10001,gid=10001,mode=0750
-    networks: [api-ingress, api-db, api-tdlib]
+      - /var/cache/telebezel-media:size=64m,uid=10001,gid=10001,mode=0700
+    networks: [api-ingress, api-db, api-tdlib, api-media]
     depends_on:
       postgres: {condition: service_healthy}
       backend-tdlib: {condition: service_started}
+      backend-media: {condition: service_started}
     healthcheck:
       test: [CMD, php, -r, "exit(@file_get_contents('http://127.0.0.1:8080/healthz') === false ? 1 : 0);"]
       interval: 10s
@@ -88,6 +94,32 @@ services:
       retries: 5
       start_period: 10s
 
+  backend-media:
+    build:
+      context: ./backend-media
+      args: {VERSION: "${MEDIA_SERVICE_VERSION:-0.1.0}"}
+    image: "ghcr.io/${GHCR_OWNER:-serogaq}/telebezel-backend-media:local"
+    restart: unless-stopped
+    read_only: true
+    user: "10003:10003"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    environment:
+      MEDIA_LISTEN_ADDRESS: 0.0.0.0:8082
+      MEDIA_INTERNAL_TOKEN_FILE: /run/secrets/media_internal_token
+      MEDIA_CONCURRENCY: "2"
+      GOMEMLIMIT: 200MiB
+    secrets: [media_internal_token]
+    networks: [api-media]
+    healthcheck:
+      test: [CMD, /telebezel-media, --healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
   scheduler:
     build:
       context: ./backend-api
@@ -103,7 +135,7 @@ services:
     command:
       - sh
       - -c
-      - trap 'kill 0' TERM INT; (while true; do timeout --signal=TERM --kill-after=2s 8s php artisan telebezel:proxy-monitor --no-interaction; sleep 1; done) & while true; do timeout --signal=TERM --kill-after=5s 50s php artisan schedule:run --no-interaction; sleep 60; done
+      - trap 'kill 0' TERM INT; (while true; do delay=$$(timeout --signal=TERM --kill-after=2s 8s php artisan telebezel:proxy-monitor --no-interaction); case "$$delay" in 2.5|5) ;; *) delay=5 ;; esac; sleep "$$delay"; done) & while true; do timeout --signal=TERM --kill-after=5s 50s php artisan schedule:run --no-interaction; sleep 60; done
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
@@ -166,6 +198,8 @@ networks:
     internal: true
   api-tdlib:
     internal: true
+  api-media:
+    internal: true
   tdlib-egress: {}
 
 volumes:
@@ -181,3 +215,5 @@ secrets:
     file: ./secrets/tdlib_internal_token
   tdlib_database_master_key:
     file: ./secrets/tdlib_database_master_key
+  media_internal_token:
+    file: ./secrets/media_internal_token

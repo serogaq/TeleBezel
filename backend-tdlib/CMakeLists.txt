@@ -32,7 +32,7 @@ target_compile_definitions(telebezel-core PUBLIC TELEBEZEL_SERVICE_VERSION="${PR
 add_library(telebezel-runtime STATIC
   src/td_runtime.cpp src/transport.cpp src/runtime_engine.cpp src/runtime_support.cpp src/runtime_commands.cpp
   src/td_request_broker.cpp src/account_lifecycle_service.cpp src/authorization_service.cpp
-  src/proxy_service.cpp src/read_model_service.cpp src/chat_reads.cpp src/history_reads.cpp src/preview_cache.cpp
+  src/proxy_service.cpp src/read_model_service.cpp src/chat_reads.cpp src/history_reads.cpp src/media_sources.cpp
   src/interest_lease_manager.cpp src/message_send_service.cpp
   src/cursor_codec.cpp src/update_journal.cpp)
 target_include_directories(telebezel-runtime SYSTEM BEFORE PUBLIC

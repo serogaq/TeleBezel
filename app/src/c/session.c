@@ -46,6 +46,7 @@ static bool parse(TbSession *session, const TbResponse *response) {
     session->chat_list = TB_LIST_MAIN;
     session->show_archive = true;
     session->unread_mode = TB_UNREAD_MODE_CHATS;
+    session->photo_mode = TB_PHOTO_MODE_AUTO;
   }
   TbCursor cursor;
   tb_cursor_init(&cursor, response->payload, response->length);
@@ -62,6 +63,7 @@ static bool parse(TbSession *session, const TbResponse *response) {
       session->show_archive = prefs.show_archive != 0;
       session->chat_list = session->show_archive && prefs.chat_list == TB_LIST_ARCHIVE ? TB_LIST_ARCHIVE : TB_LIST_MAIN;
       session->unread_mode = prefs.unread_mode == TB_UNREAD_MODE_MESSAGES ? TB_UNREAD_MODE_MESSAGES : TB_UNREAD_MODE_CHATS;
+      session->photo_mode = prefs.photo_mode == TB_PHOTO_MODE_MANUAL ? TB_PHOTO_MODE_MANUAL : TB_PHOTO_MODE_AUTO;
       tb_copy_span(session->host, sizeof(session->host), prefs.host);
     } else if (type == TB_RECORD_ACCOUNT) {
       TbAccountRecord record;

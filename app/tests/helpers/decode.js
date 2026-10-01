@@ -24,7 +24,8 @@ function decode(protocol, bytes) {
     if (type === types.account) {
       records.push({type: 'account', id: body.str8(), name: body.str8(), state: body.u8(), flags: body.u8()});
     } else if (type === types.prefs) {
-      records.push({type: 'prefs', defaultAccount: body.str8(), chatList: body.u8(), host: body.str8(), showArchive: body.u8(), unreadMode: body.u8()});
+      records.push({type: 'prefs', defaultAccount: body.str8(), chatList: body.u8(), host: body.str8(), showArchive: body.u8(), unreadMode: body.u8(),
+        photoMode: body.u8()});
     } else if (type === types.summary) {
       records.push({type: 'summary', connection: body.u8(), proxy: body.u8(), unreadChats: body.u32(), unreadMessages: body.u32()});
     } else if (type === types.status) {
@@ -36,7 +37,8 @@ function decode(protocol, bytes) {
     } else if (type === types.message) {
       records.push({type: 'message', id: body.str8(), date: body.u32(), flags: body.u8(), kind: body.u8(), action: body.u8(),
         duration: body.u16(), sender: body.str8(), extra: body.str8(), text: body.str16(), replyId: body.str8(),
-        replySender: body.str8(), replyText: body.str8(), forwardFrom: body.str8()});
+        replySender: body.str8(), replyText: body.str8(), forwardFrom: body.str8(), media: body.u8(), album: body.u32(), mediaCount: body.u8(),
+        signature: body.str8()});
     } else if (type === types.templates) {
       records.push({type: 'templates', revision: body.u32(), count: body.u8(), flags: body.u8()});
     } else if (type === types.template) {
@@ -49,6 +51,11 @@ function decode(protocol, bytes) {
         title: body.str8(), preview: body.str8()});
     } else if (type === types.text) {
       records.push({type: 'text', bytes: body.raw(body.u16())});
+    } else if (type === types.media_info) {
+      records.push({type: 'media_info', state: body.u8(), index: body.u8(), count: body.u8(), flags: body.u8(), tag: body.u32(), total: body.u32(),
+        retryAfter: body.u16(), item: body.str8()});
+    } else if (type === types.media_data) {
+      records.push({type: 'media_data', offset: body.u32(), bytes: body.raw(length - 4)});
     } else {
       throw new Error('unknown record ' + type);
     }

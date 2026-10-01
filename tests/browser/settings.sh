@@ -111,4 +111,12 @@ ab fill '#recover [name=password]' 'new correct horse battery staple' >/dev/null
 ab click '#recover button' >/dev/null
 assert_eval "document.querySelector('#configuration').hidden" false
 assert_eval "document.querySelectorAll('#accounts .item').length" 1
-printf 'Settings browser flow passed: bootstrap, retry, login, recovery\n'
+
+ab select '#language' ru >/dev/null
+assert_eval "document.documentElement.lang" '"ru"'
+assert_eval "document.querySelector('#configuration').hidden" false
+assert_eval "document.querySelector('#account-add button').textContent" '"Добавить аккаунт"'
+ab screenshot "${SETTINGS_SCREENSHOT:-$work/settings-ru.png}" >/dev/null
+ab select '#language' en >/dev/null
+assert_eval "document.documentElement.lang" '"en"'
+printf 'Settings browser flow passed: bootstrap, retry, login, recovery, language\n'

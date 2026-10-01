@@ -40,9 +40,10 @@ static void draw(Layer *layer, GContext *ctx) {
   const int16_t icon = 12;
   const int16_t left = (int16_t)(PBL_IF_ROUND_ELSE(10, 4));
   const GRect glyph = GRect(left, (int16_t)((theme->meta_height - icon) / 2 + 3), icon, icon);
-  if (item->action == TB_NOTIFY_WAIT || (item->level != TB_NOTIFY_INFO && item->action == TB_NOTIFY_CHECK)) { tb_icon_clock(ctx, glyph, ink); }
-  else if (item->level == TB_NOTIFY_INFO) { tb_icon_check(ctx, glyph, ink); }
-  else { tb_icon_alert(ctx, glyph, ink); }
+  const uint8_t kind = item->action == TB_NOTIFY_WAIT || (item->level != TB_NOTIFY_INFO && item->action == TB_NOTIFY_CHECK) ? TB_ICON_CLOCK
+                       : item->level == TB_NOTIFY_INFO                                                                ? TB_ICON_CHECK_12
+                                                                                                                       : TB_ICON_ALERT;
+  tb_icon(ctx, kind, glyph.origin, ink);
   const int16_t text_left = (int16_t)(left + icon + 4);
   const int16_t width = (int16_t)(bounds.size.w - text_left - 4);
   graphics_context_set_text_color(ctx, ink);

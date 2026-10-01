@@ -23,10 +23,10 @@ test('owner mutations record activity without recursively touching auth endpoint
 test('account controls follow runtime readiness and expose terminal errors', () => {
   assert.deepEqual(flow.accountView({lifecycle: 'provisioning', runtime: {available: false, authorization_state: 'awaiting_reconciliation'}}), {
     authorizationState: 'awaiting_reconciliation', connectionState: 'unknown', errorCode: null,
-    waitingForRuntime: true, canAuthorize: false, shouldPoll: true, buttonLabel: 'Preparing…'
+    waitingForRuntime: true, canAuthorize: false, shouldPoll: true, buttonLabel: 'preparing'
   });
   assert.equal(flow.accountView({lifecycle: 'active', runtime: {available: true, authorization_state: 'awaiting_code'}}).canAuthorize, true);
   const failed = flow.accountView({lifecycle: 'provisioning', runtime: {available: false}, last_error: {code: 'configuration.missing'}});
   assert.equal(failed.shouldPoll, false);
-  assert.equal(failed.buttonLabel, 'Needs attention');
+  assert.equal(failed.buttonLabel, 'needs_attention');
 });

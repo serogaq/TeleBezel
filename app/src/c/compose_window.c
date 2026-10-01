@@ -31,10 +31,16 @@ typedef struct {
 
 static TbComposeTexts *s_texts;
 
-static void release_texts(const TbComposeView *view) {
-  if (view->menu_window || view->review_window || view->result_window) { return; }
+static bool any_loaded(const TbComposeView *view) { return view->menu || view->review_scroll || view->result_title; }
+
+static void finish(TbComposeView *view) {
+  if (any_loaded(view)) { return; }
   free(s_texts);
   s_texts = NULL;
+  tb_diag_periodic(false);
+  const bool sent = view->sent;
+  view->sent = false;
+  view->actions.finished(view->actions.context, sent);
 }
 
 static bool in_stack(Window *window) { return window && window_stack_contains_window(window); }
@@ -137,7 +143,7 @@ static void menu_draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, vo
   const int16_t left = (int16_t)(theme->margin + 4);
   if (index->section == SECTION_TOP) {
     const int16_t icon = 16;
-    tb_icon_mic(ctx, GRect(left, (bounds.size.h - icon) / 2, icon, icon), tb_theme_accent(highlighted));
+    tb_icon(ctx, TB_ICON_MIC, GPoint(left, (bounds.size.h - icon) / 2), tb_theme_accent(highlighted));
     graphics_context_set_text_color(ctx, tb_theme_accent(highlighted));
     graphics_draw_text(ctx, view->strings->dictate, theme->title, GRect(left + icon + 6, (bounds.size.h - theme->title_height) / 2 - 2,
                        bounds.size.w - left - icon - 10, theme->title_height), GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
@@ -190,13 +196,7 @@ static void menu_unload(Window *window) {
   TbComposeView *view = window_get_user_data(window);
   menu_layer_destroy(view->menu);
   view->menu = NULL;
-  window_destroy(window);
-  view->menu_window = NULL;
-  release_texts(view);
-  if (!view->review_window && !view->result_window) {
-    tb_diag_periodic(false);
-    view->actions.finished(view->actions.context, false);
-  }
+  finish(view);
   tb_diag_event("window_pop", "compose");
 }
 
@@ -338,14 +338,8 @@ static void review_unload(Window *window) {
   view->review_body = NULL;
   view->review_header = NULL;
   view->review_scroll = NULL;
-  window_destroy(window);
-  view->review_window = NULL;
   view->busy_notice = false;
-  release_texts(view);
-  if (!view->menu_window && !view->result_window) {
-    tb_diag_periodic(false);
-    view->actions.finished(view->actions.context, false);
-  }
+  finish(view);
   tb_diag_event("window_pop", "review");
 }
 
@@ -505,27 +499,24 @@ static void result_unload(Window *window) {
   view->result_hint = NULL;
   view->result_body = NULL;
   view->result_title = NULL;
-  window_destroy(window);
-  view->result_window = NULL;
   view->confirm_anyway = false;
-  release_texts(view);
-  if (!view->menu_window && !view->review_window) {
-    tb_diag_periodic(false);
-    const TbSendStatus *status = current(view);
-    view->actions.finished(view->actions.context, status && status->phase == TB_SENDING_SENT);
-  }
+  const TbSendStatus *status = current(view);
+  if (status && status->phase == TB_SENDING_SENT) { view->sent = true; }
+  finish(view);
   tb_diag_event("window_pop", "result");
 }
 
-static Window *make_window(TbComposeView *view, WindowHandlers handlers) {
+static Window *prepare(TbComposeView *view, Window **slot, WindowHandlers handlers) {
   if (!s_texts) { s_texts = calloc(1, sizeof(TbComposeTexts)); }
   if (!s_texts) { return NULL; }
-  Window *window = window_create();
-  if (!window) { return NULL; }
-  window_set_user_data(window, view);
-  window_set_background_color(window, tb_theme_background());
-  window_set_window_handlers(window, handlers);
-  return window;
+  if (!*slot) {
+    *slot = window_create();
+    if (!*slot) { return NULL; }
+    window_set_user_data(*slot, view);
+    window_set_background_color(*slot, tb_theme_background());
+    window_set_window_handlers(*slot, handlers);
+  }
+  return *slot;
 }
 
 static void auto_closed(void *context) {
@@ -544,21 +535,22 @@ void tb_compose_view_init(TbComposeView *view, TbCompose *compose, TbSendTracker
 
 void tb_compose_view_open(TbComposeView *view, bool dictation) {
   view->dictation = dictation;
-  if (!view->menu_window) { view->menu_window = make_window(view, (WindowHandlers){.load = menu_load, .unload = menu_unload}); }
-  if (view->menu_window && !in_stack(view->menu_window)) { window_stack_push(view->menu_window, true); }
+  view->sent = false;
+  Window *window = prepare(view, &view->menu_window, (WindowHandlers){.load = menu_load, .unload = menu_unload});
+  if (window && !in_stack(window)) { window_stack_push(window, true); }
 }
 
 void tb_compose_view_review(TbComposeView *view) {
-  if (!view->review_window) { view->review_window = make_window(view, (WindowHandlers){.load = review_load, .unload = review_unload}); }
-  if (view->review_window && !in_stack(view->review_window)) { window_stack_push(view->review_window, true); }
+  Window *window = prepare(view, &view->review_window, (WindowHandlers){.load = review_load, .unload = review_unload});
+  if (window && !in_stack(window)) { window_stack_push(window, true); }
   review_layout(view);
 }
 
 void tb_compose_view_result(TbComposeView *view) {
   view->result_draft = view->tracker->status.draft_id;
   view->confirm_anyway = false;
-  if (!view->result_window) { view->result_window = make_window(view, (WindowHandlers){.load = result_load, .unload = result_unload}); }
-  if (view->result_window && !in_stack(view->result_window)) { window_stack_push(view->result_window, true); }
+  Window *window = prepare(view, &view->result_window, (WindowHandlers){.load = result_load, .unload = result_unload});
+  if (window && !in_stack(window)) { window_stack_push(window, true); }
   result_layout(view);
 }
 
@@ -570,7 +562,7 @@ void tb_compose_view_reload(TbComposeView *view) {
 }
 
 void tb_compose_view_status(TbComposeView *view, const TbSendStatus *status) {
-  if (!view->result_window || status->draft_id != view->result_draft) { return; }
+  if (!view->result_title || status->draft_id != view->result_draft) { return; }
   result_layout(view);
   if (status->phase == TB_SENDING_SENT && !view->auto_close) {
     vibes_short_pulse();
@@ -588,5 +580,5 @@ void tb_compose_view_close_all(TbComposeView *view) {
   Window *windows[] = {view->result_window, view->review_window, view->menu_window};
   for (size_t index = 0; index < sizeof(windows) / sizeof(windows[0]); ++index) {
     if (in_stack(windows[index])) { window_stack_remove(windows[index], index == 0); }
-  }
+    }
 }

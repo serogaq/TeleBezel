@@ -11,6 +11,11 @@ final class RateLimitCacheKeys
         return 'public-api:'.$principalId;
     }
 
+    public static function media(string $principalId): string
+    {
+        return 'public-api-media:'.$principalId;
+    }
+
     public static function accountOperation(string $budget, string $subject): string
     {
         return "account-operation:{$budget}:{$subject}";

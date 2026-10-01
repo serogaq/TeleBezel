@@ -12,7 +12,7 @@ test -f "$pbw" || { echo "Build the app first: make app-emulator-check builds it
 rm -rf "$out"
 mkdir -p "$out"
 
-PORT="$port" MOCK_SEND_MODES="sent,pending,forbidden" MOCK_SETTLE_MS=8000 node "$root/app/tests/e2e/mock_api.js" >"$out/mock.log" 2>&1 &
+PORT="$port" MOCK_LOG_REQUESTS=1 MOCK_SEND_MODES="sent,pending,forbidden" MOCK_SETTLE_MS=8000 node "$root/app/tests/e2e/mock_api.js" >"$out/mock.log" 2>&1 &
 mock=$!
 logs=""
 serial=""
@@ -22,6 +22,8 @@ cleanup() {
   if test -n "$serial"; then kill "$serial" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
+
+bash "$root/tests/emulator/lang_pack.sh" "$platform"
 
 "$python" - "$platform" "$sdk" "$port" <<'PY'
 import dbm.dumb, json, os, sys
@@ -40,7 +42,7 @@ control() { "$python" "$root/tests/emulator/control.py" "$platform" "$@"; }
 press() { control button "$@"; }
 hold() { control hold "$1"; }
 shot() { sleep "${2:-2}"; control screenshot "$out/$1.png"; echo "$out/$1.png"; }
-install() { for _ in 1 2 3; do pebble install --emulator "$platform" "$pbw" && return 0; sleep 5; done; return 1; }
+install() { for attempt in 1 2 3 4 5 6; do pebble install --emulator "$platform" "$pbw" && return 0; sleep $((3 * attempt)); done; return 1; }
 
 install
 pebble logs --emulator "$platform" >"$out/diag.log" 2>&1 &
@@ -54,7 +56,7 @@ press down; shot 01-write-row 1
 press select; shot 02-compose 3
 press down; press select; shot 03-review 3
 press select; shot 04-sent 0.5
-sleep 4
+shot 04-history-after-send 5
 press up; hold select; shot 05-message-menu 1
 press select; shot 06-reply-compose 3
 press down 2; press select; shot 07-reply-review 3
@@ -63,7 +65,7 @@ press back; shot 09-card-sending 1
 for _ in $(seq 1 60); do grep -q "settled sent" "$out/diag.log" && break; sleep 0.5; done
 shot 10-card-sent 0.3
 press down 2; press select; sleep 3
-press select; shot 11-dictation 2
+press select; sleep 2
 press back; shot 12-dictation-cancelled 2
 press down; press select; sleep 2
 press select; shot 13-not-sent 3
@@ -76,5 +78,7 @@ kill "$logs" 2>/dev/null || true
 wait "$logs" 2>/dev/null || true
 logs=""
 grep -q "settled op-2" "$out/mock.log" || { echo "the pending send was never settled" >&2; exit 1; }
+awk '/request POST .*\/messages$/ { posts++ } posts == 1 && /request GET .*\/messages$/ { found = 1 } END { exit found ? 0 : 1 }' "$out/mock.log" ||
+  { echo "the history was not refreshed after a sent message" >&2; exit 1; }
 grep -q "settled sent" "$out/diag.log" || { echo "PKJS never reported the late result" >&2; exit 1; }
 echo "send path screenshots in $out"

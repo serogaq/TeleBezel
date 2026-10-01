@@ -18,6 +18,11 @@ final class TelegramReadResource extends ApiResource
                 $item = Values::object($data['item']);
                 $data['item'] = $kind === 'chat' ? self::chat($item) : self::message($item);
             }
+        } elseif ($kind === 'media') {
+            $data = self::pick($data, ['state', 'retry_after', 'index', 'count', 'item_message_id', 'has_spoiler', 'rendition']);
+            if (is_array($data['rendition'] ?? null)) {
+                $data['rendition'] = self::pick(Values::object($data['rendition']), ['tag', 'width', 'height', 'shape', 'format', 'crc32', 'bytes_base64']);
+            }
         } elseif ($kind === 'interest') {
             $data = self::pick($data, ['active', 'expires_in', 'expires_in_seconds', 'lease_seconds', 'released', 'chat_id']);
         } else {
@@ -89,7 +94,7 @@ final class TelegramReadResource extends ApiResource
      * @return array<string, mixed> */
     private static function message(array $value): array
     {
-        $value = self::pick($value, ['id', 'chat_id', 'sender', 'date', 'edit_date', 'is_outgoing', 'author_signature', 'forward_from', 'reply_to', 'sending_state', 'content', 'stale', 'observed_at', 'source']);
+        $value = self::pick($value, ['id', 'chat_id', 'sender', 'date', 'edit_date', 'is_outgoing', 'is_channel_post', 'author_signature', 'forward_from', 'reply_to', 'sending_state', 'content', 'stale', 'observed_at', 'source']);
         if (is_array($value['reply_to'] ?? null)) {
             $value['reply_to'] = self::pick(Values::object($value['reply_to']), ['message_id', 'sender_name', 'text']);
         }
@@ -100,7 +105,10 @@ final class TelegramReadResource extends ApiResource
             $value['forward_from'] = self::pick(Values::object($value['forward_from']), ['type', 'id', 'name', 'fallback', 'signature']);
         }
         if (is_array($value['content'] ?? null)) {
-            $value['content'] = self::pick(Values::object($value['content']), ['kind', 'text', 'fallback_key', 'duration', 'emoji', 'title', 'action', 'preview_id', 'preview_state']);
+            $value['content'] = self::pick(Values::object($value['content']), ['kind', 'text', 'fallback_key', 'duration', 'emoji', 'title', 'action', 'media']);
+            if (is_array($value['content']['media'] ?? null)) {
+                $value['content']['media'] = self::pick(Values::object($value['content']['media']), ['type', 'width', 'height', 'has_spoiler', 'album_id', 'restriction', 'count']);
+            }
         }
 
         return $value;

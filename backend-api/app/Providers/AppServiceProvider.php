@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Contracts\MediaRenderer;
 use App\Contracts\MonotonicClock;
+use App\Contracts\RenditionStore;
 use App\Contracts\Repositories\AccessTokenRepository as AccessTokenRepositoryContract;
 use App\Contracts\Repositories\AdministrationRepository as AdministrationRepositoryContract;
 use App\Contracts\Repositories\DeviceRepository as DeviceRepositoryContract;
@@ -18,6 +20,8 @@ use App\Contracts\Repositories\TelegramAccountRepository as TelegramAccountRepos
 use App\Contracts\TdlibGateway;
 use App\Contracts\TdlibStatusClient;
 use App\Contracts\TransactionManager;
+use App\Infrastructure\Media\FilesystemRenditionStore;
+use App\Infrastructure\Media\HttpMediaRenderer;
 use App\Infrastructure\Persistence\DatabaseTransactionManager;
 use App\Infrastructure\Persistence\PostgresConnector;
 use App\Infrastructure\Tdlib\TdlibGateway as TdlibGatewayImplementation;
@@ -66,6 +70,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramAccountRepositoryContract::class, TelegramAccountRepository::class);
         $this->app->bind(MonotonicClock::class, SystemMonotonicClock::class);
         $this->app->bind(TdlibGateway::class, TdlibGatewayImplementation::class);
+        $this->app->bind(MediaRenderer::class, HttpMediaRenderer::class);
+        $this->app->bind(RenditionStore::class, FilesystemRenditionStore::class);
         $this->app->bind(TdlibStatusClient::class, TdlibStatusClientImplementation::class);
     }
 

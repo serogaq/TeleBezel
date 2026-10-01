@@ -18,8 +18,11 @@ final class RateLimitToken
     public function handle(Request $request, Closure $next): Response
     {
         $principal = RequestContext::principal($request);
-        $maximum = $principal->type === 'device' ? 60 : 240;
-        $key = RateLimitCacheKeys::publicApi($principal->id);
+        // Images have their own budget, so browsing an album never uses up
+        // the requests that reading and sending need.
+        $media = $request->routeIs('media');
+        $maximum = $media ? 40 : ($principal->type === 'device' ? 60 : 240);
+        $key = $media ? RateLimitCacheKeys::media($principal->id) : RateLimitCacheKeys::publicApi($principal->id);
         if (RateLimiter::tooManyAttempts($key, $maximum)) {
             throw new ApiException('rate_limit.exceeded', 429, RateLimiter::availableIn($key));
         }

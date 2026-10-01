@@ -1,5 +1,5 @@
 name: Build cached integration images
-description: Load both backend images for Compose using the image layer and TDLib object caches
+description: Load the backend images for Compose using the image layer and TDLib object caches
 runs:
   using: composite
   steps:
@@ -10,6 +10,7 @@ runs:
       run: |
         echo "api=$(tr -d '\n' < backend-api/VERSION)" >> "$GITHUB_OUTPUT"
         echo "tdlib=$(tr -d '\n' < backend-tdlib/VERSION)" >> "$GITHUB_OUTPUT"
+        echo "media=$(tr -d '\n' < backend-media/VERSION)" >> "$GITHUB_OUTPUT"
     - name: Load backend-api image
       uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
       with:
@@ -30,3 +31,13 @@ runs:
         build-args: "VERSION=${{ steps.versions.outputs.tdlib }}"
         cache-from: type=gha,scope=backend-tdlib-amd64
         cache-to: type=gha,mode=max,scope=backend-tdlib-amd64,ignore-error=true
+    - name: Load backend-media image
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: ./backend-media
+        platforms: linux/amd64
+        load: true
+        tags: "ghcr.io/${{ github.repository_owner }}/telebezel-backend-media:local"
+        build-args: "VERSION=${{ steps.versions.outputs.media }}"
+        cache-from: type=gha,scope=backend-media-amd64
+        cache-to: type=gha,mode=max,scope=backend-media-amd64,ignore-error=true

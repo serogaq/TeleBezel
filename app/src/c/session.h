@@ -37,6 +37,7 @@ typedef struct {
   uint8_t chat_list;
   bool show_archive;
   uint8_t unread_mode;
+  uint8_t photo_mode;
   char host[TB_HOST_SIZE];
   const char *failure;
 } TbSession;

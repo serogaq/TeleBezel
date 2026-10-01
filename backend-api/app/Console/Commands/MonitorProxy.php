@@ -10,11 +10,15 @@ final class MonitorProxy extends Command
 {
     protected $signature = 'telebezel:proxy-monitor';
 
-    protected $description = 'Monitor the active proxy and apply the configured failover policy';
+    protected $description = 'Monitor the active proxy, apply the configured failover policy and print the seconds until the next check';
 
     public function handle(ProxyProfileService $profiles): int
     {
-        $profiles->monitor((string) Str::uuid());
+        try {
+            $profiles->monitor((string) Str::uuid());
+        } finally {
+            $this->line((string) $profiles->monitorInterval());
+        }
 
         return self::SUCCESS;
     }

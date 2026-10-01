@@ -128,10 +128,12 @@ function run() {
         });
       }
       return older(OP.first).then(function() {
-        assert.strictEqual(history.length, 70);
+        assert.strictEqual(history.length, 68, 'the three photos of one album arrive as one post');
+        assert.strictEqual(history.filter(function(record) { return record.mediaCount === 3; }).map(function(record) { return record.id; }).join(), '57,51',
+          'an album of three messages and a link preview carousel of three items');
         assert.deepStrictEqual(history.slice(0, 3).map(function(record) { return record.id; }), ['70', '69', '68']);
         assert.ok(history[0].flags & protocol.message_flag.truncated, 'the long message was not marked truncated');
-        assert.strictEqual(history[1].text, 'Подпись к фото');
+        assert.ok(history[1].text.startsWith('Подпись к фото. '));
         return h.request({REQUEST_KIND: R.message, ACCOUNT_ID: mockApi.FIRST, ENTITY_ID: '-1009007199254740993', MESSAGE_ID: '70', TEXT_LIMIT: 3072});
       });
     }).then(function(full) {

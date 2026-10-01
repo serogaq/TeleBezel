@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import struct
 import sys
 import uuid
@@ -12,11 +13,13 @@ EXPECTED_KEYS = [
     "REQUEST_KIND", "REQUEST_SEQ", "RESPONSE_KIND", "RESULT_CODE", "INBOX_SIZE", "PAYLOAD", "ENTITY_ID",
     "CHUNK_INDEX", "CHUNK_TOTAL", "CONFIG_ADDRESS", "CONFIG_SSL", "CONFIG_TOKEN", "ACCOUNT_ID", "MESSAGE_ID",
     "PAGE_OP", "LIST", "PAGE_LIMIT", "TEXT_LIMIT", "PAGE_FLAGS", "RETRY_AFTER", "CONFIG_DEFAULT_ACCOUNT",
-    "DRAFT_ID", "TEMPLATE_INDEX", "TEMPLATES_REV", "ATTEMPT",
+    "DRAFT_ID", "TEMPLATE_INDEX", "TEMPLATES_REV", "ATTEMPT", "MEDIA_INDEX", "MEDIA_SPEC", "MEDIA_OFFSET", "MEDIA_TAG",
 ]
 # PebbleProcessInfo.virtual_size is a uint16 at offset 128: .text + .data + .bss must stay below 64 KiB.
 # The budget keeps headroom for later stages; long-lived state belongs on the heap.
 STATIC_BUDGET = 58 * 1024
+# Each stage records what it may use, so growth is a visible decision rather than drift.
+STAGE_BUDGET = json.loads(Path("tests/size-budget.json").read_text())
 VIRTUAL_SIZE_OFFSET = 128
 NAME_OFFSET = 24
 UUID_OFFSET = 104
@@ -59,7 +62,7 @@ with zipfile.ZipFile(pbw) as archive:
     js = archive.read("pebble-js-app.js")
     require(len(js) > 0, "empty PKJS")
     for locale in ("en", "ru"):
-        values = json.loads(Path(f"app/localization/{locale}/settings.json").read_text())
+        values = json.loads(Path(f"app/localization/{locale}/companion.json").read_text())
         require(all(str(value).encode("utf-8") in js for value in values.values()),
                 f"missing {locale} PKJS localization")
     for platform in EXPECTED_PLATFORMS:
@@ -83,7 +86,11 @@ with zipfile.ZipFile(pbw) as archive:
         (static_size,) = struct.unpack_from("<H", binary, VIRTUAL_SIZE_OFFSET)
         require(static_size <= STATIC_BUDGET,
                 f"{platform} static footprint {static_size} B exceeds budget {STATIC_BUDGET} B")
-        print(f"{platform} static footprint {static_size} / {STATIC_BUDGET} B")
+        stage_limit = STAGE_BUDGET["diag" if os.environ.get("TB_DIAG") == "1" else "static"][platform]
+        require(static_size <= stage_limit,
+                f"{platform} static footprint {static_size} B exceeds the stage {STAGE_BUDGET['stage']} budget {stage_limit} B; "
+                "shrink the code or raise tests/size-budget.json on purpose")
+        print(f"{platform} static footprint {static_size} / {STATIC_BUDGET} B (stage budget {stage_limit} B, {stage_limit - static_size:+d} B left)")
         watch_strings = []
         for locale in ("en", "ru"):
             watch_strings.extend(json.loads(Path(f"app/localization/{locale}/watch.json").read_text()).values())

@@ -37,6 +37,22 @@ jobs:
     permissions: {contents: read}
     uses: ./.github/workflows/container-image-check.yml # zizmor: ignore[self-repository]
     with: {component: backend-tdlib, image-name: telebezel-backend-tdlib-scheduled, tag: scan}
+  media-image:
+    permissions: {contents: read}
+    uses: ./.github/workflows/container-image-check.yml # zizmor: ignore[self-repository]
+    with: {component: backend-media, image-name: telebezel-backend-media-scheduled, tag: scan}
+  media-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - id: toolchain
+        uses: ./.github/actions/toolchain-versions # zizmor: ignore[self-repository]
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "${{ steps.toolchain.outputs.go-version }}"
+          cache: false
+      - run: make media-check
   api-tests:
     runs-on: ubuntu-24.04
     steps:
