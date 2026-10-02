@@ -12,6 +12,7 @@ use App\Http\Resources\DeviceResource;
 use App\Http\Resources\SettingsResource;
 use App\Services\AuthenticationService;
 use App\Services\DeviceService;
+use App\Services\LocalizationService;
 use App\Services\SettingsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,12 +20,15 @@ use Illuminate\View\View;
 
 final class SettingsController extends Controller
 {
-    public function page(Request $request, AuthenticationService $auth): View
+    public function page(Request $request, AuthenticationService $auth, LocalizationService $localization): View
     {
         $token = $request->cookie(AuthenticationService::COOKIE);
+        $locale = $localization->locale($request->cookie(LocalizationService::COOKIE), $request->getPreferredLanguage(LocalizationService::LOCALES));
 
         return view('settings', [
             'apiCsrf' => is_string($token) && AuthenticationService::wellFormed($token) ? $auth->csrf($token) : '',
+            'locale' => $locale,
+            't' => $localization->strings($locale),
         ]);
     }
 

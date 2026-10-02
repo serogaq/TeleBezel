@@ -14,9 +14,12 @@
 #include "generated/protocol.h"
 #include "history.h"
 #include "history_window.h"
+#include "media.h"
+#include "media_window.h"
 #include "message_text.h"
 #include "notice_window.h"
 #include "notify.h"
+#include "pull_view.h"
 #include "reader_window.h"
 #include "request_layer.h"
 #include "send_tracker.h"
@@ -43,14 +46,21 @@
 #define TB_TEMPLATES_CAPACITY 50
 #define TB_TEMPLATE_PREVIEW 64
 #define TB_DRAFT_TEXT 1100
+#define TB_MEDIA_RESERVE 18432
+#define TB_MEDIA_MIN 4096
+#define TB_MEDIA_WAIT 30000
 
 #define TB_ACTION_NONE 0
 #define TB_ACTION_REPLY 1
 #define TB_ACTION_OPEN 2
 #define TB_ACTION_RETRY 3
 #define TB_ACTION_WRITE 4
+#define TB_ACTION_VIEW 5
+#define TB_ACTION_MEDIA_RETRY 6
+#define TB_ACTION_SPOILER 7
+#define TB_ACTION_BACK 8
 
-typedef enum { TB_TIMER_REQUEST, TB_TIMER_CHATS, TB_TIMER_CONNECTION, TB_TIMER_HISTORY, TB_TIMER_NOTIFY, TB_TIMER_COUNT } TbTimerSlot;
+typedef enum { TB_TIMER_REQUEST, TB_TIMER_CHATS, TB_TIMER_CONNECTION, TB_TIMER_HISTORY, TB_TIMER_NOTIFY, TB_TIMER_MEDIA, TB_TIMER_COUNT } TbTimerSlot;
 
 typedef struct {
   TbRequestLayer requests;
@@ -67,6 +77,8 @@ typedef struct {
   TbChatsWindow chats_view;
   TbHistoryWindow history_view;
   TbReaderWindow reader;
+  TbMedia media;
+  TbMediaWindow media_view;
   TbNotify notify;
   TbSendTracker tracker;
   TbCompose compose;
@@ -89,14 +101,6 @@ static int s_account = -1;
 static uint32_t s_default_request;
 static int s_default_index = -1;
 
-static uint32_t now_ms(void *context) {
-  (void)context;
-  time_t seconds = 0;
-  uint16_t milliseconds = 0;
-  time_ms(&seconds, &milliseconds);
-  return (uint32_t)seconds * 1000u + milliseconds;
-}
-
 static void timer_fired(void *context) {
   AppTimer **slot = context;
   *slot = NULL;
@@ -106,6 +110,7 @@ static void timer_fired(void *context) {
     case TB_TIMER_CONNECTION: tb_connection_timer(&s_app->connection); break;
     case TB_TIMER_HISTORY: tb_history_timer(&s_app->history); break;
     case TB_TIMER_NOTIFY: tb_notify_timer(&s_app->notify); break;
+    case TB_TIMER_MEDIA: tb_media_timer(&s_app->media); break;
     case TB_TIMER_COUNT: break;
   }
 }
@@ -150,6 +155,11 @@ static TbSendResult send_request(void *context, uint32_t sequence, const TbReque
          write_uint(out, MESSAGE_KEY_TEXT_LIMIT, args->text_limit);
     if (args->draft_id) { ok = ok && write_uint(out, MESSAGE_KEY_DRAFT_ID, args->draft_id); }
     if (args->kind == TB_REQUEST_SEND) { ok = ok && dict_write_uint8(out, MESSAGE_KEY_ATTEMPT, args->attempt) == DICT_OK; }
+    if (args->kind == TB_REQUEST_MEDIA) {
+      ok = ok && dict_write_uint8(out, MESSAGE_KEY_MEDIA_INDEX, args->media_index) == DICT_OK &&
+           dict_write_data(out, MESSAGE_KEY_MEDIA_SPEC, args->media_spec, sizeof(args->media_spec)) == DICT_OK &&
+           write_uint(out, MESSAGE_KEY_MEDIA_OFFSET, args->media_offset) && write_uint(out, MESSAGE_KEY_MEDIA_TAG, args->media_tag);
+    }
     if (args->kind == TB_REQUEST_DRAFT) {
       if (args->payload && args->payload_length) {
         ok = ok && dict_write_data(out, MESSAGE_KEY_PAYLOAD, args->payload, args->payload_length) == DICT_OK;
@@ -208,6 +218,7 @@ static void close_compose(void) {
 
 static void close_views(void) {
   close_compose();
+  tb_media_close(&s_app->media);
   tb_notify_reset(&s_app->notify);
   tb_message_text_close(&s_app->text);
   tb_message_text_close(&s_app->quote);
@@ -222,7 +233,7 @@ static void reset_to_connect(const char *body, const char *hint, TbNoticeAction 
   s_account = -1;
   tb_notice_set(&s_app->connect, s_strings->title, body, hint, action, NULL);
   if (!in_stack(s_app->connect.window)) { window_stack_push(s_app->connect.window, false); }
-  Window *windows[] = {s_app->reader.window, s_app->history_view.window, s_app->chats_view.window, s_app->accounts.window, s_app->info.window};
+  Window *windows[] = {s_app->media_view.window, s_app->reader.window, s_app->history_view.window, s_app->chats_view.window, s_app->accounts.window, s_app->info.window};
   for (size_t index = 0; index < ARRAY_LENGTH(windows); ++index) {
     if (in_stack(windows[index])) { window_stack_remove(windows[index], false); }
   }
@@ -348,6 +359,7 @@ static bool handle_fatal(int32_t error) {
     s_app->session.accounts[s_account].state = error == TB_RESULT_ACCOUNT_GONE ? TB_ACCOUNT_STATE_REMOVING : TB_ACCOUNT_STATE_NEEDS_LOGIN;
   }
   close_views();
+  if (in_stack(s_app->media_view.window)) { window_stack_remove(s_app->media_view.window, false); }
   if (in_stack(s_app->reader.window)) { window_stack_remove(s_app->reader.window, false); }
   if (in_stack(s_app->history_view.window)) { window_stack_remove(s_app->history_view.window, false); }
   if (!in_stack(s_app->accounts.window)) { window_stack_push(s_app->accounts.window, false); }
@@ -362,6 +374,7 @@ static bool handle_fatal(int32_t error) {
 #define TB_RELOAD_READER 4
 #define TB_RELOAD_COMPOSE 8
 #define TB_RELOAD_NOTIFY 16
+#define TB_RELOAD_MEDIA 32
 
 static void reload_fired(void *context) {
   (void)context;
@@ -372,6 +385,7 @@ static void reload_fired(void *context) {
   if (pending & TB_RELOAD_HISTORY) { tb_history_window_reload(&s_app->history_view); }
   if (pending & TB_RELOAD_READER) { tb_reader_window_reload(&s_app->reader); }
   if (pending & TB_RELOAD_COMPOSE) { tb_compose_view_reload(&s_app->compose_view); }
+  if (pending & TB_RELOAD_MEDIA) { tb_media_window_reload(&s_app->media_view); }
   if (pending & TB_RELOAD_NOTIFY) {
     tb_notify_view_refresh(&s_app->chats_view.notice);
     tb_notify_view_refresh(&s_app->history_view.notice);
@@ -520,7 +534,54 @@ static void open_message(void *context, int index) {
   snprintf(s_app->quote_id, sizeof(s_app->quote_id), "%s", (message->flags & TB_MESSAGE_FLAG_REPLY) ? tb_or_empty(message->reply_id) : "");
   if (message->flags & TB_MESSAGE_FLAG_TRUNCATED) { tb_message_text_open(&s_app->text, s_app->history.account, s_app->history.chat, message->id); }
   open_quote();
+  if (message->media & (TB_MEDIA_FLAG_IMAGE | TB_MEDIA_FLAG_RESTRICTED)) {
+    tb_media_bind(&s_app->media, s_app->history.account, s_app->history.chat, message->id, message->media, message->media_count);
+    if (s_app->session.photo_mode == TB_PHOTO_MODE_AUTO) { tb_media_load(&s_app->media); }
+  } else {
+    tb_media_close(&s_app->media);
+  }
   window_stack_push(s_app->reader.window, true);
+}
+
+static bool has_photo(const TbMessage *message) { return (message->media & (TB_MEDIA_FLAG_IMAGE | TB_MEDIA_FLAG_RESTRICTED)) != 0; }
+
+static void view_photo(void) {
+  if (!s_app->media.account[0]) { return; }
+  tb_media_load(&s_app->media);
+  tb_media_window_show(&s_app->media_view, s_app->reader.message.kind);
+}
+
+static void media_changed(void *context) {
+  (void)context;
+  tb_diag_event("media", NULL);
+  if (s_app->media.phase == TB_MEDIA_ERROR && handle_fatal(s_app->media.error)) { return; }
+  reload_later(TB_RELOAD_READER | TB_RELOAD_MEDIA);
+}
+
+static void media_chosen(void *context, uint8_t action) {
+  (void)context;
+  if (action == TB_ACTION_MEDIA_RETRY) { tb_media_retry(&s_app->media); }
+  else if (action == TB_ACTION_SPOILER) { tb_media_reveal(&s_app->media); }
+  else if (action == TB_ACTION_BACK && in_stack(s_app->media_view.window)) { window_stack_remove(s_app->media_view.window, true); }
+}
+
+static void media_menu(void *context) {
+  (void)context;
+  const char *labels[3];
+  uint8_t actions[3];
+  uint8_t count = 0;
+  const TbMediaPhase phase = s_app->media.phase;
+  if (phase == TB_MEDIA_ERROR || phase == TB_MEDIA_NO_MEMORY || phase == TB_MEDIA_UNAVAILABLE) {
+    labels[count] = s_strings->media_retry;
+    actions[count++] = TB_ACTION_MEDIA_RETRY;
+  }
+  if (phase == TB_MEDIA_SPOILER) {
+    labels[count] = s_strings->media_show_spoiler;
+    actions[count++] = TB_ACTION_SPOILER;
+  }
+  labels[count] = s_strings->media_back;
+  actions[count++] = TB_ACTION_BACK;
+  tb_actions_open(labels, actions, count, media_chosen, NULL);
 }
 
 static const char *send_reason(uint8_t send) {
@@ -656,7 +717,7 @@ static void late_result(const TbSendStatus *status) {
 static void send_changed(void *context, const TbSendStatus *status) {
   (void)context;
   tb_diag_event("send", NULL);
-  if (s_app->compose_view.result_window && status->draft_id == s_app->compose_view.result_draft) {
+  if (s_app->compose_view.result_title && status->draft_id == s_app->compose_view.result_draft) {
     tb_notify_clear(&s_app->notify, TB_NOTIFY_SEND);
     tb_compose_view_status(&s_app->compose_view, status);
     return;
@@ -789,6 +850,9 @@ static void message_chosen(void *context, uint8_t action) {
     begin_compose(&s_app->history.items[index], s_app->history.items[index].text);
   } else if (action == TB_ACTION_OPEN) {
     open_message(NULL, index);
+  } else if (action == TB_ACTION_VIEW) {
+    open_message(NULL, index);
+    view_photo();
   } else if (action == TB_ACTION_RETRY) {
     retry_failed();
   }
@@ -798,10 +862,14 @@ static void message_menu(void *context, int index) {
   (void)context;
   if (index < 0 || index >= s_app->history.count) { return; }
   s_menu_message = index;
-  const char *labels[3];
-  uint8_t actions[3];
+  const char *labels[4];
+  uint8_t actions[4];
   uint8_t count = 0;
   const bool writable = tb_history_window_writable(&s_app->history_view);
+  if (has_photo(&s_app->history.items[index])) {
+    labels[count] = s_strings->view_photo;
+    actions[count++] = TB_ACTION_VIEW;
+  }
   labels[count] = writable ? s_strings->reply : send_reason(s_app->history_view.send);
   actions[count++] = writable ? TB_ACTION_REPLY : TB_ACTION_NONE;
   labels[count] = s_strings->open;
@@ -813,14 +881,23 @@ static void message_menu(void *context, int index) {
   tb_actions_open(labels, actions, count, message_chosen, NULL);
 }
 
+static void reader_open(void *context) {
+  (void)context;
+  view_photo();
+}
+
 static void reader_chosen(void *context, uint8_t action) {
   (void)context;
-  if (action == TB_ACTION_REPLY) {
+  if (action == TB_ACTION_MEDIA_RETRY) {
+    tb_message_text_retry(&s_app->text);
+  } else if (action == TB_ACTION_REPLY) {
     s_compose_from_reader = true;
     begin_compose(&s_app->reader.message, s_app->reader.fallback);
   } else if (action == TB_ACTION_WRITE) {
     s_compose_from_reader = true;
     begin_compose(NULL, NULL);
+  } else if (action == TB_ACTION_VIEW) {
+    view_photo();
   } else if (action == TB_ACTION_RETRY) {
     retry_failed();
   }
@@ -828,10 +905,18 @@ static void reader_chosen(void *context, uint8_t action) {
 
 static void reader_menu(void *context) {
   (void)context;
-  const char *labels[3];
-  uint8_t actions[3];
+  const char *labels[5];
+  uint8_t actions[5];
   uint8_t count = 0;
+  if (s_app->text.error != TB_ERROR_NONE) {
+    labels[count] = s_strings->media_retry;
+    actions[count++] = TB_ACTION_MEDIA_RETRY;
+  }
   const bool writable = tb_history_window_writable(&s_app->history_view);
+  if (s_app->media.account[0] && s_app->media.phase != TB_MEDIA_NONE) {
+    labels[count] = s_strings->view_photo;
+    actions[count++] = TB_ACTION_VIEW;
+  }
   labels[count] = writable ? s_strings->reply : send_reason(s_app->history_view.send);
   actions[count++] = writable ? TB_ACTION_REPLY : TB_ACTION_NONE;
   if (writable) {
@@ -852,7 +937,8 @@ static void diag_probe(TbDiagCounters *out) {
     if (s_app->requests.slots[index].active) { ++queued; }
   }
   AppTimer *timers[] = {s_app->timers[TB_TIMER_REQUEST], s_app->timers[TB_TIMER_CHATS], s_app->timers[TB_TIMER_CONNECTION], s_reload_timer, s_app->timers[TB_TIMER_HISTORY], s_app->timers[TB_TIMER_NOTIFY],
-                        s_app->chats_view.pull_timer, s_app->history_view.pull_timer, s_app->compose_view.auto_close};
+                        s_app->timers[TB_TIMER_MEDIA],
+                        s_app->chats_view.pull_clock.timer, s_app->history_view.pull_clock.timer, s_app->compose_view.auto_close};
   uint16_t active = 0;
   for (size_t index = 0; index < ARRAY_LENGTH(timers); ++index) {
     if (timers[index]) { ++active; }
@@ -862,6 +948,8 @@ static void diag_probe(TbDiagCounters *out) {
   out->items = (uint16_t)(s_app->history.count + s_app->chats.count);
   out->budget = (uint32_t)(s_app->history.budget.used + s_app->chats.budget.used);
   out->draft_bytes = s_app->compose.text_length;
+  out->media_bytes = s_app->media.image.pixels ? s_app->media.image.size : 0;
+  out->media_phase = (uint8_t)s_app->media.phase;
 }
 
 static void settings_changed(void) {
@@ -974,32 +1062,37 @@ __attribute__((noinline)) static bool init(void) {
     return false;
   }
   tb_theme_init();
-  tb_requests_init(&s_app->requests, (TbRequestPorts){send_request, timer_schedule, timer_cancel, now_ms, &s_app->timers[TB_TIMER_REQUEST]});
+  tb_requests_init(&s_app->requests, (TbRequestPorts){send_request, timer_schedule, timer_cancel, tb_now_ms, &s_app->timers[TB_TIMER_REQUEST]});
   tb_session_init(&s_app->session, &s_app->requests, (TbSessionPorts){session_changed, NULL, session_extra});
-  tb_notify_init(&s_app->notify, (TbNotifyPorts){notify_changed, timer_schedule, timer_cancel, now_ms, &s_app->timers[TB_TIMER_NOTIFY]});
+  tb_notify_init(&s_app->notify, (TbNotifyPorts){notify_changed, timer_schedule, timer_cancel, tb_now_ms, &s_app->timers[TB_TIMER_NOTIFY]});
   tb_send_init(&s_app->tracker, &s_app->requests, (TbSendPorts){send_changed, NULL});
-  tb_compose_init(&s_app->compose, &s_app->requests, (TbViewPorts){compose_changed, text_schedule, text_cancel, now_ms, NULL},
+  tb_compose_init(&s_app->compose, &s_app->requests, (TbViewPorts){compose_changed, text_schedule, text_cancel, tb_now_ms, NULL},
                   (TbComposeConfig){TB_TEMPLATES_CAPACITY, TB_TEMPLATE_PREVIEW, TB_DRAFT_TEXT, TB_DATA_TIMEOUT});
   tb_compose_view_init(&s_app->compose_view, &s_app->compose, &s_app->tracker, s_strings,
                        (TbComposeActions){start_dictation, compose_send, compose_check, compose_open_chat, compose_finished, NULL});
   const TbChatsConfig chats_config = {TB_CHATS_CAPACITY, TB_CHATS_PAGE, TB_CHATS_TEXT, TB_CHATS_BUDGET, TB_DATA_TIMEOUT, 0, 0};
   const TbHistoryConfig history_config = {TB_HISTORY_CAPACITY, TB_HISTORY_PAGE, TB_HISTORY_TEXT, TB_HISTORY_BUDGET, TB_DATA_TIMEOUT, 60000, {3000, 8000}};
-  const bool allocated = tb_chats_init(&s_app->chats, &s_app->requests, (TbViewPorts){chats_changed, timer_schedule, timer_cancel, now_ms, &s_app->timers[TB_TIMER_CHATS]}, chats_config) &&
-                         tb_history_init(&s_app->history, &s_app->requests, (TbViewPorts){history_changed, timer_schedule, timer_cancel, now_ms, &s_app->timers[TB_TIMER_HISTORY]},
+  const bool allocated = tb_chats_init(&s_app->chats, &s_app->requests, (TbViewPorts){chats_changed, timer_schedule, timer_cancel, tb_now_ms, &s_app->timers[TB_TIMER_CHATS]}, chats_config) &&
+                         tb_history_init(&s_app->history, &s_app->requests, (TbViewPorts){history_changed, timer_schedule, timer_cancel, tb_now_ms, &s_app->timers[TB_TIMER_HISTORY]},
                                          history_config);
   tb_connection_init(&s_app->connection, &s_app->requests,
-                     (TbConnectionPorts){connection_changed, connection_reload, timer_schedule, timer_cancel, now_ms, &s_app->timers[TB_TIMER_CONNECTION],
+                     (TbConnectionPorts){connection_changed, connection_reload, timer_schedule, timer_cancel, tb_now_ms, &s_app->timers[TB_TIMER_CONNECTION],
                                          connection_records},
                      TB_EVENTS_TIMEOUT);
-  tb_message_text_init(&s_app->text, &s_app->requests, (TbViewPorts){text_changed, text_schedule, text_cancel, now_ms, NULL}, TB_FULL_TEXT, TB_DATA_TIMEOUT);
-  tb_message_text_init(&s_app->quote, &s_app->requests, (TbViewPorts){quote_changed, text_schedule, text_cancel, now_ms, NULL}, TB_QUOTE_TEXT, TB_DATA_TIMEOUT);
+  tb_message_text_init(&s_app->text, &s_app->requests, (TbViewPorts){text_changed, text_schedule, text_cancel, tb_now_ms, NULL}, TB_FULL_TEXT, TB_DATA_TIMEOUT);
+  tb_message_text_init(&s_app->quote, &s_app->requests, (TbViewPorts){quote_changed, text_schedule, text_cancel, tb_now_ms, NULL}, TB_QUOTE_TEXT, TB_DATA_TIMEOUT);
   tb_notice_init(&s_app->connect);
   tb_notice_init(&s_app->info);
   tb_accounts_window_init(&s_app->accounts, &s_app->session, s_strings, (TbAccountsActions){open_account, make_default, NULL});
   tb_chats_window_init(&s_app->chats_view, &s_app->chats, &s_app->connection, &s_app->notify, notify_activate, s_strings, (TbChatsActions){open_chat, NULL});
   tb_history_window_init(&s_app->history_view, &s_app->history, &s_app->notify, notify_activate, s_strings,
                          (TbHistoryActions){open_message, history_closed, write_to_chat, message_menu, NULL});
-  tb_reader_window_init(&s_app->reader, &s_app->text, &s_app->quote, s_strings, (TbReaderActions){reader_menu, NULL});
+  tb_media_init(&s_app->media, &s_app->requests, (TbViewPorts){media_changed, timer_schedule, timer_cancel, tb_now_ms, &s_app->timers[TB_TIMER_MEDIA]},
+                (TbMediaConfig){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT, PBL_IF_ROUND_ELSE(TB_MEDIA_SHAPE_ROUND, TB_MEDIA_SHAPE_RECT),
+                                TB_MEDIA_FORMAT_P4 | TB_MEDIA_FORMAT_P2, TB_LIMIT_MEDIA_BUDGET, TB_MEDIA_RESERVE, TB_MEDIA_MIN, TB_DATA_TIMEOUT, TB_MEDIA_WAIT,
+                                heap_bytes_free});
+  tb_reader_window_init(&s_app->reader, &s_app->text, &s_app->quote, &s_app->media, s_strings, (TbReaderActions){reader_menu, reader_open, NULL});
+  tb_media_window_init(&s_app->media_view, &s_app->media, s_strings, (TbMediaActions){media_menu, NULL});
   show_connect(s_strings->checking, NULL, NULL);
   app_message_register_inbox_received(inbox_received);
   app_message_register_outbox_sent(outbox_sent);
@@ -1019,31 +1112,8 @@ __attribute__((noinline)) static bool init(void) {
 }
 
 __attribute__((noinline)) static void deinit(void) {
-  if (s_reload_timer) { app_timer_cancel(s_reload_timer); }
   close_compose();
-  tb_send_close(&s_app->tracker);
-  tb_notify_reset(&s_app->notify);
-  tb_session_stop(&s_app->session);
-  tb_requests_cancel_all(&s_app->requests);
-  app_message_deregister_callbacks();
-  connection_service_unsubscribe();
-  app_focus_service_unsubscribe();
-  tb_message_text_close(&s_app->text);
-  tb_message_text_close(&s_app->quote);
-  tb_connection_close(&s_app->connection);
-  tb_history_deinit(&s_app->history);
-  tb_chats_deinit(&s_app->chats);
-  tb_reader_window_deinit(&s_app->reader);
-  tb_history_window_deinit(&s_app->history_view);
-  tb_chats_window_deinit(&s_app->chats_view);
-  tb_accounts_window_deinit(&s_app->accounts);
-  tb_notice_deinit(&s_app->info);
-  tb_notice_deinit(&s_app->connect);
-  tb_scratch_deinit();
-  tb_localization_release();
-  s_strings = NULL;
-  free(s_app);
-  s_app = NULL;
+  tb_media_close(&s_app->media);
 }
 
 int main(void) {

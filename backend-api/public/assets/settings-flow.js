@@ -46,8 +46,8 @@
       canAuthorize: account.lifecycle === 'active' && runtime.available === true
         && !authorizationComplete && authorizationState !== 'unknown',
       shouldPoll: waitingForRuntime && !errorCode,
-      buttonLabel: errorCode ? 'Needs attention' : waitingForRuntime ? 'Preparing…'
-        : authorizationComplete ? 'Authorized' : 'Authorization'
+      buttonLabel: errorCode ? 'needs_attention' : waitingForRuntime ? 'preparing'
+        : authorizationComplete ? 'authorized' : 'authorization'
     };
   };
 

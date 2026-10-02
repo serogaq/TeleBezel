@@ -16,10 +16,10 @@ docker run -d --name "$container" \
   -p 127.0.0.1::5432 "$image" >/dev/null
 
 for _ in {1..30}; do
-  if docker exec "$container" pg_isready -U telebezel -d "$database" >/dev/null; then break; fi
+  if docker exec "$container" pg_isready -h 127.0.0.1 -U telebezel -d "$database" >/dev/null; then break; fi
   sleep 1
 done
-docker exec "$container" pg_isready -U telebezel -d "$database" >/dev/null
+docker exec "$container" pg_isready -h 127.0.0.1 -U telebezel -d "$database" >/dev/null || { docker logs "$container" >&2; exit 1; }
 mapping=$(docker port "$container" 5432/tcp)
 port="${mapping##*:}"
 

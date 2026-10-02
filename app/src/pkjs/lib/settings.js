@@ -5,7 +5,8 @@ function flag(value) { return !(value === false || value === 0 || value === '0' 
 function normalize(raw) {
   raw = raw || {};
   return {address: typeof raw.address === 'string' ? raw.address.trim() : '', ssl: flag(raw.ssl), token: typeof raw.token === 'string' ? raw.token : '',
-    showArchive: flag(raw.showArchive), unreadMode: raw.unreadMode === 'messages' ? 'messages' : 'chats'};
+    showArchive: flag(raw.showArchive), unreadMode: raw.unreadMode === 'messages' ? 'messages' : 'chats',
+    photoMode: raw.photoMode === 'manual' ? 'manual' : 'auto'};
 }
 function validateEndpoint(raw) {
   var value = normalize(raw);
@@ -29,9 +30,12 @@ function fromClay(values, previous) {
   previous = normalize(previous);
   var showArchive = clayValue(values, 'SHOW_ARCHIVE');
   var unreadMode = clayValue(values, 'UNREAD_MODE');
+  var photoMode = clayValue(values, 'PHOTO_MODE');
   return normalize({address: clayValue(values, 'CONFIG_ADDRESS'), ssl: clayValue(values, 'CONFIG_SSL'), token: clayValue(values, 'CONFIG_TOKEN') || previous.token,
-    showArchive: showArchive === undefined ? previous.showArchive : showArchive, unreadMode: unreadMode === undefined ? previous.unreadMode : unreadMode});
+    showArchive: showArchive === undefined ? previous.showArchive : showArchive, unreadMode: unreadMode === undefined ? previous.unreadMode : unreadMode,
+    photoMode: photoMode === undefined ? previous.photoMode : photoMode});
 }
-function toClay(value) { value = normalize(value); return {CONFIG_ADDRESS: value.address, CONFIG_SSL: value.ssl, SHOW_ARCHIVE: value.showArchive, UNREAD_MODE: value.unreadMode}; }
+function toClay(value) { value = normalize(value); return {CONFIG_ADDRESS: value.address, CONFIG_SSL: value.ssl, SHOW_ARCHIVE: value.showArchive, UNREAD_MODE: value.unreadMode,
+  PHOTO_MODE: value.photoMode}; }
 function baseUrl(value) { var valid = validateEndpoint(value); return valid.ok ? (valid.settings.ssl ? 'https://' : 'http://') + valid.settings.address : null; }
 module.exports = {clayValue: clayValue, STORAGE_KEY: STORAGE_KEY, normalize: normalize, validate: validate, validateEndpoint: validateEndpoint, load: load, save: save, fromClay: fromClay, toClay: toClay, baseUrl: baseUrl};

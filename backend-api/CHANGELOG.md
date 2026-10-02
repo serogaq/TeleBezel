@@ -9,13 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GET .../messages/{message}/media`: a message or album item prepared for the
+  watch that asks (screen, shape, memory budget, bit depths), with states for
+  downloads, spoilers, restrictions and unsupported media, a rendition cache on
+  tmpfs, its own rate limit and a strict check of every rendition.
+- `content.media` and `is_channel_post` in message projections.
+- The `/settings` page in English and Russian, chosen by cookie or browser
+  language, with translated error messages.
+- The proxy monitor checks every 5 seconds, and every 2.5 seconds for a minute
+  after an account on the active proxy is seen not ready; the command prints
+  the pause the Compose scheduler waits before the next check.
 - Public HTTP API with health, readiness and status endpoints.
 - Access tokens of two types, `device` and `maintenance`, with separate permissions and optional account claims; the settings page uses a short-lived maintenance token in an HttpOnly cookie with a token-bound CSRF header.
 - Durable Telegram account lifecycle: creation, phone, email, code, password and QR authorization, proxy configuration, logout and local removal.
-- Read API for accounts, chat lists, chat history, single messages, message previews, interest leases and update journals, with signed cursors.
+- Read API for accounts, chat lists, chat history, single messages, interest leases and update journals, with signed cursors.
 - Device preferences for language, default account and chat list.
 - Encrypted configuration storage and a scheduler for account reconciliation.
 - Owner settings page.
 - Message sends with replies: idempotent per `Idempotency-Key`, `202` with an operation that becomes `pending`, `sent`, `failed` or `unknown`, a status endpoint, and `send_changed` events in `/updates` for the sending token only.
 - `GET /v1/quick-replies` with a revision, and `types` filtering for `/updates`.
 - `can_send`, `reply_to`, `sending_state` and `forward_from` in chat and message projections.
+
+### Fixed
+
+- Signing out of `/settings` stops the account refresh first, so a late answer
+  for the old session no longer shows the sign-in form on the page that is
+  about to reload.

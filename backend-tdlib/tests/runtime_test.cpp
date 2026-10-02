@@ -444,81 +444,240 @@ TEST_F(RuntimeTest, RefreshWithoutChangesDoesNotGrowTheJournal) {
   ASSERT_EQ(runtime->message(first, 42, 77)["item"]["content"].value("text", ""), "Edited");
 }
 
-// A finished download releases its reservation instead of holding the budget.
-TEST_F(RuntimeTest, PreviewBudgetEvictsInsteadOfSaturating) {
+namespace media_fixture {
+td_api::object_ptr<td_api::file> file(std::int32_t id, std::int64_t size, bool completed, bool active) {
+  auto value = td_api::make_object<td_api::file>();
+  value->id_ = id;
+  value->size_ = size;
+  value->local_ = td_api::make_object<td_api::localFile>();
+  value->local_->is_downloading_completed_ = completed;
+  value->local_->is_downloading_active_ = active;
+  value->local_->downloaded_size_ = completed ? size : 0;
+  value->remote_ = td_api::make_object<td_api::remoteFile>();
+  value->remote_->unique_id_ = "unique-" + std::to_string(id);
+  return value;
+}
+td_api::object_ptr<td_api::photoSize> size(std::int32_t file_id, std::int32_t width, std::int32_t height,
+                                           std::int64_t bytes) {
+  auto value = td_api::make_object<td_api::photoSize>();
+  value->type_ = "x";
+  value->photo_ = file(file_id, bytes, false, false);
+  value->width_ = width;
+  value->height_ = height;
+  return value;
+}
+td_api::object_ptr<td_api::message> photo(std::int64_t id, std::int64_t album = 0, bool spoiler = false) {
+  auto message = td_api::make_object<td_api::message>();
+  message->id_ = id;
+  message->chat_id_ = 42;
+  message->media_album_id_ = album;
+  auto content = td_api::make_object<td_api::messagePhoto>();
+  content->photo_ = td_api::make_object<td_api::photo>();
+  content->photo_->sizes_.push_back(size(static_cast<std::int32_t>(id * 10 + 1), 90, 67, 900));
+  content->photo_->sizes_.push_back(size(static_cast<std::int32_t>(id * 10 + 2), 320, 240, 4));
+  content->photo_->sizes_.push_back(size(static_cast<std::int32_t>(id * 10 + 3), 1280, 960, 90000));
+  content->has_spoiler_ = spoiler;
+  message->content_ = std::move(content);
+  return message;
+}
+td_api::object_ptr<td_api::photo> sizes(std::int32_t base) {
+  auto value = td_api::make_object<td_api::photo>();
+  value->sizes_.push_back(size(base + 1, 90, 67, 900));
+  value->sizes_.push_back(size(base + 2, 320, 240, 4));
+  return value;
+}
+td_api::object_ptr<td_api::video> video(std::int32_t file_id) {
+  auto value = td_api::make_object<td_api::video>();
+  value->thumbnail_ = td_api::make_object<td_api::thumbnail>(td_api::make_object<td_api::thumbnailFormatJpeg>(), 320,
+                                                             180, file(file_id, 4, false, false));
+  return value;
+}
+td_api::object_ptr<td_api::message> carousel(std::int64_t id) {
+  std::vector<td_api::object_ptr<td_api::LinkPreviewAlbumMedia>> media;
+  media.push_back(td_api::make_object<td_api::linkPreviewAlbumMediaPhoto>(sizes(710)));
+  media.push_back(td_api::make_object<td_api::linkPreviewAlbumMediaVideo>(video(720)));
+  media.push_back(td_api::make_object<td_api::linkPreviewAlbumMediaPhoto>(sizes(730)));
+  auto preview = td_api::make_object<td_api::linkPreview>();
+  preview->url_ = "https://t.me/news/1";
+  preview->type_ = td_api::make_object<td_api::linkPreviewTypeAlbum>(std::move(media), "");
+  auto message = td_api::make_object<td_api::message>();
+  message->id_ = id;
+  message->chat_id_ = 42;
+  message->content_ = td_api::make_object<td_api::messageText>(
+      td_api::make_object<td_api::formattedText>("https://t.me/news/1",
+                                                 std::vector<td_api::object_ptr<td_api::textEntity>>{}),
+      std::move(preview), nullptr);
+  return message;
+}
+td_api::object_ptr<td_api::message> paid(std::int64_t id) {
+  std::vector<td_api::object_ptr<td_api::PaidMedia>> media;
+  media.push_back(td_api::make_object<td_api::paidMediaPreview>(1280, 960, 0, nullptr));
+  media.push_back(td_api::make_object<td_api::paidMediaPhoto>(sizes(810), nullptr));
+  auto message = td_api::make_object<td_api::message>();
+  message->id_ = id;
+  message->chat_id_ = 42;
+  message->content_ = td_api::make_object<td_api::messagePaidMedia>(
+      5, std::move(media),
+      td_api::make_object<td_api::formattedText>("", std::vector<td_api::object_ptr<td_api::textEntity>>{}), false);
+  return message;
+}
+} // namespace media_fixture
+
+TEST_F(RuntimeTest, MediaDownloadsAsynchronouslyAndRetriesAfterAFailure) {
   transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
   wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
-  const auto photo_message = [](std::int64_t id, std::int32_t file_id) {
-    auto message = td_api::make_object<td_api::message>();
-    message->id_ = id;
-    message->chat_id_ = 42;
-    auto content = td_api::make_object<td_api::messagePhoto>();
-    content->photo_ = td_api::make_object<td_api::photo>();
-    auto size = td_api::make_object<td_api::photoSize>();
-    size->photo_ = td_api::make_object<td_api::file>();
-    size->photo_->id_ = file_id;
-    size->photo_->size_ = 100000;
-    content->photo_->sizes_.push_back(std::move(size));
-    message->content_ = std::move(content);
-    return message;
+  const auto ask = [&](td_api::object_ptr<td_api::file> current) {
+    transport->queue_response(td_api::getMessageLocally::ID, media_fixture::photo(55));
+    transport->queue_response(td_api::getFile::ID, std::move(current));
+    return runtime->media(first, 42, 55, 0, 260, false, false);
   };
-  const auto downloaded = [](std::int32_t file_id) {
-    auto file = td_api::make_object<td_api::file>();
-    file->id_ = file_id;
-    file->size_ = 100000;
-    file->local_ = td_api::make_object<td_api::localFile>();
-    file->local_->is_downloading_completed_ = true;
-    file->local_->downloaded_size_ = 100000;
-    return file;
+  transport->queue_response(td_api::downloadFile::ID, media_fixture::file(552, 4, false, true));
+  auto result = ask(media_fixture::file(552, 4, false, false));
+  ASSERT_EQ(result.value("state", ""), "downloading");
+  ASSERT_EQ(result.value("retry_after", 0), 1);
+  ASSERT_EQ(result["source"].value("width", 0), 320) << "the smallest size that covers the watch is chosen";
+  ASSERT_EQ(result["source"].value("unique_id", ""), "unique-552");
+  ASSERT_FALSE(result.contains("bytes_base64"));
+  const auto downloads = [&] {
+    const auto sent = transport->sent();
+    return std::count_if(sent.begin(), sent.end(),
+                         [](const auto &item) { return item.second == td_api::downloadFile::ID; });
   };
-  for (std::int32_t index = 0; index < 40; ++index) {
-    auto history = td_api::make_object<td_api::messages>();
-    history->messages_.push_back(photo_message(1000 + index, 200 + index));
-    transport->queue_response(td_api::getChatHistory::ID, std::move(history));
-    transport->queue_response(td_api::downloadFile::ID, downloaded(200 + index));
-    const auto page = runtime->messages(first, 42, 1, "");
-    ASSERT_NE(page["items"][0]["content"].value("preview_state", ""), "saturated")
-        << "preview " << index << " was refused while the budget was free";
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  ASSERT_EQ(downloads(), 1);
+  ASSERT_EQ(ask(media_fixture::file(552, 4, false, true)).value("state", ""), "downloading");
+  ASSERT_EQ(downloads(), 1) << "a running download is not started again";
+  result = ask(media_fixture::file(552, 4, false, false));
+  ASSERT_EQ(result.value("state", ""), "downloading") << "a stopped download backs off";
+  ASSERT_EQ(downloads(), 1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+  transport->queue_response(td_api::downloadFile::ID, media_fixture::file(552, 4, false, true));
+  ASSERT_EQ(ask(media_fixture::file(552, 4, false, false)).value("state", ""), "downloading");
+  ASSERT_EQ(downloads(), 2) << "the download is retried after its backoff";
+  ASSERT_EQ(ask(media_fixture::file(552, 4, true, false)).value("state", ""), "ready");
+  ASSERT_EQ(runtime->media(first, 42, 55, 0, 260, false, false).value("code", ""), "message.cache_miss");
 }
 
-// A failed download must release its reservation and become retryable.
-TEST_F(RuntimeTest, FailedPreviewDownloadIsRetried) {
+TEST_F(RuntimeTest, MediaServesAlbumItemsSpoilersRestrictionsAndBytes) {
   transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
   wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
-  const auto photo_message = [] {
-    auto message = td_api::make_object<td_api::message>();
-    message->id_ = 66;
-    message->chat_id_ = 42;
-    auto content = td_api::make_object<td_api::messagePhoto>();
-    content->photo_ = td_api::make_object<td_api::photo>();
-    auto size = td_api::make_object<td_api::photoSize>();
-    size->photo_ = td_api::make_object<td_api::file>();
-    size->photo_->id_ = 31;
-    size->photo_->size_ = 1024;
-    content->photo_->sizes_.push_back(std::move(size));
-    message->content_ = std::move(content);
-    return message;
+  const auto album = [] {
+    auto history = td_api::make_object<td_api::messages>();
+    history->messages_.push_back(media_fixture::photo(58, 7, true));
+    history->messages_.push_back(media_fixture::photo(57, 7));
+    history->messages_.push_back(media_fixture::photo(56, 8));
+    history->messages_.push_back(media_fixture::photo(55, 7));
+    return history;
   };
+  transport->queue_response(td_api::getMessageLocally::ID, media_fixture::photo(57, 7));
+  transport->queue_response(td_api::getChatHistory::ID, album());
+  auto result = runtime->media(first, 42, 57, 2, 260, false, true);
+  ASSERT_EQ(result.value("count", 0), 3);
+  ASSERT_EQ(result.value("item_message_id", ""), "58");
+  ASSERT_EQ(result.value("state", ""), "spoiler");
+  ASSERT_TRUE(result.value("has_spoiler", false));
+  ASSERT_FALSE(result.contains("source")) << "a hidden spoiler does not reveal its file";
+
+  transport->queue_response(td_api::getMessageLocally::ID, media_fixture::photo(57, 7));
+  transport->queue_response(td_api::getChatHistory::ID, album());
+  transport->queue_response(td_api::getFile::ID, media_fixture::file(582, 4, true, false));
+  auto bytes = td_api::make_object<td_api::data>();
+  bytes->data_ = "test";
+  transport->queue_response(td_api::readFilePart::ID, std::move(bytes));
+  result = runtime->media(first, 42, 57, 2, 260, true, true);
+  ASSERT_EQ(result.value("state", ""), "ready");
+  ASSERT_EQ(result.value("bytes_base64", ""), "dGVzdA==");
+  ASSERT_FALSE(result["fence"].value("runtime_epoch", "").empty());
+  ASSERT_EQ(result["source"].value("kind", ""), "photo");
+
+  transport->queue_response(td_api::getMessageLocally::ID, media_fixture::photo(57, 7));
+  transport->queue_response(td_api::getChatHistory::ID, album());
+  ASSERT_EQ(runtime->media(first, 42, 57, 3, 260, false, false).value("code", ""), "request.invalid");
+
+  auto secret = media_fixture::photo(60);
+  static_cast<td_api::messagePhoto &>(*secret->content_).is_secret_ = true;
+  transport->queue_response(td_api::getMessageLocally::ID, std::move(secret));
+  ASSERT_EQ(runtime->media(first, 42, 60, 0, 260, true, true).value("state", ""), "restricted");
+  auto timed = media_fixture::photo(61);
+  timed->self_destruct_type_ = td_api::make_object<td_api::messageSelfDestructTypeImmediately>();
+  transport->queue_response(td_api::getMessageLocally::ID, std::move(timed));
+  ASSERT_EQ(runtime->media(first, 42, 61, 0, 260, true, true).value("state", ""), "restricted");
+  auto text = td_api::make_object<td_api::message>();
+  text->id_ = 62;
+  text->chat_id_ = 42;
+  text->content_ = td_api::make_object<td_api::messageText>(
+      td_api::make_object<td_api::formattedText>("hi", std::vector<td_api::object_ptr<td_api::textEntity>>{}), nullptr,
+      nullptr);
+  transport->queue_response(td_api::getMessageLocally::ID, std::move(text));
+  ASSERT_EQ(runtime->media(first, 42, 62, 0, 260, false, false).value("state", ""), "none");
+  const auto sent = transport->sent();
+  ASSERT_EQ(std::count_if(sent.begin(), sent.end(),
+                          [](const auto &item) { return item.second == td_api::openMessageContent::ID; }),
+            0);
+  ASSERT_EQ(
+      std::count_if(sent.begin(), sent.end(), [](const auto &item) { return item.second == td_api::viewMessages::ID; }),
+      0);
+}
+
+TEST_F(RuntimeTest, MediaServesItemsInsideOneMessage) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
+  const auto projected = telebezel::runtime::message_projection(*media_fixture::carousel(70));
+  ASSERT_EQ(projected["content"].value("kind", ""), "text");
+  ASSERT_EQ(projected["content"]["media"].value("type", ""), "photo");
+  ASSERT_EQ(projected["content"]["media"].value("count", 0), 3)
+      << "a link preview carousel is one message with three items";
+  const auto ask = [&](td_api::object_ptr<td_api::message> message, std::size_t index, std::int32_t file_id) {
+    transport->queue_response(td_api::getMessageLocally::ID, std::move(message));
+    if (file_id != 0) {
+      transport->queue_response(td_api::getFile::ID, media_fixture::file(file_id, 4, false, false));
+      transport->queue_response(td_api::downloadFile::ID, media_fixture::file(file_id, 4, false, true));
+    }
+    return runtime->media(first, 42, 70, index, 260, false, false);
+  };
+  auto result = ask(media_fixture::carousel(70), 1, 720);
+  ASSERT_EQ(result.value("count", 0), 3);
+  ASSERT_EQ(result.value("index", 9), 1);
+  ASSERT_EQ(result.value("item_message_id", ""), "70");
+  ASSERT_EQ(result["source"].value("kind", ""), "thumbnail") << "a video in the carousel shows its JPEG frame";
+  result = ask(media_fixture::carousel(70), 2, 732);
+  ASSERT_EQ(result["source"].value("unique_id", ""), "unique-732");
+  ASSERT_EQ(ask(media_fixture::carousel(70), 3, 0).value("code", ""), "request.invalid");
+  const auto sent = transport->sent();
+  ASSERT_EQ(std::count_if(sent.begin(), sent.end(),
+                          [](const auto &item) { return item.second == td_api::getChatHistory::ID; }),
+            0)
+      << "items inside one message need no album lookup";
+
+  ASSERT_EQ(ask(media_fixture::paid(70), 0, 0).value("state", ""), "restricted") << "unpaid media stays closed";
+  result = ask(media_fixture::paid(70), 1, 812);
+  ASSERT_EQ(result.value("count", 0), 2);
+  ASSERT_EQ(result.value("state", ""), "downloading") << "purchased paid media is shown";
+  ASSERT_EQ(result["source"].value("unique_id", ""), "unique-812");
+  const auto paid = telebezel::runtime::message_projection(*media_fixture::paid(70));
+  ASSERT_EQ(paid["content"]["media"].value("restriction", ""), "paid");
+  ASSERT_EQ(paid["content"]["media"].value("count", 0), 2);
+}
+
+TEST_F(RuntimeTest, HistoryProjectsMediaWithoutFileIdentifiers) {
+  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
+  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
   auto history = td_api::make_object<td_api::messages>();
-  history->messages_.push_back(photo_message());
+  auto post = media_fixture::photo(70, 12345, true);
+  post->is_channel_post_ = true;
+  history->messages_.push_back(std::move(post));
   transport->queue_response(td_api::getChatHistory::ID, std::move(history));
-  transport->queue_response(td_api::downloadFile::ID, td_api::make_object<td_api::error>(400, "FILE_DOWNLOAD_FAILED"));
-  ASSERT_EQ(runtime->messages(first, 42, 1, "")["items"][0]["content"].value("preview_state", ""), "queued");
-  std::this_thread::sleep_for(std::chrono::seconds(3));
-  auto retry_history = td_api::make_object<td_api::messages>();
-  retry_history->messages_.push_back(photo_message());
-  transport->queue_response(td_api::getChatHistory::ID, std::move(retry_history));
-  auto file = td_api::make_object<td_api::file>();
-  file->id_ = 31;
-  file->size_ = 1024;
-  file->local_ = td_api::make_object<td_api::localFile>();
-  file->local_->is_downloading_completed_ = true;
-  file->local_->downloaded_size_ = 1024;
-  transport->queue_response(td_api::downloadFile::ID, std::move(file));
-  ASSERT_EQ(runtime->messages(first, 42, 1, "")["items"][0]["content"].value("preview_state", ""), "queued")
-      << "a failed download stayed pending for ever";
+  const auto page = runtime->messages(first, 42, 1, "");
+  const auto &item = page["items"][0];
+  ASSERT_TRUE(item.value("is_channel_post", false));
+  const auto &media = item["content"]["media"];
+  ASSERT_EQ(media.value("type", ""), "photo");
+  ASSERT_EQ(media.value("width", 0), 1280);
+  ASSERT_EQ(media.value("height", 0), 960);
+  ASSERT_TRUE(media.value("has_spoiler", false));
+  ASSERT_EQ(media.value("album_id", ""), "12345");
+  ASSERT_TRUE(media["restriction"].is_null());
+  ASSERT_EQ(item["content"].dump().find("unique"), std::string::npos) << "file identities never leave the adapter";
+  ASSERT_FALSE(item["content"].contains("preview_id"));
 }
 
 TEST_F(RuntimeTest, ChatListRequiresAuthorizationAndNamesLastSender) {
@@ -635,46 +794,6 @@ TEST_F(RuntimeTest, HistoryUsesLocalResultsAndInvalidatesAfterLogout) {
   logout["logout_operation_id"] = logout["operation_id"];
   ASSERT_TRUE(runtime->logout(first, logout).contains("completed"));
   ASSERT_EQ(runtime->messages(first, 42, 1, cursor).value("code", ""), "authorization.invalid_state");
-}
-
-TEST_F(RuntimeTest, PreviewRequiresCurrentMessageAndCompletedSmallFile) {
-  transport->emit_state(1, td_api::make_object<td_api::authorizationStateReady>());
-  wait_until([&] { return runtime->snapshot(first).value("authorization_state", "") == "ready"; });
-  const auto photo_message = [] {
-    auto message = td_api::make_object<td_api::message>();
-    message->id_ = 55;
-    message->chat_id_ = 42;
-    auto content = td_api::make_object<td_api::messagePhoto>();
-    content->photo_ = td_api::make_object<td_api::photo>();
-    auto size = td_api::make_object<td_api::photoSize>();
-    size->photo_ = td_api::make_object<td_api::file>();
-    size->photo_->id_ = 17;
-    size->photo_->size_ = 4;
-    content->photo_->sizes_.push_back(std::move(size));
-    message->content_ = std::move(content);
-    return message;
-  };
-  auto history = td_api::make_object<td_api::messages>();
-  history->messages_.push_back(photo_message());
-  transport->queue_response(td_api::getChatHistory::ID, std::move(history));
-  const auto page = runtime->messages(first, 42, 1, "");
-  const auto preview_id = page["items"][0]["content"].value("preview_id", "");
-  ASSERT_EQ(preview_id.size(), 64);
-  ASSERT_FALSE(page["items"][0]["content"].contains("preview_file_id"));
-  ASSERT_EQ(runtime->preview(first, 42, 55, std::string(64, '0')).value("code", ""), "message.cache_miss");
-  transport->queue_response(td_api::getMessageLocally::ID, photo_message());
-  auto file = td_api::make_object<td_api::file>();
-  file->id_ = 17;
-  file->size_ = 4;
-  file->local_ = td_api::make_object<td_api::localFile>();
-  file->local_->is_downloading_completed_ = true;
-  transport->queue_response(td_api::getFile::ID, std::move(file));
-  auto bytes = td_api::make_object<td_api::data>();
-  bytes->data_ = "test";
-  transport->queue_response(td_api::readFilePart::ID, std::move(bytes));
-  const auto preview = runtime->preview(first, 42, 55, preview_id);
-  ASSERT_EQ(preview.value("mime_type", ""), "image/jpeg");
-  ASSERT_EQ(preview.value("bytes_base64", ""), "dGVzdA==");
 }
 
 TEST_F(RuntimeTest, HistoryFillsShortLocalPagesWithoutRepeatingAnchors) {

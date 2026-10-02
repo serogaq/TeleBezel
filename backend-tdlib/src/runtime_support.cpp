@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
@@ -113,19 +114,6 @@ nlohmann::json service_content(const char *action) {
 nlohmann::json photo_content(const td_api::messagePhoto &photo) {
   auto result = content_kind("photo");
   set_caption(result, photo.caption_);
-  if (photo.is_secret_)
-    return result;
-  const td_api::file *candidate = nullptr;
-  if (photo.photo_)
-    for (const auto &size : photo.photo_->sizes_)
-      if (size && size->photo_ && size->photo_->size_ > 0 &&
-          (candidate == nullptr || size->photo_->size_ < candidate->size_))
-        candidate = size->photo_.get();
-  if (candidate) {
-    result["preview_file_id"] = candidate->id_;
-    result["preview_size"] = candidate->size_;
-    result["preview_mime"] = "image/jpeg";
-  }
   return result;
 }
 nlohmann::json video_content(const td_api::messageVideo &video) {
@@ -133,22 +121,121 @@ nlohmann::json video_content(const td_api::messageVideo &video) {
   set_caption(result, video.caption_);
   if (video.video_)
     result["duration"] = video.video_->duration_;
-  if (video.is_secret_)
-    return result;
-  const auto *thumbnail = video.video_ && video.video_->thumbnail_ ? video.video_->thumbnail_.get() : nullptr;
-  if (thumbnail && thumbnail->file_ && thumbnail->format_ && thumbnail->file_->size_ > 0) {
-    const auto format = thumbnail->format_->get_id();
-    const auto mime = format == td_api::thumbnailFormatJpeg::ID   ? "image/jpeg"
-                      : format == td_api::thumbnailFormatPng::ID  ? "image/png"
-                      : format == td_api::thumbnailFormatWebp::ID ? "image/webp"
-                                                                  : "";
-    if (*mime != '\0') {
-      result["preview_file_id"] = thumbnail->file_->id_;
-      result["preview_size"] = thumbnail->file_->size_;
-      result["preview_mime"] = mime;
-    }
-  }
   return result;
+}
+std::optional<MediaSource> jpeg_thumbnail(const td_api::thumbnail *thumbnail) {
+  if (thumbnail == nullptr || !thumbnail->file_ || !thumbnail->format_ ||
+      thumbnail->format_->get_id() != td_api::thumbnailFormatJpeg::ID)
+    return std::nullopt;
+  return MediaSource{thumbnail->file_.get(), "thumbnail", thumbnail->width_, thumbnail->height_};
+}
+std::optional<MediaSource> photo_source(const td_api::photo *photo, std::int32_t min_side) {
+  if (photo == nullptr)
+    return std::nullopt;
+  const td_api::photoSize *fitting = nullptr;
+  const td_api::photoSize *largest = nullptr;
+  for (const auto &size : photo->sizes_) {
+    if (!size || !size->photo_ || size->width_ <= 0 || size->height_ <= 0)
+      continue;
+    const auto side = std::max(size->width_, size->height_);
+    if (largest == nullptr || side > std::max(largest->width_, largest->height_))
+      largest = size.get();
+    if (side >= min_side && (fitting == nullptr || side < std::max(fitting->width_, fitting->height_)))
+      fitting = size.get();
+  }
+  const auto *chosen = fitting != nullptr ? fitting : largest;
+  if (chosen == nullptr)
+    return std::nullopt;
+  return MediaSource{chosen->photo_.get(), "photo", chosen->width_, chosen->height_};
+}
+std::optional<MediaSource> video_source(const td_api::video *video, const td_api::photo *cover, std::int32_t min_side) {
+  auto source = cover != nullptr ? photo_source(cover, min_side) : std::nullopt;
+  if (!source && video != nullptr)
+    source = jpeg_thumbnail(video->thumbnail_.get());
+  return source;
+}
+constexpr std::size_t inline_media_limit = 10;
+void preview_media(MediaInfo &info, const td_api::linkPreview *preview, std::int32_t min_side, std::size_t item) {
+  if (preview == nullptr || !preview->type_)
+    return;
+  const auto &type = *preview->type_;
+  const td_api::photo *photo = nullptr;
+  switch (type.get_id()) {
+  case td_api::linkPreviewTypeAlbum::ID: {
+    const auto &album = static_cast<const td_api::linkPreviewTypeAlbum &>(type);
+    info.items = std::min(album.media_.size(), inline_media_limit);
+    if (info.items == 0 || item >= info.items || !album.media_[item])
+      return;
+    const auto &media = *album.media_[item];
+    if (media.get_id() == td_api::linkPreviewAlbumMediaPhoto::ID) {
+      info.type = "photo";
+      info.source = photo_source(static_cast<const td_api::linkPreviewAlbumMediaPhoto &>(media).photo_.get(), min_side);
+    } else if (media.get_id() == td_api::linkPreviewAlbumMediaVideo::ID) {
+      info.type = "thumbnail";
+      info.source =
+          video_source(static_cast<const td_api::linkPreviewAlbumMediaVideo &>(media).video_.get(), nullptr, min_side);
+    }
+    return;
+  }
+  case td_api::linkPreviewTypePhoto::ID:
+    photo = static_cast<const td_api::linkPreviewTypePhoto &>(type).photo_.get();
+    break;
+  case td_api::linkPreviewTypeArticle::ID:
+    photo = static_cast<const td_api::linkPreviewTypeArticle &>(type).photo_.get();
+    break;
+  case td_api::linkPreviewTypeApp::ID:
+    photo = static_cast<const td_api::linkPreviewTypeApp &>(type).photo_.get();
+    break;
+  case td_api::linkPreviewTypeWebApp::ID:
+    photo = static_cast<const td_api::linkPreviewTypeWebApp &>(type).photo_.get();
+    break;
+  case td_api::linkPreviewTypeEmbeddedVideoPlayer::ID:
+    photo = static_cast<const td_api::linkPreviewTypeEmbeddedVideoPlayer &>(type).thumbnail_.get();
+    break;
+  case td_api::linkPreviewTypeEmbeddedAnimationPlayer::ID:
+    photo = static_cast<const td_api::linkPreviewTypeEmbeddedAnimationPlayer &>(type).thumbnail_.get();
+    break;
+  case td_api::linkPreviewTypeVideo::ID: {
+    const auto &video = static_cast<const td_api::linkPreviewTypeVideo &>(type);
+    info.type = "thumbnail";
+    info.source = video_source(video.video_.get(), video.cover_.get(), min_side);
+    return;
+  }
+  default:
+    return;
+  }
+  if (item != 0)
+    return;
+  info.type = "photo";
+  info.source = photo_source(photo, min_side);
+}
+void paid_media(MediaInfo &info, const td_api::messagePaidMedia &paid, std::int32_t min_side, std::size_t item) {
+  info.type = "photo";
+  info.items = std::min(paid.media_.size(), inline_media_limit);
+  if (info.items == 0)
+    info.items = 1;
+  if (item >= paid.media_.size() || !paid.media_[item]) {
+    info.restriction = "paid";
+    return;
+  }
+  const auto &media = *paid.media_[item];
+  switch (media.get_id()) {
+  case td_api::paidMediaPhoto::ID:
+    info.source = photo_source(static_cast<const td_api::paidMediaPhoto &>(media).photo_.get(), min_side);
+    break;
+  case td_api::paidMediaVideo::ID: {
+    const auto &video = static_cast<const td_api::paidMediaVideo &>(media);
+    info.type = "thumbnail";
+    info.source = video_source(video.video_.get(), video.cover_.get(), min_side);
+    break;
+  }
+  case td_api::paidMediaUnsupported::ID:
+    info.type = "thumbnail";
+    break;
+  default:
+    info.restriction = "paid";
+    break;
+  }
 }
 std::optional<nlohmann::json> media_content(const td_api::MessageContent &content) {
   switch (content.get_id()) {
@@ -343,6 +430,90 @@ std::optional<nlohmann::json> service_message(const td_api::MessageContent &cont
   }
 }
 } // namespace
+MediaInfo media_info(const td_api::message &message, std::int32_t min_side, std::size_t item) {
+  MediaInfo info;
+  info.album_id = message.media_album_id_;
+  const auto *content = message.content_.get();
+  if (content == nullptr)
+    return info;
+  bool secret = message.self_destruct_type_ != nullptr;
+  std::optional<MediaSource> source;
+  switch (content->get_id()) {
+  case td_api::messagePhoto::ID: {
+    const auto &photo = static_cast<const td_api::messagePhoto &>(*content);
+    info.type = "photo";
+    info.has_spoiler = photo.has_spoiler_;
+    secret = secret || photo.is_secret_;
+    source = photo_source(photo.photo_.get(), min_side);
+    break;
+  }
+  case td_api::messageVideo::ID: {
+    const auto &video = static_cast<const td_api::messageVideo &>(*content);
+    info.type = "thumbnail";
+    info.has_spoiler = video.has_spoiler_;
+    secret = secret || video.is_secret_;
+    source = video_source(video.video_.get(), video.cover_.get(), min_side);
+    break;
+  }
+  case td_api::messageAnimation::ID: {
+    const auto &animation = static_cast<const td_api::messageAnimation &>(*content);
+    info.type = "thumbnail";
+    info.has_spoiler = animation.has_spoiler_;
+    secret = secret || animation.is_secret_;
+    if (animation.animation_)
+      source = jpeg_thumbnail(animation.animation_->thumbnail_.get());
+    break;
+  }
+  case td_api::messageVideoNote::ID: {
+    const auto &note = static_cast<const td_api::messageVideoNote &>(*content);
+    info.type = "thumbnail";
+    secret = secret || note.is_secret_;
+    if (note.video_note_)
+      source = jpeg_thumbnail(note.video_note_->thumbnail_.get());
+    break;
+  }
+  case td_api::messageDocument::ID: {
+    const auto &document = static_cast<const td_api::messageDocument &>(*content);
+    info.type = "thumbnail";
+    if (document.document_)
+      source = jpeg_thumbnail(document.document_->thumbnail_.get());
+    break;
+  }
+  case td_api::messageText::ID: {
+    auto preview = info;
+    preview_media(preview, static_cast<const td_api::messageText &>(*content).link_preview_.get(), min_side, item);
+    if (!preview.source)
+      return info;
+    info = preview;
+    source = info.source;
+    break;
+  }
+  case td_api::messagePaidMedia::ID:
+    paid_media(info, static_cast<const td_api::messagePaidMedia &>(*content), min_side, item);
+    if (!info.restriction.empty())
+      return info;
+    source = info.source;
+    break;
+  case td_api::messageExpiredPhoto::ID:
+  case td_api::messageExpiredVideo::ID:
+  case td_api::messageExpiredVideoNote::ID:
+    info.type = "photo";
+    info.restriction = "expired";
+    return info;
+  default:
+    return info;
+  }
+  if (secret) {
+    info.restriction = "self_destruct";
+    return info;
+  }
+  if (source) {
+    info.width = source->width;
+    info.height = source->height;
+    info.source = source;
+  }
+  return info;
+}
 nlohmann::json message_content(const td_api::MessageContent *content) {
   if (content == nullptr)
     return content_kind("unsupported");
@@ -358,6 +529,22 @@ nlohmann::json message_content(const td_api::MessageContent *content) {
     return std::move(*service);
   return content_kind("unsupported");
 }
+namespace {
+nlohmann::json with_media(const td_api::message &message, nlohmann::json content) {
+  const auto info = media_info(message, std::numeric_limits<std::int32_t>::max());
+  if (!info.source && info.restriction.empty())
+    return content;
+  content["media"] = {
+      {"type", info.type},
+      {"width", info.width},
+      {"height", info.height},
+      {"has_spoiler", info.has_spoiler},
+      {"album_id", info.album_id != 0 ? nlohmann::json(std::to_string(info.album_id)) : nlohmann::json(nullptr)},
+      {"count", info.items},
+      {"restriction", info.restriction.empty() ? nlohmann::json(nullptr) : nlohmann::json(info.restriction)}};
+  return content;
+}
+} // namespace
 nlohmann::json message_projection(const td_api::message &message) {
   nlohmann::json sender = nullptr;
   if (message.sender_id_) {
@@ -420,7 +607,8 @@ nlohmann::json message_projection(const td_api::message &message) {
           {"forward_from", forward_from},
           {"reply_to", reply_to},
           {"sending_state", sending_state_name(message.sending_state_.get())},
-          {"content", message_content(message.content_.get())}};
+          {"is_channel_post", message.is_channel_post_},
+          {"content", with_media(message, message_content(message.content_.get()))}};
 }
 nlohmann::json sending_state_name(const td_api::MessageSendingState *state) {
   if (state == nullptr)

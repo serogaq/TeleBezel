@@ -37,7 +37,7 @@ jobs:
           npm test
           TB_DIAG=1 pebble build
           cd ..
-          python3 .github/scripts/validate_pbw.py app/build/app.pbw
+          TB_DIAG=1 python3 .github/scripts/validate_pbw.py app/build/app.pbw
           cd app
           pebble build
           cd ..

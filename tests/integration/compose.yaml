@@ -30,3 +30,5 @@ secrets:
     file: ${TEST_SECRET_DIR:?}/tdlib_internal_token
   tdlib_database_master_key:
     file: ${TEST_SECRET_DIR:?}/tdlib_database_master_key
+  media_internal_token:
+    file: ${TEST_SECRET_DIR:?}/media_internal_token

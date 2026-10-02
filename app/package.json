@@ -17,7 +17,7 @@
     "lint": "eslint src/pkjs tests scripts",
     "test:js": "node tests/run.js",
     "test:c": "node tests/c.js",
-    "test:e2e": "node tests/e2e/read_path.js && node tests/e2e/send_path.js",
+    "test:e2e": "node tests/e2e/read_path.js && node tests/e2e/send_path.js && node tests/e2e/media_path.js",
     "test": "npm run generate && npm run lint && npm run test:js && npm run test:c && npm run test:e2e"
   },
   "dependencies": {
@@ -66,7 +66,11 @@
       "DRAFT_ID",
       "TEMPLATE_INDEX",
       "TEMPLATES_REV",
-      "ATTEMPT"
+      "ATTEMPT",
+      "MEDIA_INDEX",
+      "MEDIA_SPEC",
+      "MEDIA_OFFSET",
+      "MEDIA_TAG"
     ],
     "resources": {
       "media": [
@@ -79,6 +83,11 @@
           "type": "raw",
           "name": "STRINGS_RU",
           "file": "generated/strings_ru.bin"
+        },
+        {
+          "type": "raw",
+          "name": "ICONS",
+          "file": "generated/icons.bin"
         }
       ]
     }

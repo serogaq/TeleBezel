@@ -4,22 +4,26 @@ var TYPES = 'send,connection';
 function create(options) {
   var cursors = {};
   var waiting = {};
+  var generation = 0;
 
   function poll(value, account, callback) {
-    if (waiting[account]) {
-      waiting[account].push(callback);
+    var batch = waiting[account];
+    if (batch) {
+      batch.callbacks.push(callback);
       return;
     }
-    waiting[account] = [callback];
+    batch = waiting[account] = {callbacks: [callback], handle: null};
+    var started = generation;
     var resynced = !cursors[account];
+    function live() { return started === generation && waiting[account] === batch; }
     function deliver(outcome) {
-      var callbacks = waiting[account] || [];
       delete waiting[account];
-      callbacks.forEach(function(done) { done(outcome); });
+      batch.callbacks.forEach(function(done) { done(outcome); });
     }
     function attempt() {
       var cursor = cursors[account] || null;
-      options.api.updates(value, account, {cursor: cursor, types: TYPES}, function(result) {
+      batch.handle = options.api.updates(value, account, {cursor: cursor, types: TYPES}, function(result) {
+        if (!live()) { return; }
         if (!result.ok && result.action === 'resync' && cursor) {
           delete cursors[account];
           resynced = true;
@@ -42,6 +46,11 @@ function create(options) {
     poll: poll,
     primed: function(account) { return Boolean(cursors[account]); },
     reset: function() {
+      ++generation;
+      Object.keys(waiting).forEach(function(account) {
+        var handle = waiting[account].handle;
+        if (handle && typeof handle.abort === 'function') { handle.abort(); }
+      });
       cursors = {};
       waiting = {};
     }

@@ -65,8 +65,8 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             connection.close()
 
-    def log_message(self, *_args):
-        pass
+    def log_message(self, format, *args):
+        sys.stderr.write("%s %s\n" % (self.log_date_time_string(), format % args))
 
 
 ThreadingHTTPServer(("127.0.0.1", listen_port), Handler).serve_forever()

@@ -19,6 +19,7 @@ static void changed(TbHistory *history) {
 
 static void free_message(TbHistory *history, TbMessage *item) {
   tb_budget_free(&history->budget, item->sender);
+  tb_budget_free(&history->budget, item->signature);
   tb_budget_free(&history->budget, item->forward);
   tb_budget_free(&history->budget, item->extra);
   tb_budget_free(&history->budget, item->text);
@@ -111,7 +112,11 @@ static bool stage(TbHistory *history, const TbMessageRecord *record) {
   item->kind = record->kind;
   item->action = record->action;
   item->duration = record->duration;
+  item->media = record->media;
+  item->album = (record->media & TB_MEDIA_FLAG_ALBUM) ? record->album : 0;
+  item->media_count = record->media_count ? record->media_count : 1;
   item->sender = tb_budget_copy(&history->budget, record->sender, TB_SENDER_LIMIT, true);
+  item->signature = tb_budget_copy(&history->budget, record->signature, TB_SENDER_LIMIT, true);
   item->forward = tb_budget_copy(&history->budget, record->forward, TB_FORWARD_LIMIT, true);
   item->extra = tb_budget_copy(&history->budget, record->extra, TB_EXTRA_LIMIT, true);
   item->text = tb_budget_copy(&history->budget, record->text, history->config.text_limit, true);
@@ -299,6 +304,34 @@ static void finish_newest(TbHistory *history, uint32_t flags, bool first) {
   schedule_periodic(history);
 }
 
+static void merge_albums(TbHistory *history) {
+  uint16_t kept = 0;
+  for (uint16_t index = 0; index < history->count; ++index) {
+    TbMessage *item = &history->items[index];
+    TbMessage *last = kept ? &history->items[kept - 1] : NULL;
+    if (last && item->album && last->album == item->album) {
+      if (item->media_count > last->media_count) { last->media_count = item->media_count; }
+      last->media |= item->media & (TB_MEDIA_FLAG_SPOILER | TB_MEDIA_FLAG_IMAGE);
+      if ((!last->text || !*last->text) && item->text && *item->text) {
+        TbMessage merged = *item;
+        merged.media_count = last->media_count;
+        merged.media = last->media;
+        *item = *last;
+        *last = merged;
+      }
+      last->height = -1;
+      free_message(history, item);
+      continue;
+    }
+    if (kept != index) {
+      history->items[kept] = *item;
+      memset(item, 0, sizeof(*item));
+    }
+    ++kept;
+  }
+  history->count = kept;
+}
+
 static void finish(TbHistory *history, const TbResponse *response) {
   const TbHistoryOp op = history->op;
   history->pending = 0;
@@ -315,6 +348,7 @@ static void finish(TbHistory *history, const TbResponse *response) {
     finish_newest(history, response->flags, op == TB_HISTORY_FIRST);
     evict_newest(history);
   }
+  merge_albums(history);
   if (history->truncated) { history->periodic_due = 0; }
   arm(history);
   changed(history);

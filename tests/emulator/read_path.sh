@@ -23,6 +23,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+bash "$root/tests/emulator/lang_pack.sh" "$platform"
+
 configure() {
 "$python" - "$platform" "$sdk" "$port" "$1" <<'PY'
 import dbm.dumb, json, os, sys
@@ -43,7 +45,7 @@ control() { "$python" "$root/tests/emulator/control.py" "$platform" "$@"; }
 press() { control button "$1"; }
 shot() { sleep "${2:-2}"; control screenshot "$out/$1.png"; echo "$out/$1.png"; }
 repeat() { control button "$1" "$2"; }
-install() { for _ in 1 2 3; do pebble install --emulator "$platform" "$pbw" && return 0; sleep 5; done; return 1; }
+install() { for attempt in 1 2 3 4 5 6; do pebble install --emulator "$platform" "$pbw" && return 0; sleep $((3 * attempt)); done; return 1; }
 
 install
 pebble logs --emulator "$platform" >"$out/diag.log" 2>&1 &

@@ -9,12 +9,12 @@ use App\Http\Requests\InterestRequest;
 use App\Http\Requests\ListChatsRequest;
 use App\Http\Requests\ListMessagesRequest;
 use App\Http\Requests\ListUpdatesRequest;
-use App\Http\Requests\PreviewRequest;
+use App\Http\Requests\MediaRequest;
 use App\Http\Requests\ReadChatRequest;
 use App\Http\Resources\TelegramReadResource;
+use App\Services\TelegramMediaService;
 use App\Services\TelegramReadService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Response;
 
 final class TelegramReadController extends Controller
 {
@@ -38,15 +38,9 @@ final class TelegramReadController extends Controller
         return (new TelegramReadResource($service->message($uuid, $chatId, $messageId, $request->inputData(), RequestContext::principal($request), RequestContext::requestId($request)), 'message'))->respond(RequestContext::requestId($request));
     }
 
-    public function preview(string $uuid, string $chatId, string $messageId, string $previewId, PreviewRequest $request, TelegramReadService $service): Response
+    public function media(string $uuid, string $chatId, string $messageId, MediaRequest $request, TelegramMediaService $service): JsonResponse
     {
-        $preview = $service->preview($uuid, $chatId, $messageId, $previewId, RequestContext::requestId($request));
-
-        return response($preview['bytes'], 200, [
-            'Content-Type' => $preview['mime_type'],
-            'Cache-Control' => 'private, no-store',
-            'X-Content-Type-Options' => 'nosniff',
-        ]);
+        return (new TelegramReadResource($service->media($uuid, $chatId, $messageId, $request->inputData(), RequestContext::requestId($request)), 'media'))->respond(RequestContext::requestId($request));
     }
 
     public function updates(string $uuid, ListUpdatesRequest $request, TelegramReadService $service): JsonResponse

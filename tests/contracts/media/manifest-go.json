@@ -1,0 +1,50 @@
+[
+  {
+    "name": "go_emery_p4",
+    "bits": 4,
+    "shape": 0,
+    "width": 200,
+    "height": 150,
+    "canvasWidth": 200,
+    "canvasHeight": 228,
+    "tag": 1737699605,
+    "size": 15000,
+    "crc": 1508005774
+  },
+  {
+    "name": "go_emery_p2",
+    "bits": 2,
+    "shape": 0,
+    "width": 200,
+    "height": 150,
+    "canvasWidth": 200,
+    "canvasHeight": 228,
+    "tag": 2054156877,
+    "size": 7500,
+    "crc": 2146279015
+  },
+  {
+    "name": "go_gabbro_p4",
+    "bits": 4,
+    "shape": 1,
+    "width": 260,
+    "height": 195,
+    "canvasWidth": 260,
+    "canvasHeight": 260,
+    "tag": 26077141,
+    "size": 22977,
+    "crc": 3648345698
+  },
+  {
+    "name": "go_gabbro_p2",
+    "bits": 2,
+    "shape": 1,
+    "width": 260,
+    "height": 195,
+    "canvasWidth": 260,
+    "canvasHeight": 260,
+    "tag": 2820082893,
+    "size": 11530,
+    "crc": 2658976729
+  }
+]

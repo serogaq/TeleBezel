@@ -10,8 +10,8 @@ remain deployment gates rather than claims established by local tests.
 
 ```text
 Pebble C app ⇄ PebbleKit JS ⇄ backend-api ⇄ backend-tdlib ⇄ TDLib
-                                  │
-                              PostgreSQL
+                                  │     │
+                           PostgreSQL   backend-media (watch images)
 ```
 
 ## Quick start
@@ -23,9 +23,8 @@ Docker Desktop, then run:
 
 ```sh
 make secrets-init
-docker compose up -d postgres backend-tdlib
-make db-migrate
-docker compose up -d backend-api scheduler
+make compose-build
+make compose-up
 docker compose run --rm backend-api php artisan telebezel:bootstrap-code
 make integration-test
 ```
@@ -57,9 +56,11 @@ the emulator's JavaScript runtime only trusts public CAs. The token is saved in
 omitted on later runs; mock runs do not touch it. The command keeps running until
 the emulator is closed or Ctrl+C is pressed, and then stops the mock or proxy.
 `LANG_PACK=ru` installs Rebble's official `ru_RU` language pack (downloaded once
-into `app/build/lang/`), so Cyrillic text renders in the emulator; any other
-value is taken as a path to a `.pbl` file. The choice is remembered for later
-runs; `LANG_PACK=none` turns it off. Use `make app-install IP=phone-ip` for a local phone developer
+into `~/.cache/telebezel/emulator/`), so Cyrillic text renders in the emulator; any other
+value is taken as a path to a `.pbl` file. The choice is remembered there for later
+runs, so `pebble clean` does not reset it; `LANG_PACK=none` turns it off.
+`make app-emulator-check` and `make app-screens` read and accept the same
+choice, so their screenshots render Cyrillic too. Use `make app-install IP=phone-ip` for a local phone developer
 connection, or `make app-install` for an already authenticated CloudPebble
 connection. Both installation targets use the existing PBW; `app-install`
 streams logs until interrupted.

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Contracts\RenditionStore;
 use App\Contracts\Repositories\TelegramAccountRepository;
 use App\Contracts\TdlibGateway;
 use App\Data\AccountData;
@@ -12,7 +13,7 @@ use Illuminate\Pagination\LengthAwarePaginator;
 
 final class TelegramAccountService
 {
-    public function __construct(private readonly TdlibGateway $tdlib, private readonly TelegramAccountRepository $repository, private readonly AccountStatePolicy $policy) {}
+    public function __construct(private readonly TdlibGateway $tdlib, private readonly TelegramAccountRepository $repository, private readonly AccountStatePolicy $policy, private readonly RenditionStore $renditions) {}
 
     /** @param array<string, mixed> $input
      * @return array{AccountData, bool} */
@@ -107,7 +108,10 @@ final class TelegramAccountService
 
     public function logout(string $id, string $requestId): AccountData
     {
-        return $this->repository->mutate($id, $this->policy->logout(...));
+        $account = $this->repository->mutate($id, $this->policy->logout(...));
+        $this->renditions->forgetAccount($id);
+
+        return $account;
     }
 
     public function remove(string $id, string $requestId): ?AccountData
@@ -116,7 +120,10 @@ final class TelegramAccountService
             return null;
         }
 
-        return $this->repository->mutate($id, $this->policy->remove(...));
+        $account = $this->repository->mutate($id, $this->policy->remove(...));
+        $this->renditions->forgetAccount($id);
+
+        return $account;
     }
 
     /** @param array<string, mixed>|null $configuration */

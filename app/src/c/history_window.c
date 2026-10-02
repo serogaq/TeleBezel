@@ -6,11 +6,11 @@
 #include "generated/protocol.h"
 #include "icons.h"
 #include "scratch.h"
+#include "pull_view.h"
 #include "theme.h"
 
 #define ROW_TOP 0
 #define ROW_FIRST_MESSAGE 1
-#define PULL_DISTANCE 60
 #define PULL_MAX PBL_IF_ROUND_ELSE(30, 26)
 
 bool tb_history_window_writable(const TbHistoryWindow *view) {
@@ -90,6 +90,7 @@ static const char *sender_of(const TbHistoryWindow *view, const TbMessage *messa
   if (view->history->saved && message->forward && *message->forward) { return ""; }
   if (message->flags & TB_MESSAGE_FLAG_OUTGOING) { return view->strings->you; }
   if (private_chat(view)) { return ""; }
+  if ((message->media & TB_MEDIA_FLAG_CHANNEL_POST) || view->history->chat_type == TB_CHAT_TYPE_CHANNEL) { return tb_or_empty(message->signature); }
   return tb_or_empty(message->sender);
 }
 
@@ -100,7 +101,8 @@ static bool starts_day(const TbHistoryWindow *view, uint16_t index) {
 
 static void body_text(const TbHistoryWindow *view, const TbMessage *message, char *out, size_t size) {
   char *content = tb_scratch(TB_SCRATCH_CONTENT);
-  tb_format_content(content, tb_scratch_size(TB_SCRATCH_CONTENT), view->strings, message->kind, message->action, message->duration, message->extra, message->text);
+  tb_format_message(content, tb_scratch_size(TB_SCRATCH_CONTENT), view->strings, message->kind, message->action, message->duration, message->extra, message->text,
+                    message->media, message->media_count);
   if (message->kind == TB_KIND_SERVICE && message->sender && message->action != TB_ACTION_CUSTOM && message->action != TB_ACTION_TITLE_CHANGED &&
       message->action != TB_ACTION_CHAT_CREATED) {
     snprintf(out, size, "%s %s", message->sender, content);
@@ -124,10 +126,10 @@ static bool has_forward(const TbMessage *message) { return message->forward && *
 
 static bool has_quote(const TbMessage *message) { return (message->flags & TB_MESSAGE_FLAG_REPLY) && message->reply && *message->reply; }
 
-static int16_t mark_line(GContext *ctx, void (*icon)(GContext *, GRect, GColor), const char *text, GColor color, int16_t left, int16_t width, int16_t y) {
+static int16_t mark_line(GContext *ctx, uint8_t icon, const char *text, GColor color, int16_t left, int16_t width, int16_t y) {
   const TbTheme *theme = tb_theme();
   const int16_t marker = marker_size();
-  icon(ctx, GRect(left, (int16_t)(y + (theme->meta_height - marker) / 2), marker, marker), color);
+  tb_icon(ctx, icon, GPoint(left, (int16_t)(y + (theme->meta_height - marker) / 2)), color);
   graphics_context_set_text_color(ctx, color);
   graphics_draw_text(ctx, text, theme->meta, GRect(left + marker + 4, y - 2, width - marker - 4, theme->meta_height), GTextOverflowModeTrailingEllipsis,
                      GTextAlignmentLeft, NULL);
@@ -194,8 +196,7 @@ static void draw_message(TbHistoryWindow *view, GContext *ctx, const Layer *cell
   const bool failed = outgoing && (message->flags & TB_MESSAGE_FLAG_FAILED);
   if (pending || failed) {
     const GRect glyph = GRect(left, (int16_t)(y + (theme->meta_height - marker) / 2), marker, marker);
-    if (failed) { tb_icon_alert(ctx, glyph, highlighted ? GColorWhite : GColorRed); }
-    else { tb_icon_clock(ctx, glyph, tb_theme_muted(highlighted)); }
+    tb_icon(ctx, failed ? TB_ICON_ALERT : TB_ICON_CLOCK, glyph.origin, failed ? (highlighted ? GColorWhite : GColorRed) : tb_theme_muted(highlighted));
     meta_left = (int16_t)(left + marker + 3);
   }
   graphics_context_set_text_color(ctx, tb_theme_muted(highlighted));
@@ -208,8 +209,8 @@ static void draw_message(TbHistoryWindow *view, GContext *ctx, const Layer *cell
                        GTextOverflowModeTrailingEllipsis, outgoing ? GTextAlignmentRight : GTextAlignmentLeft, NULL);
   }
   y = (int16_t)(y + theme->meta_height);
-  if (has_forward(message)) { y = mark_line(ctx, tb_icon_forward, message->forward, tb_theme_accent(highlighted), left, width, y); }
-  if (has_quote(message)) { y = mark_line(ctx, tb_icon_reply, message->reply, tb_theme_muted(highlighted), left, width, y); }
+  if (has_forward(message)) { y = mark_line(ctx, TB_ICON_FORWARD, message->forward, tb_theme_accent(highlighted), left, width, y); }
+  if (has_quote(message)) { y = mark_line(ctx, TB_ICON_REPLY, message->reply, tb_theme_muted(highlighted), left, width, y); }
   body_text(view, message, tb_scratch(TB_SCRATCH_TEXT), tb_scratch_size(TB_SCRATCH_TEXT));
   graphics_context_set_text_color(ctx, tb_theme_text(highlighted));
   graphics_draw_text(ctx, tb_scratch(TB_SCRATCH_TEXT), theme->body, GRect(left, y - 4, width, bounds.size.h - y), GTextOverflowModeTrailingEllipsis,
@@ -236,7 +237,7 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
     const GSize size = graphics_text_layout_get_content_size(text, theme->title, box, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
     const int16_t total = (int16_t)(icon + 5 + size.w);
     const int16_t start = (int16_t)(box.origin.x + (box.size.w - total) / 2);
-    tb_icon_pencil(ctx, GRect(start, (int16_t)((bounds.size.h - icon) / 2), icon, icon), tb_theme_accent(highlighted));
+    tb_icon(ctx, TB_ICON_PENCIL, GPoint(start, (int16_t)((bounds.size.h - icon) / 2)), tb_theme_accent(highlighted));
     graphics_context_set_text_color(ctx, tb_theme_accent(highlighted));
     graphics_draw_text(ctx, text, theme->title, GRect(start + icon + 5, (bounds.size.h - theme->title_height) / 2 - 2, size.w + 4, theme->title_height),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
@@ -323,16 +324,7 @@ static void draw_pull(Layer *layer, GContext *ctx) {
   const GPoint center = GPoint(bounds.size.w / 2, (int16_t)(bounds.size.h - size / 2 - PBL_IF_ROUND_ELSE(8, 2)));
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_circle(ctx, center, (uint16_t)(size / 2 + 2));
-  if (size < 4) {
-    graphics_context_set_fill_color(ctx, color);
-    graphics_fill_rect(ctx, GRect(center.x - size / 2, center.y - size / 2, size, size), 0, GCornerNone);
-    return;
-  }
-  graphics_context_set_stroke_color(ctx, color);
-  graphics_context_set_stroke_width(ctx, size >= 20 ? 2 : 1);
-  graphics_context_set_antialiased(ctx, true);
-  graphics_draw_circle(ctx, center, (uint16_t)(size / 2));
-  tb_icon_fill(ctx, GRect(center.x - size / 2, center.y - size / 2, size, size), color, s_pull_level);
+  tb_pull_draw(ctx, center, color, size, s_pull_level);
 }
 
 static void pull_changed(void *context) {
@@ -347,69 +339,23 @@ static void pull_trigger(void *context) {
   tb_history_refresh(view->history);
 }
 
-static void pull_fired(void *context) {
-  TbHistoryWindow *view = context;
-  view->pull_timer = NULL;
-  tb_pull_tick(&view->pull);
-}
-
-static bool pull_schedule(void *context, uint32_t milliseconds) {
-  TbHistoryWindow *view = context;
-  if (view->pull_timer) { app_timer_cancel(view->pull_timer); }
-  view->pull_timer = app_timer_register(milliseconds, pull_fired, view);
-  return view->pull_timer != NULL;
-}
-
-static void pull_cancel(void *context) {
-  TbHistoryWindow *view = context;
-  if (view->pull_timer) {
-    app_timer_cancel(view->pull_timer);
-    view->pull_timer = NULL;
-  }
-}
-
-static uint32_t pull_now(void *context) {
-  (void)context;
-  time_t seconds = 0;
-  uint16_t milliseconds = 0;
-  time_ms(&seconds, &milliseconds);
-  return (uint32_t)seconds * 1000u + milliseconds;
-}
-
-static AppTimer *s_up_repeat;
-
 static uint16_t selected(const TbHistoryWindow *view) { return menu_layer_get_selected_index(view->menu).row; }
-
-static void up_repeat(void *context) {
-  TbHistoryWindow *view = context;
-  s_up_repeat = NULL;
-  if (!view->menu || selected(view) == 0) { return; }
-  menu_layer_set_selected_next(view->menu, true, MenuRowAlignCenter, true);
-  s_up_repeat = app_timer_register(100, up_repeat, view);
-}
 
 static void up_pressed(ClickRecognizerRef recognizer, void *context) {
   (void)recognizer;
   TbHistoryWindow *view = context;
-  if (s_up_repeat) {
-    app_timer_cancel(s_up_repeat);
-    s_up_repeat = NULL;
-  }
+  tb_menu_repeat_stop();
   if (view->notice.notify->focused) { return; }
   if (selected(view) == 0) {
     if (tb_notify_view_visible(&view->notice)) { tb_notify_focus(view->notice.notify, true); }
     return;
   }
-  menu_layer_set_selected_next(view->menu, true, MenuRowAlignCenter, true);
-  s_up_repeat = app_timer_register(400, up_repeat, view);
+  tb_menu_repeat_start(view->menu);
 }
 
 static void up_released(ClickRecognizerRef recognizer, void *context) {
   (void)recognizer; (void)context;
-  if (s_up_repeat) {
-    app_timer_cancel(s_up_repeat);
-    s_up_repeat = NULL;
-  }
+  tb_menu_repeat_stop();
 }
 
 static void down_click(ClickRecognizerRef recognizer, void *context) {
@@ -470,11 +416,6 @@ static void click_config(void *context) {
   window_long_click_subscribe(BUTTON_ID_SELECT, 0, select_long, NULL);
 }
 
-#if defined(PBL_TOUCH)
-static TbHistoryWindow *s_touch_view;
-static int16_t s_touch_start;
-static bool s_touch_armed;
-
 static bool at_bottom(const TbHistoryWindow *view) {
   ScrollLayer *scroll = menu_layer_get_scroll_layer(view->menu);
   const GSize content = scroll_layer_get_content_size(scroll);
@@ -482,32 +423,11 @@ static bool at_bottom(const TbHistoryWindow *view) {
   return scroll_layer_get_content_offset(scroll).y + content.h <= frame.size.h + 2;
 }
 
-static void touched(const TouchEvent *event, void *context) {
-  (void)context;
-  TbHistoryWindow *view = s_touch_view;
-  if (!view || !view->menu || event->non_navigational) { return; }
-  if (event->type == TouchEvent_Touchdown) {
-    if (tb_notify_view_hit(&view->notice, event->y)) {
-      s_touch_armed = false;
-      tb_notify_view_activate(&view->notice);
-      return;
-    }
-    s_touch_start = event->y;
-    s_touch_armed = at_bottom(view);
-    return;
-  }
-  if (!s_touch_armed) { return; }
-  if (event->type == TouchEvent_PositionUpdate) {
-    const int32_t distance = s_touch_start - event->y;
-    if (distance > 0 || view->pull.phase == TB_PULL_DRAGGING) {
-      tb_pull_drag(&view->pull, (uint16_t)(distance > 0 ? distance * TB_PULL_FULL / PULL_DISTANCE : 0));
-    }
-  } else if (event->type == TouchEvent_Liftoff) {
-    s_touch_armed = false;
-    tb_pull_release(&view->pull);
-  }
+static void touched(void *context, const TouchEvent *event) {
+  TbHistoryWindow *view = context;
+  if (!view->menu) { return; }
+  tb_pull_touch(&view->pull_touch, &view->pull, &view->notice, event, at_bottom(view), true);
 }
-#endif
 
 static void window_load(Window *window) {
   TbHistoryWindow *view = window_get_user_data(window);
@@ -550,12 +470,7 @@ static void window_appear(Window *window) {
   TbHistoryWindow *view = window_get_user_data(window);
   tb_history_set_active(view->history, true);
   tb_notify_view_refresh(&view->notice);
-#if defined(PBL_TOUCH)
-  if (touch_service_is_enabled()) {
-    s_touch_view = view;
-    touch_service_subscribe(touched, NULL);
-  }
-#endif
+  tb_touch_attach(&view->touch);
 }
 
 static void window_disappear(Window *window) {
@@ -565,12 +480,7 @@ static void window_disappear(Window *window) {
   s_pull_level = 0;
   tb_notify_focus(view->notice.notify, false);
   up_released(NULL, view);
-#if defined(PBL_TOUCH)
-  if (s_touch_view == view) {
-    touch_service_unsubscribe();
-    s_touch_view = NULL;
-  }
-#endif
+  tb_touch_detach(&view->touch);
 }
 
 void tb_history_window_init(TbHistoryWindow *view, TbHistory *history, TbNotify *notify, TbNotifyActivate activate, const TbStrings *strings,
@@ -579,12 +489,14 @@ void tb_history_window_init(TbHistoryWindow *view, TbHistory *history, TbNotify 
   view->strings = strings;
   view->actions = actions;
   view->send = TB_CAN_SEND_UNKNOWN;
-  view->pull_timer = NULL;
+  view->pull_clock.timer = NULL;
+  view->pull_clock.pull = &view->pull;
   view->pull_layer = NULL;
-  tb_pull_init(&view->pull, (TbPullPorts){pull_changed, pull_trigger, pull_schedule, pull_cancel, pull_now, view});
+  tb_pull_init(&view->pull, (TbPullPorts){pull_changed, pull_trigger, tb_pull_clock_schedule, tb_pull_clock_cancel, tb_now_ms, view, &view->pull_clock});
   tb_notify_view_init(&view->notice, notify, activate, actions.context);
   tb_history_window_reset(view);
   view->window = window_create();
+  tb_touch_init(&view->touch, view->window, NULL, touched, view);
   window_set_user_data(view->window, view);
   window_set_window_handlers(view->window, (WindowHandlers){.load = window_load, .unload = window_unload, .appear = window_appear,
                                                              .disappear = window_disappear});

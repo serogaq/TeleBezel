@@ -19,6 +19,12 @@ final readonly class ProxyProfileService
 {
     public const PING_ALL_BUDGET_SECONDS = 20;
 
+    public const MONITOR_INTERVAL_SECONDS = 5.0;
+
+    public const MONITOR_ALERT_INTERVAL_SECONDS = 2.5;
+
+    public const MONITOR_ALERT_SECONDS = 60;
+
     public function __construct(private ProxyProfileRepository $profiles, private TdlibGateway $tdlib, private TransactionManager $transactions, private MonotonicClock $clock) {}
 
     /** @return array<int, array<string, mixed>> */
@@ -102,6 +108,11 @@ final readonly class ProxyProfileService
         $this->profiles->configure($instanceId, $input);
     }
 
+    public function monitorInterval(): float
+    {
+        return Cache::has(ProxyCacheKeys::monitorAlert()) ? self::MONITOR_ALERT_INTERVAL_SECONDS : self::MONITOR_INTERVAL_SECONDS;
+    }
+
     public function monitor(string $requestId): void
     {
         $lock = Cache::lock(ProxyCacheKeys::monitorLock(), 10);
@@ -122,15 +133,20 @@ final readonly class ProxyProfileService
             } catch (ApiException) {
                 return;
             }
-            foreach ($ids as $id) {
+            $ready = array_filter($ids, function (string $id) use ($snapshots): bool {
                 $snapshot = $snapshots[$id] ?? null;
-                if (is_array($snapshot) && ($snapshot['connection_state'] ?? null) === 'ready') {
-                    if ($policy->failureStartedAt !== null) {
-                        $this->profiles->recordFailure($policy, false);
-                    }
 
-                    return;
+                return is_array($snapshot) && ($snapshot['connection_state'] ?? null) === 'ready';
+            });
+            if (count($ready) < count($ids)) {
+                Cache::put(ProxyCacheKeys::monitorAlert(), true, self::MONITOR_ALERT_SECONDS);
+            }
+            if ($ready !== []) {
+                if ($policy->failureStartedAt !== null) {
+                    $this->profiles->recordFailure($policy, false);
                 }
+
+                return;
             }
             if ($policy->failureStartedAt === null) {
                 $this->profiles->recordFailure($policy, true);

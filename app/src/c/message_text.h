@@ -14,6 +14,7 @@ typedef struct {
   char message[TB_TELEGRAM_ID_SIZE];
   char *text;
   uint16_t length;
+  uint16_t capacity;
   bool loading;
   bool truncated;
   int32_t error;

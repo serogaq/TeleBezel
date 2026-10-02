@@ -1,6 +1,6 @@
 # TeleBezel engineering rules
 
-- `app`, `backend-api`, and `backend-tdlib` are independently versioned.
+- `app`, `backend-api`, `backend-tdlib`, and `backend-media` are independently versioned.
 - PostgreSQL is owned exclusively by `backend-api` and contains application state only.
 - The TDLib volume is owned exclusively by `backend-tdlib` and contains Telegram sessions, databases, files, and caches.
 - Never mount TDLib storage into `backend-api`; never give PostgreSQL credentials to `backend-tdlib`.
@@ -15,6 +15,9 @@
 - Account storage uses immutable UUID + storage-generation identity and monotonic desired revisions.
 - Discovered TDLib sessions must remain offline until Laravel reconciliation; tombstoned UUIDs never reactivate.
 - Logout uses TDLib `logOut`; local removal uses `destroy` or verified offline deletion and never Telegram `deleteAccount`.
-- The watch app supports only `emery` and `gabbro`. Its static footprint (`.text+.data+.bss`) is capped at 64 KiB by a uint16 header field and budgeted at 58 KiB by `validate_pbw.py`; keep long-lived watch state on the heap, borrow draw-time buffers from scratch, and never grow `.bss` with large buffers.
+- The watch app supports only `emery` and `gabbro`. Its static footprint (`.text+.data+.bss`) is capped at 64 KiB by a uint16 header field, budgeted at 58 KiB by `validate_pbw.py` and per stage by `tests/size-budget.json`; keep long-lived watch state on the heap, borrow draw-time buffers from scratch, never grow `.bss` with large buffers, add protocol records as codec layouts, and report the `make app-size` delta of every change.
 - API access uses one token model: `device` (read and send) and `maintenance` (manage) tokens with separate permission sets and optional account claims; web sessions are short-lived maintenance tokens in a cookie with a token-bound CSRF header.
 - Message sends are idempotent per `Idempotency-Key`; an `unknown` send is never re-sent automatically.
+- Untrusted images are decoded only in `backend-media`: no volumes, no network egress, no database or Telegram access, only its own bearer token. `backend-tdlib` only chooses and downloads Telegram files; watch-specific logic and the rendition cache belong to `backend-api`.
+- Media follows the same authorization as the message: every request is checked against the current Telegram session before a cache is used, file ids and paths never leave the adapter, and secret, self-destructing or paid media is never downloaded or opened.
+- The watch never asks for an image larger than `free heap − 18 KiB` and holds at most one; image chunks yield to every other AppMessage.

@@ -10,4 +10,9 @@ final class ProxyCacheKeys
     {
         return 'telebezel:proxy-monitor';
     }
+
+    public static function monitorAlert(): string
+    {
+        return 'telebezel:proxy-monitor:alert';
+    }
 }

@@ -163,4 +163,18 @@ TEST_F(HttpServerTest, InterestPrincipalMustBeAKnownTypeAndUuid) {
                              config.internal_token);
   ASSERT_EQ(read.status, 422);
 }
+
+TEST_F(HttpServerTest, MediaParametersAreValidatedBeforeReachingTelegram) {
+  const auto base = "/internal/v1/accounts/" + uuid + "/chats/42/messages/7/media";
+  for (const auto *query :
+       {"?index=10", "?index=-1", "?min_side=4", "?min_side=4096", "?reveal=yes", "?bytes=2", "?index=1x"})
+    ASSERT_EQ(exchange(port, "GET", base + query, config.internal_token).status, 422) << query;
+  ASSERT_EQ(exchange(port, "GET", base, {}).status, 401);
+  ASSERT_EQ(exchange(port, "GET",
+                     "/internal/v1/accounts/" + uuid + "/chats/42/messages/7/preview/" + std::string(64, 'a'),
+                     config.internal_token)
+                .status,
+            404)
+      << "the retired preview route is gone";
+}
 } // namespace

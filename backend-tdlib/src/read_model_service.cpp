@@ -8,17 +8,9 @@
 #include <td/telegram/td_api.h>
 namespace telebezel::runtime {
 namespace reads {
-std::string preview_token(const Config &config, const std::string &uuid, const ReadFence &fence, std::int64_t chat_id,
-                          std::int64_t message_id, std::int32_t file_id) {
-  return hmac_sha256_hex(config.internal_token, preview_purpose,
-                         uuid + ":" + fence.generation + ":" + fence.epoch + ":" +
-                             std::to_string(fence.authorization_generation) + ":" + std::to_string(chat_id) + ":" +
-                             std::to_string(message_id) + ":" + std::to_string(file_id));
-}
-
-std::string preview_key(const std::string &uuid, const ReadFence &fence, std::int32_t file_id) {
-  return uuid + ":" + fence.epoch + ":" + std::to_string(fence.authorization_generation) +
-         ":preview:" + std::to_string(file_id);
+std::string media_key(const std::string &uuid, const ReadFence &fence, std::int32_t file_id) {
+  return uuid + ":" + fence.generation + ":" + fence.epoch + ":" + std::to_string(fence.authorization_generation) +
+         ":media:" + std::to_string(file_id);
 }
 
 std::string cursor_signature(const Config &config, const char *purpose, const std::string &uuid,
@@ -65,11 +57,6 @@ const nlohmann::json *changed_since(const AccountState &account, const ReadFence
   return nullptr;
 }
 
-bool previewable(const Config &config, std::int32_t file_id, std::int64_t size, const std::string &mime) {
-  return file_id > 0 && size > 0 && static_cast<std::uint64_t>(size) <= config.preview_max_bytes &&
-         static_cast<std::uint64_t>(size) <= config.preview_total_bytes &&
-         (mime == "image/jpeg" || mime == "image/png" || mime == "image/webp");
-}
 } // namespace reads
 
 namespace {
@@ -151,14 +138,14 @@ void ReadModelService::cancel_account(const std::string &uuid) {
   }
   refresh_rotation_.erase(std::remove(refresh_rotation_.begin(), refresh_rotation_.end(), uuid),
                           refresh_rotation_.end());
-  for (auto item = preview_entries_.begin(); item != preview_entries_.end();) {
+  for (auto item = media_entries_.begin(); item != media_entries_.end();) {
     if (item->second.uuid != uuid) {
       ++item;
       continue;
     }
-    preview_reserved_bytes_ -= item->second.reserved;
-    preview_cache_bytes_ -= item->second.ready_bytes;
-    item = preview_entries_.erase(item);
+    media_reserved_bytes_ -= item->second.reserved;
+    media_cache_bytes_ -= item->second.ready_bytes;
+    item = media_entries_.erase(item);
   }
   for (auto item = refresh_results_.begin(); item != refresh_results_.end();) {
     if (item->first.starts_with(uuid + ":"))
@@ -175,21 +162,13 @@ std::string ReadModelService::enqueue_refresh(RefreshJob job) {
   if (refresh_keys_.contains(job.key))
     return "pending";
   const auto now = std::chrono::steady_clock::now();
-  if (job.kind == RefreshKind::preview) {
-    if (auto state = enqueue_preview(job, now); !state.empty())
-      return state;
-  } else if (const auto outcome = refresh_results_.find(job.key);
-             outcome != refresh_results_.end() && now - outcome->second.at < refresh_cooldown) {
+  if (const auto outcome = refresh_results_.find(job.key);
+      outcome != refresh_results_.end() && now - outcome->second.at < refresh_cooldown) {
     return outcome->second.state;
   }
   auto &queue = refresh_queues_[job.uuid];
-  if (queue.size() >= refresh_queue_per_account) {
-    if (job.kind == RefreshKind::preview)
-      drop_preview(job.key);
-    if (queue.empty())
-      refresh_queues_.erase(job.uuid);
+  if (queue.size() >= refresh_queue_per_account)
     return "saturated";
-  }
   if (queue.empty())
     refresh_rotation_.push_back(job.uuid);
   refresh_keys_.insert(job.key);
@@ -243,7 +222,7 @@ bool ReadModelService::publish_projections(const RefreshJob &job, const ReadFenc
 
 bool ReadModelService::run_refresh(const RefreshJob &job) {
   if (job.kind == RefreshKind::evict) {
-    broker_.request(job.client, td_api::make_object<td_api::deleteFile>(job.preview_file_id), std::chrono::seconds(2));
+    broker_.request(job.client, td_api::make_object<td_api::deleteFile>(job.file_id), std::chrono::seconds(2));
     return false;
   }
   std::optional<ReadFence> fence;
@@ -254,35 +233,8 @@ bool ReadModelService::run_refresh(const RefreshJob &job) {
         account->second.authorization_generation == job.authorization_generation)
       fence = read_fence(account->second);
   }
-  if (!fence) {
-    if (job.kind == RefreshKind::preview)
-      release_preview(job.key, false, 0);
+  if (!fence)
     return false;
-  }
-  if (job.kind == RefreshKind::preview) {
-    {
-      std::lock_guard lock(refresh_mutex_);
-      if (const auto entry = preview_entries_.find(job.key); entry != preview_entries_.end())
-        entry->second.state = PreviewEntry::State::downloading;
-    }
-    // downloadFile answers before the bytes have landed, so completion is
-    // confirmed against the returned file object.
-    auto response = broker_.request(fence->client,
-                                    td_api::make_object<td_api::downloadFile>(
-                                        job.preview_file_id, 8, 0, static_cast<std::int64_t>(job.preview_size), true),
-                                    std::chrono::seconds(12));
-    std::size_t downloaded = 0;
-    bool completed = false;
-    if (response && response->get_id() == td_api::file::ID) {
-      const auto &file = static_cast<const td_api::file &>(*response);
-      completed = file.local_ && file.local_->is_downloading_completed_ && file.local_->downloaded_size_ > 0 &&
-                  static_cast<std::uint64_t>(file.local_->downloaded_size_) <= config_.preview_max_bytes;
-      if (completed)
-        downloaded = static_cast<std::size_t>(file.local_->downloaded_size_);
-    }
-    release_preview(job.key, completed, downloaded);
-    return false;
-  }
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
   std::vector<nlohmann::json> items;
   if (job.kind == RefreshKind::message) {
@@ -332,8 +284,7 @@ void ReadModelService::refresh_once() {
   try {
     changed = run_refresh(job);
   } catch (const std::exception &) {
-    if (job.kind == RefreshKind::preview)
-      release_preview(job.key, false, 0);
+    changed = false;
   }
   {
     std::lock_guard lock(refresh_mutex_);

@@ -6,6 +6,7 @@ __pycache__/
 app/build/
 app/.lock-waf_*
 app/node_modules/
+tests/browser/node_modules/
 backend-api/.env
 backend-api/*.sqlite
 backend-api/*.sqlite3

@@ -24,7 +24,7 @@ typedef struct {
 } TbPageLine;
 
 #define TB_PAGE_LINES 3
-#define TB_PAGE_MAX_LINES 5
+#define TB_PAGE_MAX_LINES 6
 #define TB_PAGE_CENTER INT16_MIN
 
 void tb_theme_init(void);

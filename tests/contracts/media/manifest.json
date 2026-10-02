@@ -1,0 +1,67 @@
+[
+  {
+    "name": "rect_p4",
+    "bits": 4,
+    "shape": 0,
+    "width": 200,
+    "height": 228,
+    "canvasWidth": 200,
+    "canvasHeight": 228,
+    "tag": 286331153,
+    "size": 22800,
+    "crc": 588894811,
+    "bytes": 2820
+  },
+  {
+    "name": "round_p4_landscape",
+    "bits": 4,
+    "shape": 1,
+    "width": 260,
+    "height": 146,
+    "canvasWidth": 260,
+    "canvasHeight": 260,
+    "tag": 572662306,
+    "size": 18112,
+    "crc": 1153675894,
+    "bytes": 5478
+  },
+  {
+    "name": "round_p4_square",
+    "bits": 4,
+    "shape": 1,
+    "width": 260,
+    "height": 260,
+    "canvasWidth": 260,
+    "canvasHeight": 260,
+    "tag": 858993459,
+    "size": 26904,
+    "crc": 3794215807,
+    "bytes": 7724
+  },
+  {
+    "name": "round_p2_portrait",
+    "bits": 2,
+    "shape": 1,
+    "width": 180,
+    "height": 260,
+    "canvasWidth": 260,
+    "canvasHeight": 260,
+    "tag": 1145324612,
+    "size": 10760,
+    "crc": 4179592401,
+    "bytes": 447
+  },
+  {
+    "name": "rect_p1_small",
+    "bits": 1,
+    "shape": 0,
+    "width": 13,
+    "height": 7,
+    "canvasWidth": 200,
+    "canvasHeight": 228,
+    "tag": 1431655765,
+    "size": 14,
+    "crc": 4245347798,
+    "bytes": 32
+  }
+]

@@ -39,8 +39,9 @@ def build(ctx):
         ctx.env = ctx.all_envs[platform]
         if os.environ.get('TB_DIAG') == '1':
             ctx.env.append_unique('DEFINES', ['TB_DIAG'])
-        ctx.env.append_unique('CFLAGS', ['-flto'])
-        ctx.env.append_unique('LINKFLAGS', ['-flto', '-Wl,--undefined=__pbl_app_info'])
+        size_flags = ['-flto', '-flto-partition=one', '-fipa-pta', '-fno-optimize-sibling-calls', '-fno-reorder-blocks']
+        ctx.env.append_unique('CFLAGS', size_flags)
+        ctx.env.append_unique('LINKFLAGS', size_flags + ['-Wl,--undefined=__pbl_app_info', '-Wl,-Map,{}/pebble-app.map'.format(ctx.env.BUILD_DIR)])
         ctx.set_group(ctx.env.PLATFORM_NAME)
         app_elf = '{}/pebble-app.elf'.format(ctx.env.BUILD_DIR)
         ctx.pbl_build(source=ctx.path.ant_glob('src/c/**/*.c'), target=app_elf, bin_type='app')

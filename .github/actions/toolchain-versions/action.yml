@@ -10,6 +10,7 @@ outputs:
   pebble-sdk-version: {value: "${{ steps.read.outputs.pebble-sdk-version }}"}
   cmake-version: {value: "${{ steps.read.outputs.cmake-version }}"}
   clang-format-version: {value: "${{ steps.read.outputs.clang-format-version }}"}
+  go-version: {value: "${{ steps.read.outputs.go-version }}"}
 runs:
   using: composite
   steps:
@@ -22,7 +23,7 @@ runs:
           [NODE_VERSION]=node-version [PYTHON_VERSION]=python-version
           [UV_VERSION]=uv-version [PEBBLE_TOOL_VERSION]=pebble-tool-version
           [PEBBLE_SDK_VERSION]=pebble-sdk-version [CMAKE_VERSION]=cmake-version
-          [CLANG_FORMAT_VERSION]=clang-format-version
+          [CLANG_FORMAT_VERSION]=clang-format-version [GO_VERSION]=go-version
         )
         while IFS='=' read -r key value; do
           if [[ -n "${requested[$key]:-}" ]]; then printf '%s=%s\n' "${requested[$key]}" "$value" >> "$GITHUB_OUTPUT"; unset 'requested[$key]'; fi

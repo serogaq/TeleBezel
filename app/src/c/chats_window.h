@@ -3,7 +3,8 @@
 #include "chats.h"
 #include "connection.h"
 #include "notify_view.h"
-#include "pull.h"
+#include "pull_view.h"
+#include "touch.h"
 #include "generated/localization.h"
 
 typedef struct {
@@ -16,7 +17,9 @@ typedef struct {
   MenuLayer *menu;
   Layer *bar;
   TbPull pull;
-  AppTimer *pull_timer;
+  TbPullClock pull_clock;
+  TbPullTouch pull_touch;
+  TbTouch touch;
   TbChats *chats;
   TbConnection *connection;
   TbNotifyView notice;

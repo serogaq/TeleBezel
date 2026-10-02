@@ -16,6 +16,8 @@ const char *tb_account_state_text(const TbStrings *strings, uint8_t state);
 void tb_format_duration(char *out, size_t size, uint16_t seconds);
 void tb_format_content(char *out, size_t size, const TbStrings *strings, uint8_t kind, uint8_t action, uint16_t duration,
                        const char *extra, const char *text);
+void tb_format_message(char *out, size_t size, const TbStrings *strings, uint8_t kind, uint8_t action, uint16_t duration,
+                       const char *extra, const char *text, uint8_t media, uint8_t count);
 void tb_format_clock(char *out, size_t size, time_t date, bool clock24);
 void tb_format_time(char *out, size_t size, time_t date, time_t now, bool clock24);
 void tb_format_ago(char *out, size_t size, const TbStrings *strings, time_t date, time_t now, bool clock24);

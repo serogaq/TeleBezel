@@ -15,6 +15,7 @@
                 "edit_date": 0,
                 "forward_from": null,
                 "id": "1048576",
+                "is_channel_post": false,
                 "is_outgoing": false,
                 "reply_to": null,
                 "sender": {
@@ -31,12 +32,22 @@
                 "content": {
                     "fallback_key": "message.photo",
                     "kind": "photo",
+                    "media": {
+                        "album_id": "777",
+                        "count": 1,
+                        "has_spoiler": false,
+                        "height": 960,
+                        "restriction": null,
+                        "type": "photo",
+                        "width": 1280
+                    },
                     "text": "Подпись"
                 },
                 "date": 1700000000,
                 "edit_date": 0,
                 "forward_from": null,
                 "id": "1048575",
+                "is_channel_post": false,
                 "is_outgoing": true,
                 "reply_to": null,
                 "sender": {
@@ -49,13 +60,13 @@
             }
         ],
         "local_exhausted": false,
-        "next_cursor": "h:1:1fd4d832-6181-4ab5-8efb-c03237758d55:-100200:1048575.bd7b0a400cd191159daa5d5cac91d78d853ac6c9b434132e14b33f0d33c3eda2",
-        "observed_at": 1790260145,
+        "next_cursor": "h:1:8d1c359e-cb64-4b6a-a9e0-f442df02086d:-100200:1048575.0e8a197bd291b0e1a9fe00b759c1b7957e8cc780ce40ee0d7d34c13d6c772999",
+        "observed_at": 1790369868,
         "partial": false,
         "refresh": "queued",
         "retry_cursor": null,
         "source": "tdlib_local",
         "stale": true,
-        "updates_cursor": "1:1fd4d832-6181-4ab5-8efb-c03237758d55:2.1a68f0ef2ec7845d218758038c8cc89a790205d1a91db2ca1b1c61eb746166ea"
+        "updates_cursor": "1:8d1c359e-cb64-4b6a-a9e0-f442df02086d:2.7419eba0160954808f0eca4021af26eb5982e97f9f62bfde920247cc19ac8b05"
     }
 }

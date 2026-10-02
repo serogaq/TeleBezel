@@ -13,7 +13,12 @@ assert.deepStrictEqual([saved.showArchive, saved.unreadMode], [true, 'chats'], '
 var hidden = settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, CONFIG_TOKEN: '', SHOW_ARCHIVE: false, UNREAD_MODE: {value: 'messages'}}, saved);
 assert.deepStrictEqual([hidden.showArchive, hidden.unreadMode, hidden.token], [false, 'messages', 'tb_secret']);
 settings.save(storage, hidden);
-assert.deepStrictEqual(settings.toClay(settings.load(storage)), {CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, SHOW_ARCHIVE: false, UNREAD_MODE: 'messages'});
+assert.deepStrictEqual(settings.toClay(settings.load(storage)), {CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, SHOW_ARCHIVE: false, UNREAD_MODE: 'messages',
+  PHOTO_MODE: 'auto'});
+var manual = settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false, PHOTO_MODE: {value: 'manual'}}, hidden);
+assert.strictEqual(manual.photoMode, 'manual');
+assert.strictEqual(settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false}, manual).photoMode, 'manual', 'a missing select keeps the saved photo mode');
+assert.strictEqual(settings.normalize({photoMode: 'bogus'}).photoMode, 'auto');
 assert.strictEqual(settings.fromClay({CONFIG_ADDRESS: 'localhost:8080', CONFIG_SSL: false}, hidden).showArchive, false, 'a missing toggle keeps the saved value');
 assert.strictEqual(settings.normalize({unreadMode: 'bogus'}).unreadMode, 'chats');
 require('./runtime_test');
@@ -24,5 +29,7 @@ require('./transport_test');
 require('./reader_test');
 require('./compose_test');
 require('./contract_test');
+require('./media_test');
+require('./updates_test');
 require('./config_page_test');
 process.stdout.write('PKJS tests passed\n');

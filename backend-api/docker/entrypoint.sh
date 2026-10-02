@@ -18,6 +18,7 @@ load_secret() {
 load_secret APP_KEY
 load_secret DB_PASSWORD
 load_secret TDLIB_INTERNAL_TOKEN
+load_secret MEDIA_INTERNAL_TOKEN
 
 if [ -z "${APP_KEY:-}" ] || [ -z "${DB_PASSWORD:-}" ] || [ -z "${TDLIB_INTERNAL_TOKEN:-}" ]; then
   echo "required application secrets are missing" >&2

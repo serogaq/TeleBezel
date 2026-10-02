@@ -45,5 +45,21 @@ int main(void) {
   assert(tb_message_text_open(&reader, "00112233-4455-4677-8899-aabbccddeeff", "-42", "7"));
   assert(reader.error == TB_ERROR_PHONE_UNREACHABLE && !reader.loading);
   tb_message_text_close(&reader);
+
+  TbMessageText large;
+  tb_message_text_init(&large, &layer, fake_view_ports(&fake), 8192, 10000);
+  fake.next = TB_SEND_OK;
+  assert(tb_message_text_open(&large, "00112233-4455-4677-8899-aabbccddeeff", "-42", "8"));
+  assert(large.capacity == 512);
+  static char part[1500];
+  memset(part, 'a', sizeof(part) - 1);
+  Buf big = {0};
+  text_record(&big, part);
+  const uint32_t growing = fake_last_sequence(&fake);
+  deliver(&layer, growing, TB_RESULT_OK, 0, &big, 0, 2);
+  deliver(&layer, growing, TB_RESULT_OK, 0, &big, 1, 2);
+  assert(large.length == 2998 && large.capacity == 4096 && strlen(large.text) == 2998 && !large.truncated);
+  tb_message_text_close(&large);
+  assert(large.capacity == 0 && large.text == NULL);
   return 0;
 }

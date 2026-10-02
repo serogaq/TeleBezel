@@ -44,6 +44,25 @@ std::string nullable_string(const nlohmann::json &value, const char *key);
 inline constexpr const char *fingerprint_version = "2:";
 std::string command_fingerprint(nlohmann::json command);
 std::pair<std::string, bool> delivery_method(const td_api::AuthenticationCodeType *type);
+// The file a watch image is prepared from, chosen for a target size and never
+// a secret, self-destructing or paid one.
+struct MediaSource {
+  const td_api::file *file{nullptr};
+  std::string kind;
+  std::int32_t width{0};
+  std::int32_t height{0};
+};
+struct MediaInfo {
+  std::string type{"none"};
+  std::int32_t width{0};
+  std::int32_t height{0};
+  bool has_spoiler{false};
+  std::string restriction;
+  std::int64_t album_id{0};
+  std::size_t items{1};
+  std::optional<MediaSource> source;
+};
+MediaInfo media_info(const td_api::message &message, std::int32_t min_side, std::size_t item = 0);
 nlohmann::json message_content(const td_api::MessageContent *content);
 nlohmann::json message_projection(const td_api::message &message);
 nlohmann::json sending_state_name(const td_api::MessageSendingState *state);

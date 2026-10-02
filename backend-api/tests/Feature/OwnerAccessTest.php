@@ -292,6 +292,73 @@ test('next policy keeps a failed proxy when no alternative exists', function ():
         ->toThrow(ApiException::class, 'proxy.no_alternative');
     expect($instance->fresh()->active_proxy_profile_id)->toBe($profile->id);
 });
+test('proxy monitor checks every 2.5 seconds for a minute after any inherited account is not ready', function (): void {
+    $instance = Instance::query()->create([
+        'proxy_failure_action' => 'stay',
+        'proxy_connect_timeout_seconds' => 10,
+    ]);
+    $profile = ProxyProfile::query()->create([
+        'instance_id' => $instance->id,
+        'label' => 'Only profile',
+        'mode' => 'http',
+        'host' => 'proxy.example',
+        'port' => 8080,
+        'position' => 1,
+    ]);
+    $instance->forceFill([
+        'active_proxy_profile_id' => $profile->id,
+    ])->save();
+    $accounts = collect(['First', 'Second'])->map(fn (string $label): TelegramAccount => TelegramAccount::query()->create([
+        'label' => $label,
+        'storage_generation' => (string) Str::uuid(),
+        'lifecycle' => AccountLifecycle::Active,
+        'desired_revision' => 1,
+        'effective_config_id' => (string) Str::uuid(),
+    ]));
+    $states = [
+        'ready',
+        'ready',
+    ];
+    Http::fake(function () use ($accounts, &$states) {
+        return Http::response([
+            'data' => [
+                'accounts' => [
+                    $accounts[0]->id => [
+                        'connection_state' => $states[0],
+                    ],
+                    $accounts[1]->id => [
+                        'connection_state' => $states[1],
+                    ],
+                ],
+            ],
+        ]);
+    });
+    $profiles = $this->app->make(ProxyProfileService::class);
+    $profiles->monitor((string) Str::uuid());
+    expect($profiles->monitorInterval())->toBe(5.0);
+    $states[1] = 'connecting_to_proxy';
+    $profiles->monitor((string) Str::uuid());
+    expect($profiles->monitorInterval())->toBe(2.5)
+        ->and($instance->fresh()->proxy_failure_started_at)->toBeNull();
+    $states[1] = 'ready';
+    $this->travel(59)->seconds();
+    $profiles->monitor((string) Str::uuid());
+    expect($profiles->monitorInterval())->toBe(2.5);
+    $this->travel(2)->seconds();
+    expect($profiles->monitorInterval())->toBe(5.0);
+    $this->artisan('telebezel:proxy-monitor')->expectsOutput('5')->assertSuccessful();
+    $states[0] = 'connecting_to_proxy';
+    $this->artisan('telebezel:proxy-monitor')->expectsOutput('2.5')->assertSuccessful();
+});
+test('proxy monitor keeps the normal interval without an active proxy', function (): void {
+    Instance::query()->create([
+        'proxy_failure_action' => 'stay',
+        'proxy_connect_timeout_seconds' => 10,
+    ]);
+    Http::fake();
+    $this->artisan('telebezel:proxy-monitor')->expectsOutput('5')->assertSuccessful();
+    Http::assertNothingSent();
+});
 test('owner can idempotently create a telegram account', function (): void {
     $gateway = new FakeTdlibGateway;
     $gateway->queue('provision', [

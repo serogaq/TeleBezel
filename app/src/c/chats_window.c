@@ -7,9 +7,9 @@
 #include "diag.h"
 #include "icons.h"
 #include "scratch.h"
+#include "pull_view.h"
 #include "theme.h"
 
-#define PULL_DISTANCE 60
 #define BAR_GAP 3
 #define BAR_EDGE 7
 #define BAR_NUDGE 4
@@ -58,13 +58,14 @@ static void chat_preview(TbChatsWindow *view, const TbChat *chat, char *out, siz
   }
 }
 
-typedef void (*TbIcon)(GContext *ctx, GRect box, GColor color);
+typedef uint8_t TbIcon;
+#define NO_ICON 0xFF
 
 static int16_t icon_size(void) { return 14; }
 
 static int16_t glyph_height(void) { return 11; }
 
-static int16_t icon_width(TbIcon icon) { return (int16_t)(glyph_height() + (icon == tb_icon_messages ? glyph_height() / 3 : 0)); }
+static int16_t icon_width(TbIcon icon) { return (int16_t)(glyph_height() + (icon == TB_ICON_MESSAGES ? glyph_height() / 3 : 0)); }
 
 static int16_t glyph_top(void) { return 7; }
 
@@ -133,20 +134,8 @@ static int16_t pull_size(void) {
 }
 
 static void draw_pull(GContext *ctx, GPoint center, GColor color, int16_t limit) {
-  int16_t size = pull_size();
-  if (size > limit) { size = limit; }
-  if (size < 1) { return; }
-  if (size < 4) {
-    graphics_context_set_fill_color(ctx, color);
-    graphics_fill_rect(ctx, GRect(center.x - size / 2, center.y - size / 2, size, size), 0, GCornerNone);
-    return;
-  }
-  const GRect box = GRect(center.x - size / 2, center.y - size / 2, size, size);
-  graphics_context_set_stroke_color(ctx, color);
-  graphics_context_set_stroke_width(ctx, size >= 20 ? 2 : 1);
-  graphics_context_set_antialiased(ctx, true);
-  graphics_draw_circle(ctx, GPoint(box.origin.x + size / 2, box.origin.y + size / 2), (uint16_t)(size / 2));
-  tb_icon_fill(ctx, box, color, s_pull_level);
+  const int16_t size = pull_size();
+  tb_pull_draw(ctx, center, color, size > limit ? limit : size, s_pull_level);
 }
 
 #if !defined(PBL_ROUND)
@@ -154,8 +143,8 @@ static int16_t pull_gap(void) { return (int16_t)((int32_t)s_pull_level * (PULL_M
 #endif
 
 static TbIcon status_icon(const TbConnection *connection) {
-  if (!connection->known || connection->state == TB_CONNECTION_CONNECTING) { return tb_icon_loader; }
-  return connection->state == TB_CONNECTION_UPDATING ? tb_icon_download : tb_icon_check;
+  if (!connection->known || connection->state == TB_CONNECTION_CONNECTING) { return TB_ICON_LOADER; }
+  return connection->state == TB_CONNECTION_UPDATING ? TB_ICON_DOWNLOAD : TB_ICON_CHECK_11;
 }
 
 #if defined(PBL_ROUND)
@@ -181,7 +170,7 @@ static uint8_t split(TbPiece *pieces, uint8_t count, const TbSegment *value) {
     size_t length = 1;
     while (cursor[length] && (cursor[length] & 0xC0) == 0x80 && length < 4) { ++length; }
     TbPiece *piece = &pieces[count++];
-    piece->icon = NULL;
+    piece->icon = NO_ICON;
     memcpy(piece->text, cursor, length);
     piece->text[length] = '\0';
     piece->width = graphics_text_layout_get_content_size(piece->text, theme->meta, GRect(0, 0, 60, theme->meta_height), GTextOverflowModeFill,
@@ -214,8 +203,8 @@ static int32_t arc_angle(int16_t length, int16_t radius) { return (int32_t)lengt
 #define GLYPH_PAD 3
 
 static void draw_piece(GContext *ctx, const TbPiece *piece, GPoint origin) {
-  if (piece->icon) {
-    piece->icon(ctx, GRect(origin.x, origin.y, piece->width, glyph_height()), tb_theme_accent(false));
+  if (piece->icon != NO_ICON) {
+    tb_icon(ctx, piece->icon, origin, tb_theme_accent(false));
     return;
   }
   graphics_context_set_text_color(ctx, tb_theme_text(false));
@@ -298,7 +287,7 @@ static void place(GContext *ctx, const TbPiece *piece, int32_t angle, int16_t tr
   draw_piece(ctx, piece, GPoint(scratch.x + GLYPH_PAD, scratch.y + GLYPH_PAD));
   frame = graphics_capture_frame_buffer(ctx);
   if (!frame) { return; }
-  const GColor ink = piece->icon ? tb_theme_accent(false) : tb_theme_text(false);
+  const GColor ink = piece->icon != NO_ICON ? tb_theme_accent(false) : tb_theme_text(false);
   const int32_t ink_light = ink.r + ink.g + ink.b;
   for (int16_t row = 0; row < size.h; ++row) {
     const GBitmapDataRowInfo info = gbitmap_get_data_row_info(frame, (uint16_t)(origin_y + scratch.y + row));
@@ -354,7 +343,7 @@ static void draw_segment(GContext *ctx, const TbSegment *value, GRect box, GText
   if (alignment == GTextAlignmentRight) { x = (int16_t)(box.origin.x + box.size.w - width); }
   const int16_t text_top = (int16_t)(box.origin.y + (box.size.h - theme->meta_height) / 2 - 3);
   const int16_t icon = icon_width(value->icon);
-  value->icon(ctx, GRect(x, text_top + glyph_top(), icon, size), GColorWhite);
+  tb_icon(ctx, value->icon, GPoint(x, text_top + glyph_top()), GColorWhite);
   if (!value->text || !*value->text) { return; }
   const int16_t left = (int16_t)(x + icon + BAR_GAP);
   graphics_context_set_text_color(ctx, GColorWhite);
@@ -378,9 +367,9 @@ static void bar_segments(TbChatsWindow *view, TbSegment *left, TbSegment *middle
   tb_format_clock(clock, sizeof(clock), now, clock_is_24h_style());
   const bool messages = view->unread_mode == TB_UNREAD_MODE_MESSAGES;
   tb_format_count(counter, sizeof(counter), messages ? chats->unread_messages : chats->unread_chats);
-  *left = segment(tb_icon_refresh, updated);
+  *left = segment(TB_ICON_REFRESH, updated);
   *middle = segment(status_icon(view->connection), clock);
-  *right = segment(messages ? tb_icon_messages : tb_icon_chats, counter);
+  *right = segment(messages ? TB_ICON_MESSAGES : TB_ICON_CHATS, counter);
 }
 
 #if defined(PBL_ROUND)
@@ -547,7 +536,7 @@ static void draw_chat(TbChatsWindow *view, GContext *ctx, const Layer *cell, con
   const bool saved = (chat->flags & TB_CHAT_FLAG_SAVED) != 0;
   if (saved) {
     const int16_t size = icon_size();
-    tb_icon_bookmark(ctx, GRect(left, (theme->title_height - size) / 2 + 1, size, size), tb_theme_accent(highlighted));
+    tb_icon(ctx, TB_ICON_BOOKMARK, GPoint(left, (theme->title_height - size) / 2 + 1), tb_theme_accent(highlighted));
     title_left = (int16_t)(left + size + 4);
     snprintf(title, tb_scratch_size(TB_SCRATCH_SHORT), "%s", view->strings->saved_messages);
   } else {
@@ -667,52 +656,10 @@ static void pull_changed(void *context) {
 
 static void pull_trigger(void *context) { refresh(context); }
 
-static void pull_fired(void *context) {
-  TbChatsWindow *view = context;
-  view->pull_timer = NULL;
-  tb_pull_tick(&view->pull);
-}
-
-static bool pull_schedule(void *context, uint32_t milliseconds) {
-  TbChatsWindow *view = context;
-  if (view->pull_timer) { app_timer_cancel(view->pull_timer); }
-  view->pull_timer = app_timer_register(milliseconds, pull_fired, view);
-  return view->pull_timer != NULL;
-}
-
-static void pull_cancel(void *context) {
-  TbChatsWindow *view = context;
-  if (view->pull_timer) {
-    app_timer_cancel(view->pull_timer);
-    view->pull_timer = NULL;
-  }
-}
-
-static uint32_t pull_now(void *context) {
-  (void)context;
-  time_t seconds = 0;
-  uint16_t milliseconds = 0;
-  time_ms(&seconds, &milliseconds);
-  return (uint32_t)seconds * 1000u + milliseconds;
-}
-
-static AppTimer *s_up_repeat;
-
-static void up_repeat(void *context) {
-  TbChatsWindow *view = context;
-  s_up_repeat = NULL;
-  if (!view->menu || menu_layer_get_selected_index(view->menu).row == 0) { return; }
-  menu_layer_set_selected_next(view->menu, true, MenuRowAlignCenter, true);
-  s_up_repeat = app_timer_register(100, up_repeat, view);
-}
-
 static void up_pressed(ClickRecognizerRef recognizer, void *context) {
   (void)recognizer;
   TbChatsWindow *view = context;
-  if (s_up_repeat) {
-    app_timer_cancel(s_up_repeat);
-    s_up_repeat = NULL;
-  }
+  tb_menu_repeat_stop();
   if (menu_layer_get_selected_index(view->menu).row == 0) {
     if (tb_notify_view_visible(&view->notice) && !view->notice.notify->focused) {
       tb_notify_focus(view->notice.notify, true);
@@ -722,16 +669,12 @@ static void up_pressed(ClickRecognizerRef recognizer, void *context) {
     tb_pull_press(&view->pull);
     return;
   }
-  menu_layer_set_selected_next(view->menu, true, MenuRowAlignCenter, true);
-  s_up_repeat = app_timer_register(400, up_repeat, view);
+  tb_menu_repeat_start(view->menu);
 }
 
 static void up_released(ClickRecognizerRef recognizer, void *context) {
   (void)recognizer; (void)context;
-  if (s_up_repeat) {
-    app_timer_cancel(s_up_repeat);
-    s_up_repeat = NULL;
-  }
+  tb_menu_repeat_stop();
 }
 
 static void down_click(ClickRecognizerRef recognizer, void *context) {
@@ -770,37 +713,11 @@ static void click_config(void *context) {
   window_long_click_subscribe(BUTTON_ID_SELECT, 0, select_long, NULL);
 }
 
-#if defined(PBL_TOUCH)
-static TbChatsWindow *s_touch_view;
-static int16_t s_touch_start;
-static bool s_touch_armed;
-
-static void touched(const TouchEvent *event, void *context) {
-  (void)context;
-  TbChatsWindow *view = s_touch_view;
-  if (!view || !view->menu || event->non_navigational) { return; }
-  if (event->type == TouchEvent_Touchdown) {
-    if (tb_notify_view_hit(&view->notice, event->y)) {
-      s_touch_armed = false;
-      tb_notify_view_activate(&view->notice);
-      return;
-    }
-    s_touch_start = event->y;
-    s_touch_armed = scroll_layer_get_content_offset(menu_layer_get_scroll_layer(view->menu)).y >= 0;
-    return;
-  }
-  if (!s_touch_armed) { return; }
-  if (event->type == TouchEvent_PositionUpdate) {
-    const int32_t distance = event->y - s_touch_start;
-    if (distance > 0 || view->pull.phase == TB_PULL_DRAGGING) {
-      tb_pull_drag(&view->pull, (uint16_t)(distance > 0 ? distance * TB_PULL_FULL / PULL_DISTANCE : 0));
-    }
-  } else if (event->type == TouchEvent_Liftoff) {
-    s_touch_armed = false;
-    tb_pull_release(&view->pull);
-  }
+static void touched(void *context, const TouchEvent *event) {
+  TbChatsWindow *view = context;
+  if (!view->menu) { return; }
+  tb_pull_touch(&view->pull_touch, &view->pull, &view->notice, event, scroll_layer_get_content_offset(menu_layer_get_scroll_layer(view->menu)).y >= 0, false);
 }
-#endif
 
 static AppTimer *s_minute;
 
@@ -872,12 +789,7 @@ static void window_appear(Window *window) {
   if (!s_minute) { schedule_minute(); }
   tb_chats_set_active(view->chats, true);
   tb_connection_set_active(view->connection, true);
-#if defined(PBL_TOUCH)
-  if (touch_service_is_enabled()) {
-    s_touch_view = view;
-    touch_service_subscribe(touched, NULL);
-  }
-#endif
+  tb_touch_attach(&view->touch);
 }
 
 static void window_disappear(Window *window) {
@@ -893,12 +805,7 @@ static void window_disappear(Window *window) {
   s_pull_level = 0;
   tb_notify_focus(view->notice.notify, false);
   up_released(NULL, view);
-#if defined(PBL_TOUCH)
-  if (s_touch_view == view) {
-    touch_service_unsubscribe();
-    s_touch_view = NULL;
-  }
-#endif
+  tb_touch_detach(&view->touch);
 }
 
 void tb_chats_window_init(TbChatsWindow *view, TbChats *chats, TbConnection *connection, TbNotify *notify, TbNotifyActivate activate,
@@ -908,12 +815,14 @@ void tb_chats_window_init(TbChatsWindow *view, TbChats *chats, TbConnection *con
   view->connection = connection;
   view->strings = strings;
   view->actions = actions;
-  view->pull_timer = NULL;
-  tb_pull_init(&view->pull, (TbPullPorts){pull_changed, pull_trigger, pull_schedule, pull_cancel, pull_now, view});
+  view->pull_clock.timer = NULL;
+  view->pull_clock.pull = &view->pull;
+  tb_pull_init(&view->pull, (TbPullPorts){pull_changed, pull_trigger, tb_pull_clock_schedule, tb_pull_clock_cancel, tb_now_ms, view, &view->pull_clock});
   view->show_archive = true;
   view->unread_mode = TB_UNREAD_MODE_CHATS;
   tb_chats_window_reset(view);
   view->window = window_create();
+  tb_touch_init(&view->touch, view->window, NULL, touched, view);
   window_set_user_data(view->window, view);
   window_set_window_handlers(view->window, (WindowHandlers){.load = window_load, .unload = window_unload, .appear = window_appear,
                                                              .disappear = window_disappear});

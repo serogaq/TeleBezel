@@ -296,10 +296,21 @@ HttpServer::HttpServer(const Config &config, TdRuntime &runtime) : config_(confi
                 return leased(request, chat_id,
                               [&] { return runtime_.message(request.matches[1], chat_id, message_id); });
               }));
-  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages/(-?[0-9]+)/preview/([0-9a-f]{64}))",
+  server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/chats/(-?[0-9]+)/messages/(-?[0-9]+)/media)",
               route(reads_, 200, [this](const auto &request) {
-                return runtime_.preview(request.matches[1], path_integer(request.matches[2]),
-                                        path_integer(request.matches[3]), request.matches[4]);
+                const auto index = request.has_param("index") ? integer_parameter(request, "index") : 0;
+                const auto min_side = request.has_param("min_side") ? integer_parameter(request, "min_side") : 260;
+                const auto flag = [&request](const char *name) {
+                  const auto value = request.has_param(name) ? request.get_param_value(name) : std::string{"0"};
+                  if (value != "0" && value != "1")
+                    throw std::runtime_error("request.invalid");
+                  return value == "1";
+                };
+                if (index < 0 || index >= 10 || min_side < 16 || min_side > 2048)
+                  throw std::runtime_error("request.invalid");
+                return runtime_.media(request.matches[1], path_integer(request.matches[2]),
+                                      path_integer(request.matches[3]), static_cast<std::size_t>(index),
+                                      static_cast<std::int32_t>(min_side), flag("reveal"), flag("bytes"));
               }));
   server_.Get(R"(/internal/v1/accounts/([0-9a-f-]{36})/updates)", route(reads_, 200, [this](const auto &request) {
                 const auto wait = request.has_param("wait") ? integer_parameter(request, "wait") : 0;

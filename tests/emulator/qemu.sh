@@ -64,6 +64,7 @@ esac
 
 pebble kill >/dev/null 2>&1 || true
 sleep 2
+bash "$root/tests/emulator/lang_pack.sh" "$platform"
 
 TB_ADDRESS="$address" TB_SSL="$ssl" TB_TOKEN="$token" "$python" - "$platform" "$sdk" <<'PY'
 import dbm.dumb, json, os, sys
@@ -87,30 +88,6 @@ print(f"{platform}: connected to {os.environ['TB_ADDRESS']}")
 PY
 
 pebble install --emulator "$platform" "$pbw" ${QEMU_FLAGS:-}
-
-remembered="$state/lang-pack"
-pack="${LANG_PACK:-}"
-if test "$pack" = none; then
-  rm -f "$remembered"
-  pack=""
-elif test -n "$pack"; then
-  echo "$pack" >"$remembered"
-elif test -f "$remembered"; then
-  pack=$(cat "$remembered")
-fi
-
-if test -n "$pack"; then
-  if test "$pack" = ru; then
-    pack="$root/app/build/lang/ru_RU.pbl"
-    if ! test -f "$pack"; then
-      mkdir -p "$(dirname "$pack")"
-      curl -sSfL -o "$pack" https://binaries.rebble.io/lp/d0oGecv-ru_RU.pbl
-    fi
-  fi
-  test -f "$pack" || { echo "Language pack not found: $pack" >&2; exit 1; }
-  pebble fw --emulator "$platform" install-lang "$pack"
-  pebble install --emulator "$platform" "$pbw" ${QEMU_FLAGS:-}
-fi
 
 qemu=$("$python" -c 'import sys
 from pebble_tool.sdk.emulator import get_emulator_info

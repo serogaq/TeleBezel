@@ -57,5 +57,12 @@ responses.history.data.items.forEach(function(item, index) {
   assert.strictEqual(history.records[index].id, item.id);
   assert.strictEqual(history.records[index].kind, protocol.kind[item.content.kind]);
   assert.strictEqual(history.records[index].flags & protocol.message_flag.outgoing, item.is_outgoing ? protocol.message_flag.outgoing : 0);
+  var media = item.content.media;
+  if (media) {
+    assert.ok(history.records[index].media & protocol.media_flag.image, 'a projected photo is offered on the watch');
+    assert.strictEqual(Boolean(history.records[index].media & protocol.media_flag.album), Boolean(media.album_id));
+    assert.ok(history.records[index].album !== 0 || !media.album_id);
+  }
 });
+assert.ok(responses.history.data.items.some(function(item) { return item.content.media; }), 'the history contract covers a photo');
 process.stdout.write('PKJS contract fixture tests passed\n');

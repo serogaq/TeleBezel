@@ -67,6 +67,8 @@ td_api::object_ptr<td_api::message> photo_message(std::int64_t id, std::int32_t 
   size->photo_ = td_api::make_object<td_api::file>();
   size->photo_->id_ = file_id;
   size->photo_->size_ = 1024;
+  size->width_ = 320;
+  size->height_ = 240;
   content->photo_->sizes_.push_back(std::move(size));
   message->content_ = std::move(content);
   return message;
@@ -165,25 +167,27 @@ TEST_F(HardeningRuntime, UpdatesCanWaitForTheNextEvent) {
   ASSERT_EQ(result["items"][0].value("field", ""), "title");
 }
 
-TEST_F(HardeningRuntime, PermanentlyFailedPreviewIsRequeuedAfterItsTtl) {
+TEST_F(HardeningRuntime, PermanentlyFailedMediaDownloadIsRetriedAfterItsTtl) {
   become_ready();
-  auto history = td_api::make_object<td_api::messages>();
-  history->messages_.push_back(photo_message(55, 31));
-  transport->queue_response(td_api::getChatHistory::ID, std::move(history));
-  for (int failure = 0; failure < 4; ++failure)
-    transport->queue_response(td_api::downloadFile::ID, td_api::make_object<td_api::error>(400, "DOWNLOAD_FAILED"));
-  const auto state = [&] { return runtime->message(uuid, 42, 55)["item"]["content"].value("preview_state", ""); };
-  ASSERT_EQ(runtime->messages(uuid, 42, 1, "")["items"][0]["content"].value("preview_state", ""), "queued");
-  for (int failure = 1; failure < 4; ++failure) {
-    eventually([&] { return state() == "failed"; });
+  const auto state = [&](bool fail) {
+    transport->queue_response(td_api::getMessageLocally::ID, photo_message(55, 31));
+    auto file = td_api::make_object<td_api::file>();
+    file->id_ = 31;
+    file->size_ = 1024;
+    file->local_ = td_api::make_object<td_api::localFile>();
+    transport->queue_response(td_api::getFile::ID, std::move(file));
+    if (fail)
+      transport->queue_response(td_api::downloadFile::ID, td_api::make_object<td_api::error>(400, "DOWNLOAD_FAILED"));
+    return runtime->media(uuid, 42, 55, 0, 260, false, false).value("state", "");
+  };
+  for (int failure = 0; failure < 4; ++failure) {
+    ASSERT_EQ(state(true), "downloading");
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
-    ASSERT_EQ(state(), "queued");
   }
-  eventually([&] { return state() == "failed"; });
-  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
-  ASSERT_EQ(state(), "failed") << "a permanently failed preview was retried before its ttl";
-  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
-  ASSERT_EQ(state(), "queued") << "a permanently failed preview stayed failed after the outage";
+  ASSERT_EQ(state(false), "unavailable") << "a permanently failed download was retried before its ttl";
+  std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+  ASSERT_EQ(state(true), "downloading") << "a permanently failed download stayed failed after the outage";
+  ASSERT_EQ(transport->pending_responses(), 0U);
 }
 
 TEST_F(HardeningRuntime, FloodWaitIsRateLimitedAndPostponesResend) {

@@ -2,25 +2,25 @@
 var DEFAULT_RETRIES = 2;
 
 function create(Pebble) {
-  var queue = [];
-  var busy = false;
+  var interactive = [];
+  var bulk = [];
+  var current = null;
 
   function pump() {
-    if (busy || queue.length === 0) { return; }
-    var item = queue[0];
-    busy = true;
+    if (current || (interactive.length === 0 && bulk.length === 0)) { return; }
+    var item = interactive.length ? interactive.shift() : bulk.shift();
+    current = item;
     Pebble.sendAppMessage(item.message, function() {
-      busy = false;
-      if (queue[0] === item) { queue.shift(); }
+      current = null;
       pump();
     }, function() {
-      busy = false;
-      if (queue[0] === item) {
+      current = null;
+      if (!item.dropped) {
         if (item.retries > 0) {
           --item.retries;
+          (item.bulk ? bulk : interactive).unshift(item);
         } else {
           drop(item.stream);
-          if (queue[0] === item) { queue.shift(); }
         }
       }
       pump();
@@ -29,18 +29,22 @@ function create(Pebble) {
 
   function drop(stream) {
     if (stream === null || stream === undefined) { return; }
-    queue = queue.filter(function(item, index) { return (index === 0 && busy) || item.stream !== stream; });
+    function keep(item) { return item.stream !== stream; }
+    interactive = interactive.filter(keep);
+    bulk = bulk.filter(keep);
+    if (current && current.stream === stream) { current.dropped = true; }
   }
 
-  function send(message, stream) {
-    queue.push({message: message, stream: stream === undefined ? null : stream, retries: DEFAULT_RETRIES});
+  function send(message, stream, lane) {
+    var item = {message: message, stream: stream === undefined ? null : stream, retries: DEFAULT_RETRIES, bulk: lane === 'bulk', dropped: false};
+    (item.bulk ? bulk : interactive).push(item);
     pump();
   }
 
   return {
     send: send,
     cancel: drop,
-    pending: function() { return queue.length; }
+    pending: function() { return interactive.length + bulk.length + (current ? 1 : 0); }
   };
 }
 

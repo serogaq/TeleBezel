@@ -39,7 +39,7 @@ def number(event, key):
 def summarize(events):
     summary = {"events": len(events), "windows": {}}
     for key, pick in (("heap_min", min), ("heap_free", min), ("stack_depth", max), ("inbox_bytes", max),
-                      ("outbox_bytes", max), ("timers", max), ("queued", max), ("draft_bytes", max)):
+                      ("outbox_bytes", max), ("timers", max), ("queued", max), ("draft_bytes", max), ("media_bytes", max)):
         values = [value for value in (number(event, key) for event in events) if value is not None]
         summary[key] = pick(values) if values else None
     for event in events:

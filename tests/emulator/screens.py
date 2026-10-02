@@ -53,6 +53,7 @@ class Run:
         self.out = out
         self.wanted = wanted
         self.pbw = pbw
+        self.lang_ready = False
         self.taken = []
         self.mock = None
         self.mock_log = None
@@ -191,6 +192,9 @@ class Run:
     def fresh(self):
         self.close_device()
         with EMULATORS:
+            if not self.lang_ready:
+                subprocess.run(["bash", str(ROOT / "tests/emulator/lang_pack.sh"), self.platform], check=True, stdout=subprocess.DEVNULL)
+                self.lang_ready = True
             self.kill()
             self.storage()
             self.install()
@@ -342,7 +346,7 @@ def dictation(run):
     run.history()
     run.press("down")
     run.press("select")
-    run.shot("dictation", run.act(lambda: run.device.press("select"), timeout=2.0))
+    run.act(lambda: run.device.press("select"), timeout=2.0)
     run.press("back")
     run.shot("dictation-cancelled")
 
@@ -354,6 +358,41 @@ def pending(run):
     run.shot("card-sending", run.act(lambda: run.device.press("back"), timeout=2.0))
     run.wait_text(run.log_path, "settled sent", 40)
     run.shot("card-sent", run.settle(timeout=2.0))
+
+
+def media(run):
+    run.history()
+    run.press("up")
+    run.press("select")
+    run.wait_text(run.mock_log, "/media", 10)
+    run.shot("media-reader", run.settle(timeout=6.0, quiet=1.5))
+    run.hold("select")
+    run.shot("media-menu")
+    run.press("back")
+    run.press("down")
+    run.shot("media-reader-scrolled")
+    run.press("up")
+    run.press("select")
+    run.shot("media-viewer", run.settle(timeout=10.0, quiet=1.5))
+    run.shot("media-overlay-gone", run.settle(timeout=4.0, quiet=2.5))
+    run.press("back")
+    run.press("back")
+    run.press("up", 11)
+    run.hold("select")
+    run.press("select")
+    run.shot("media-album", run.settle(timeout=10.0, quiet=1.5))
+    run.press("down")
+    run.shot("media-album-next", run.settle(timeout=10.0, quiet=1.5))
+    run.press("back")
+    run.press("back")
+    run.press("up", 2)
+    run.hold("select")
+    run.press("select")
+    run.shot("media-spoiler", run.settle(timeout=6.0, quiet=1.5))
+    run.press("select")
+    run.shot("media-revealed", run.settle(timeout=10.0, quiet=1.5))
+    run.hold("select")
+    run.shot("media-viewer-menu")
 
 
 def refused(run):
@@ -373,9 +412,11 @@ SCENARIOS = [
     ("connecting", connecting, {"MOCK_CONNECTION": "connecting", "MOCK_PROXY": "1"}, ["connecting", "cannot-connect", "topbar"]),
     ("compose", compose, {"MOCK_SEND_MODES": "sent"}, ["write-row", "compose", "review", "sent"]),
     ("reply", reply, {}, ["message-menu", "reply-compose", "reply-review"]),
-    ("dictation", dictation, {}, ["dictation", "dictation-cancelled"]),
+    ("dictation", dictation, {}, ["dictation-cancelled"]),
     ("pending", pending, {"MOCK_SEND_MODES": "pending", "MOCK_SETTLE_MS": "3000"}, ["sending", "card-sending", "card-sent"]),
     ("refused", refused, {"MOCK_SEND_MODES": "forbidden"}, ["not-sent"]),
+    ("media", media, {}, ["media-reader", "media-menu", "media-reader-scrolled", "media-viewer", "media-overlay-gone", "media-album", "media-album-next", "media-spoiler",
+                          "media-revealed", "media-viewer-menu"]),
 ]
 SCREENS = [screen for _, _, _, screens in SCENARIOS for screen in screens]
 

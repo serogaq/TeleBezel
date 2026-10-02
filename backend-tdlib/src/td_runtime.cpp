@@ -73,9 +73,9 @@ nlohmann::json TdRuntime::messages(const std::string &uuid, std::int64_t chat_id
 nlohmann::json TdRuntime::message(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id) {
   return impl_->reads.message(uuid, chat_id, message_id);
 }
-nlohmann::json TdRuntime::preview(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id,
-                                  const std::string &preview_id) {
-  return impl_->reads.preview(uuid, chat_id, message_id, preview_id);
+nlohmann::json TdRuntime::media(const std::string &uuid, std::int64_t chat_id, std::int64_t message_id,
+                                std::size_t index, std::int32_t min_side, bool reveal, bool bytes) {
+  return impl_->reads.media(uuid, chat_id, message_id, index, min_side, reveal, bytes);
 }
 nlohmann::json TdRuntime::updates(const std::string &uuid, const std::string &cursor, std::size_t limit,
                                   std::chrono::seconds wait) const {

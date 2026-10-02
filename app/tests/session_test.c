@@ -9,7 +9,7 @@ static void account_record(Buf *buf, const char *id, const char *name, uint8_t s
 }
 static void prefs_record(Buf *buf, const char *account, uint8_t list, uint8_t show_archive, uint8_t unread_mode) {
   begin(buf, TB_RECORD_PREFS);
-  putstr8(buf, account); put8(buf, list); putstr8(buf, "tg.example:443"); put8(buf, show_archive); put8(buf, unread_mode);
+  putstr8(buf, account); put8(buf, list); putstr8(buf, "tg.example:443"); put8(buf, show_archive); put8(buf, unread_mode); put8(buf, TB_PHOTO_MODE_MANUAL);
   end(buf);
 }
 
@@ -53,7 +53,7 @@ int main(void) {
   assert(session.phase == TB_SESSION_IDLE && session.loaded && session.error == TB_ERROR_NONE && session.count == 2);
   assert(s_extras == 1 && s_extra_type == TB_RECORD_PENDING_SEND);
   assert(strcmp(session.accounts[0].name, "Личный") == 0 && session.chat_list == TB_LIST_ARCHIVE);
-  assert(strcmp(session.host, "tg.example:443") == 0 && strcmp(session.default_account, SECOND) == 0);
+  assert(strcmp(session.host, "tg.example:443") == 0 && strcmp(session.default_account, SECOND) == 0 && session.photo_mode == TB_PHOTO_MODE_MANUAL);
   assert(session.show_archive && session.unread_mode == TB_UNREAD_MODE_MESSAGES);
   assert(tb_session_initial_account(&session) == -1);
   session.accounts[1].state = TB_ACCOUNT_STATE_READY;

@@ -56,6 +56,7 @@ void tb_diag_event(const char *event, const char *window) {
           (unsigned long)heap_bytes_used(), (unsigned long)s_inbox, (unsigned long)s_outbox);
   APP_LOG(APP_LOG_LEVEL_INFO, "TBDIAG queued=%u timers=%u items=%u budget=%lu draft_bytes=%u", counters.queued, counters.timers, counters.items,
           (unsigned long)counters.budget, counters.draft_bytes);
+  APP_LOG(APP_LOG_LEVEL_INFO, "TBDIAG media_bytes=%u media_phase=%u", counters.media_bytes, counters.media_phase);
 }
 
 void tb_diag_start(void *base, TbDiagProbe probe) {

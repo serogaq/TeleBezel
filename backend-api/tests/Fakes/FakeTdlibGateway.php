@@ -152,10 +152,12 @@ final class FakeTdlibGateway implements TdlibGateway
         return $this->dispatch('message', get_defined_vars());
     }
 
-    /** @return array<string, mixed> */
-    public function preview(string $accountId, string $chatId, string $messageId, string $previewId, string $requestId): array
+    /** @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    public function media(string $accountId, string $chatId, string $messageId, array $query, string $requestId): array
     {
-        return $this->dispatch('preview', get_defined_vars());
+        return $this->dispatch('media', get_defined_vars());
     }
 
     /** @param array<string, mixed> $query

@@ -30,6 +30,7 @@ typedef struct {
   void (*cancel)(void *context);
   uint32_t (*now)(void *context);
   void *context;
+  void *clock;
 } TbPullPorts;
 
 typedef struct {

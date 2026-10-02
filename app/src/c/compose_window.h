@@ -23,6 +23,7 @@ typedef struct {
   bool dictation;
   bool confirm_anyway;
   bool busy_notice;
+  bool sent;
   uint32_t result_draft;
   Window *menu_window;
   MenuLayer *menu;

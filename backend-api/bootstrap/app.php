@@ -11,6 +11,7 @@ use App\Http\Middleware\RequirePermission;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Resources\ErrorResource;
 use App\Services\AuthenticationService;
+use App\Services\LocalizationService;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Application;
@@ -32,7 +33,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(RequestId::class);
         $middleware->append(SecurityHeaders::class);
         $middleware->append(LimitJsonBody::class);
-        $middleware->encryptCookies(except: [AuthenticationService::COOKIE]);
+        $middleware->encryptCookies(except: [AuthenticationService::COOKIE, LocalizationService::COOKIE]);
         $middleware->alias([
             'token' => AuthenticateToken::class,
             'token-rate-limit' => RateLimitToken::class,

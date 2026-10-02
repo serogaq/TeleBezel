@@ -14,7 +14,11 @@ typedef struct {
   uint8_t kind;
   uint8_t action;
   uint16_t duration;
+  uint8_t media;
+  uint8_t media_count;
+  uint32_t album;
   char *sender;
+  char *signature;
   char *forward;
   char *extra;
   char *text;

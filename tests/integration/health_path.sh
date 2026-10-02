@@ -21,20 +21,22 @@ umask 077
 openssl rand -base64 32 > "$work_dir/postgres_password"
 openssl rand -hex 32 > "$work_dir/tdlib_internal_token"
 openssl rand -hex 32 > "$work_dir/tdlib_database_master_key"
+openssl rand -hex 32 > "$work_dir/media_internal_token"
 { printf 'base64:'; openssl rand -base64 32 | tr -d '\n'; printf '\n'; } > "$work_dir/laravel_app_key"
 bash tests/secrets/provision_file.sh "$work_dir/postgres_password" 999 10001
 bash tests/secrets/provision_file.sh "$work_dir/tdlib_internal_token" 10001 10002
 bash tests/secrets/provision_file.sh "$work_dir/tdlib_database_master_key" 10002
 bash tests/secrets/provision_file.sh "$work_dir/laravel_app_key" 10001
+bash tests/secrets/provision_file.sh "$work_dir/media_internal_token" 10001 10003
 "${compose[@]}" config --format json | python3 tests/integration/assert_compose.py
 curl_bounded() { curl --connect-timeout 2 --max-time 12 "$@"; }
 up_args=()
 if [[ "${TELEBEZEL_INTEGRATION_PREBUILT:-0}" == 1 ]]; then
   owner=${GHCR_OWNER:-serogaq}
-  docker image inspect "ghcr.io/$owner/telebezel-backend-api:local" "ghcr.io/$owner/telebezel-backend-tdlib:local" >/dev/null
+  docker image inspect "ghcr.io/$owner/telebezel-backend-api:local" "ghcr.io/$owner/telebezel-backend-tdlib:local" "ghcr.io/$owner/telebezel-backend-media:local" >/dev/null
   up_args=(--no-build)
 else
-  "${compose[@]}" build backend-api backend-tdlib
+  "${compose[@]}" build backend-api backend-tdlib backend-media
 fi
 "${compose[@]}" up "${up_args[@]}" -d postgres backend-tdlib
 "${compose[@]}" run --rm -e DB_STATEMENT_TIMEOUT=30000 -e DB_LOCK_TIMEOUT=5000 backend-api php artisan telebezel:migrate-locked
@@ -53,6 +55,7 @@ for _ in {1..60}; do
   sleep 1
 done
 test "$ready" = true
+"${compose[@]}" exec -T backend-media /telebezel-media --healthcheck
 status=$(curl_bounded -fsS -H "Authorization: Bearer $token" "http://127.0.0.1:$API_PORT/v1/status")
 python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["data"]["dependencies"]=={"postgres":"ready","tdlib":"ready"}' <<<"$status"
 status_b=$(curl_bounded -fsS -H "Authorization: Bearer $token_b" "http://127.0.0.1:$API_PORT/v1/status")
@@ -120,7 +123,7 @@ test "$code" = 503
 grep -q 'service.database_unavailable' "$work_dir/postgres-down.json"
 curl_bounded -fsS "http://127.0.0.1:$API_PORT/healthz" >/dev/null
 "${compose[@]}" start postgres
-"${compose[@]}" exec -T backend-api php artisan tinker --execute='echo config("logging.default");' | grep -q stderr
+"${compose[@]}" exec -T backend-api php artisan tinker --execute='echo config("logging.default");' | grep stderr >/dev/null
 "${compose[@]}" logs --no-color --no-log-prefix backend-api | python3 -c '
 import json,sys
 events=[]
@@ -146,7 +149,7 @@ test "$ready" = true
 import os,sys
 logs=sys.stdin.read()
 secrets=[os.environ["PUBLIC_TOKEN"],os.environ["SECOND_TOKEN"]]
-for name in ("postgres_password","tdlib_internal_token","tdlib_database_master_key","laravel_app_key"):
+for name in ("postgres_password","tdlib_internal_token","tdlib_database_master_key","laravel_app_key","media_internal_token"):
     secrets.append(open(os.path.join(os.environ["TEST_SECRET_DIR"],name)).read().strip())
 assert all(secret not in logs for secret in secrets), "A secret appeared in Compose logs"
 assert "account_awaiting_reconciliation" in logs
