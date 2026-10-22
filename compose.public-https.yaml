@@ -4,7 +4,7 @@ services:
       APP_URL: "https://${TELEBEZEL_DOMAIN:?set TELEBEZEL_DOMAIN}"
       TRUSTED_PROXIES: "${TELEBEZEL_CADDY_ADDRESS:-10.254.238.254}"
   caddy:
-    image: caddy:2.11.3-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    image: caddy:2.11.6-alpine@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
