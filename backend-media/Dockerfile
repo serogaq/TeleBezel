@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.11
-FROM golang:1.27.1-trixie@sha256:433790e515d27dc6003e847e644cc0af956985cf315c1c58a3b73ee2dd305183 AS build
+FROM golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e AS build
 ARG VERSION=0.1.0
 WORKDIR /src
 COPY go.mod ./
