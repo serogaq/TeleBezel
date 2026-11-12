@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.11
-FROM composer:2.10.3@sha256:d8f6343d3fae98107426bc49163ccad46ef85aabd4a27d80a74401fab4aba332 AS composer-bin
+FROM composer:2.11.0@sha256:278dfc7bd35169965d03f87194816f43bf4e6b6ea61707c2114e52ad12fe24ce AS composer-bin
 FROM dunglas/frankenphp:1.12.7-builder-php8.5-bookworm@sha256:e1f2dbeab2bf52c8b9a8df9f27fe6002542c4ade930c6f40d806a13f34691a57 AS frankenphp-builder
 # The upstream 1.12.7 binary predates these fixed Go dependencies. Rebuild
 # the same release against explicit patched module versions until upstream ships
